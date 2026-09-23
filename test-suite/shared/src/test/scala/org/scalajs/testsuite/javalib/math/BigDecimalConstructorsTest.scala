@@ -10,12 +10,10 @@
  * additional information regarding copyright ownership.
  */
 
-// scalastyle:off line.size.limit
 /*
  * Ported by Alistair Johnson from
  * https://github.com/gwtproject/gwt/blob/master/user/test/com/google/gwt/emultest/java/math/BigDecimalConstructorsTest.java
  */
-// scalastyle:on line.size.limit
 
 package org.scalajs.testsuite.javalib.math
 
@@ -24,7 +22,7 @@ import java.math._
 import org.junit.Test
 import org.junit.Assert._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.{assertThrows, _}
 
 class BigDecimalConstructorsTest {
 
@@ -36,7 +34,7 @@ class BigDecimalConstructorsTest {
     val aNumber = new BigDecimal(bA)
     assertTrue(aNumber.unscaledValue() == bA)
     assertEquals(0, aNumber.scale())
-    expectThrows(classOf[NullPointerException], new BigDecimal(null.asInstanceOf[BigInteger]))
+    assertThrowsNPEIfCompliant(new BigDecimal(null.asInstanceOf[BigInteger]))
   }
 
   @Test def testConstrBigIntegerMathContext(): Unit = {
@@ -82,7 +80,7 @@ class BigDecimalConstructorsTest {
     val resScale = 427
     assertEquals(result.toString, res)
     assertEquals(result.scale(), resScale)
-    expectThrows(classOf[NumberFormatException], new BigDecimal(Array[Char]()))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(Array[Char]()))
   }
 
   @Test def testConstrCharIntInt(): Unit = {
@@ -94,7 +92,7 @@ class BigDecimalConstructorsTest {
     val resScale = 46
     assertEquals(result.toString, res)
     assertEquals(result.scale(), resScale)
-    expectThrows(classOf[NumberFormatException], new BigDecimal(Array[Char](), 0, 0))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(Array[Char](), 0, 0))
   }
 
   @Test def testConstrCharIntIntMathContext(): Unit = {
@@ -109,7 +107,7 @@ class BigDecimalConstructorsTest {
     val resScale = 43
     assertEquals(result.toString, res)
     assertEquals(result.scale(), resScale)
-    expectThrows(classOf[NumberFormatException],
+    assertThrows(classOf[NumberFormatException],
         new BigDecimal(Array(), 0, 0, MathContext.DECIMAL32))
   }
 
@@ -120,7 +118,7 @@ class BigDecimalConstructorsTest {
     val precision = 4
     val rm = RoundingMode.CEILING
     val mc = new MathContext(precision, rm)
-    expectThrows(classOf[NumberFormatException], new BigDecimal(value, offset, len, mc))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(value, offset, len, mc))
   }
 
   @Test def testConstrCharIntIntMathContextException2(): Unit = {
@@ -130,7 +128,7 @@ class BigDecimalConstructorsTest {
     val precision = 4
     val rm = RoundingMode.CEILING
     val mc = new MathContext(precision, rm)
-    expectThrows(classOf[NumberFormatException], new BigDecimal(value, offset, len, mc))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(value, offset, len, mc))
   }
 
   @Test def testConstrCharMathContext(): Unit = {
@@ -143,14 +141,14 @@ class BigDecimalConstructorsTest {
     val resScale = 43
     assertEquals(result.toString, res)
     assertEquals(result.scale(), resScale)
-    expectThrows(classOf[NumberFormatException], new BigDecimal(Array[Char](), MathContext.DECIMAL32))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(Array[Char](), MathContext.DECIMAL32))
   }
 
   @Test def testConstrDouble(): Unit = {
     val a = 732546982374982347892379283571094797.287346782359284756
     val aNumber = new BigDecimal(a)
     val expected = new BigDecimal("732546982374982347892379283571094797.287346782359284756")
-    assertTrue(aNumber.minus(expected) < 1E21)
+    assertTrue(aNumber.minus(expected) < 1e21)
   }
 
   @Test def testConstrDouble01(): Unit = {
@@ -168,8 +166,8 @@ class BigDecimalConstructorsTest {
   }
 
   @Test def testConstrDoubleDenormalized(): Unit = {
-    //INF
-    val a: Double = 2.274341322658976E-304
+    // INF
+    val a: Double = 2.274341322658976e-304
     val aNumber = new BigDecimal(a)
     val expected = new BigDecimal("2.274341322658976E-304")
     assertTrue(aNumber.minus(expected) < 1e-305)
@@ -183,10 +181,10 @@ class BigDecimalConstructorsTest {
     val result = new BigDecimal(a, mc)
     val expected = new BigDecimal("732546982374982e21")
     assertTrue(result.minus(expected) < 1e21)
-    expectThrows(classOf[NumberFormatException], new BigDecimal(Double.NaN))
-    expectThrows(classOf[NumberFormatException],
+    assertThrows(classOf[NumberFormatException], new BigDecimal(Double.NaN))
+    assertThrows(classOf[NumberFormatException],
         new BigDecimal(Double.PositiveInfinity))
-    expectThrows(classOf[NumberFormatException],
+    assertThrows(classOf[NumberFormatException],
         new BigDecimal(Double.NegativeInfinity))
   }
 
@@ -199,17 +197,17 @@ class BigDecimalConstructorsTest {
 
   @Test def testConstrDoubleNaN(): Unit = {
     val a: Double = Double.NaN
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrDoubleNegInfinity(): Unit = {
     val a: Double = Double.NegativeInfinity
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrDoublePosInfinity(): Unit = {
     val a: Double = Double.PositiveInfinity
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrInt(): Unit = {
@@ -256,27 +254,27 @@ class BigDecimalConstructorsTest {
 
   @Test def testConstrStringException(): Unit = {
     val a = "-238768.787678287a+10"
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrStringExceptionEmptyExponent1(): Unit = {
     val a = "-238768.787678287e"
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrStringExceptionEmptyExponent2(): Unit = {
     val a = "-238768.787678287e-"
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrStringExceptionExponentGreaterIntegerMax(): Unit = {
     val a = "-238768.787678287e214748364767876"
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrStringExceptionExponentLessIntegerMin(): Unit = {
     val a = "-238768.787678287e-214748364767876"
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrStringExponentIntegerMax(): Unit = {
@@ -290,17 +288,17 @@ class BigDecimalConstructorsTest {
 
   @Test def testConstrStringExponentIntegerMin(): Unit = {
     val a = ".238768e-2147483648"
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrStringMultipleSignsStartWithPlus(): Unit = {
     val a = "+-3"
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrStringMultipleSignsStartWithMinus(): Unit = {
     val a = "-+3"
-    expectThrows(classOf[NumberFormatException], new BigDecimal(a))
+    assertThrows(classOf[NumberFormatException], new BigDecimal(a))
   }
 
   @Test def testConstrStringMathContext(): Unit = {
@@ -496,7 +494,7 @@ object BigDecimalConstructorsTest {
       extends AnyVal {
 
     def minus(expected: BigDecimal): Double = {
-      val actualDeltaDecimal:BigDecimal = actual.subtract(expected)
+      val actualDeltaDecimal: BigDecimal = actual.subtract(expected)
       val actualDelta = actualDeltaDecimal.abs().doubleValue()
       actualDelta
     }

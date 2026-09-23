@@ -13,6 +13,13 @@
 package org.scalajs.testing.bridge
 
 import scala.scalajs.js
+
+/* Use the queue (Promise) execution context by default to avoid slowdown by clamping
+ *
+ * To avoid blocking the UI thread, we use QueueExecutionContext.timeout in
+ * specific spots in the code. See #4129 for context.
+ */
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.concurrent.QueueExecutionContext
 import scala.scalajs.js.annotation._
 import js.URIUtils.{decodeURIComponent, encodeURIComponent}
@@ -20,7 +27,6 @@ import js.URIUtils.{decodeURIComponent, encodeURIComponent}
 import scala.collection.mutable
 
 import scala.concurrent.{Future, Promise}
-import scala.concurrent.ExecutionContext.Implicits.global
 
 import scala.util.Try
 
@@ -40,7 +46,7 @@ protected[bridge] object HTMLRunner {
       private[this] var _hasErrors = false
 
       def handle(event: Event): Unit = {
-        val status = event.status
+        val status = event.status()
         _hasErrors ||= isErrorStatus(status)
         counts(status) += 1
       }
@@ -49,25 +55,35 @@ protected[bridge] object HTMLRunner {
     }
   }
 
-  def start(tests: IsolatedTestSet): Unit =
-    dom.window.addEventListener("DOMContentLoaded", () => onLoad(tests))
+  def start(tests: IsolatedTestSet): Unit = {
+    // See https://developer.mozilla.org/en-US/docs/Web/API/Document/DOMContentLoaded_event
+    if (dom.document.readyState == "loading") {
+      // Loading has not finished yet; register a DOMContentLoaded event
+      dom.window.addEventListener("DOMContentLoaded", () => onLoad(tests))
+    } else {
+      // `DOMContentLoaded` has already fired; schedule `onLoad` on the next tick
+      Future {
+        onLoad(tests)
+      }
+    }
+  }
 
   private def onLoad(tests: IsolatedTestSet): Unit = {
     /* Note: Test filtering is currently done based on the fully qualified name
      * of a test. While this is reasonable in most cases, there could be a test
      * that is run by multiple test frameworks.
      */
-    val (testFilter, optExcludedHash): (TaskDef => Boolean, Option[Int])  = {
+    val (testFilter, optExcludedHash): (TaskDef => Boolean, Option[Int]) = {
       val search = dom.document.location.search.stripPrefix("?")
       search.split("&").map(decodeURIComponent).toList match {
         case "i" :: excludedHash :: included =>
           val includeSet = included.toSet
-          (t => includeSet.contains(t.fullyQualifiedName),
+          (t => includeSet.contains(t.fullyQualifiedName()),
               Some(excludedHash.toInt))
 
         case "e" :: excluded =>
           val excludeSet = excluded.toSet
-          (t => !excludeSet.contains(t.fullyQualifiedName), None)
+          (t => !excludeSet.contains(t.fullyQualifiedName()), None)
 
         case _ =>
           // Invalid parameter. Run everything.
@@ -83,7 +99,7 @@ protected[bridge] object HTMLRunner {
     val ui = new UI(excludedTests, totalTestCount)
 
     // Warn if test set changed.
-    def excludedHash = excludedTests.map(_.fullyQualifiedName).toSet.##
+    def excludedHash = excludedTests.map(_.fullyQualifiedName()).toSet.##
     if (optExcludedHash.exists(_ != excludedHash)) {
       ui.warnTestSetChanged()
     }
@@ -117,19 +133,20 @@ protected[bridge] object HTMLRunner {
     for (ok <- runAllTasks(tasks)) yield {
       val resultStr = runner.done()
       if (resultStr.nonEmpty)
-        ui.reportFrameworkResult(ok, framework.name, resultStr)
+        ui.reportFrameworkResult(ok, framework.name(), resultStr)
       ok
     }
   }
 
   private def scheduleTask(task: Task, ui: UI): Future[(Boolean, Array[Task])] = {
-    val uiBox = ui.newTestTask(task.taskDef.fullyQualifiedName)
+    val uiBox = ui.newTestTask(task.taskDef().fullyQualifiedName())
     val handler = new EventCounter.Handler
 
     // Schedule test via timeout so we yield to the UI event thread.
-    val newTasks = Promise[Array[Task]]
+    val newTasks = Promise[Array[Task]]()
     val invocation = Future(task.execute(handler, Array(uiBox.logger),
-        newTasks.success))(QueueExecutionContext.timeouts())
+        newTasks.success))(
+        QueueExecutionContext.timeouts())
 
     val result = for {
       _ <- invocation
@@ -213,7 +230,7 @@ protected[bridge] object HTMLRunner {
         val total = counts.values.sum
         val countStrs = {
           s"Total: $total" +:
-          Status.values.map(status => s"$status: ${counts(status)}")
+          Status.values().map(status => s"$status: ${counts(status)}")
         }
         countStrs.mkString(", ")
       }
@@ -308,9 +325,8 @@ protected[bridge] object HTMLRunner {
       def log(msg: String, clss: String): dom.Element =
         body.newElement(clss = s"log $clss", text = msg, tpe = "pre")
 
-      def setNextSibling(that: TestBox): Unit = {
+      def setNextSibling(that: TestBox): Unit =
         this.box.insertAdjacentElement("afterend", that.box)
-      }
 
       private def toggleExpand(): Unit = {
         expanded = !expanded
@@ -320,7 +336,8 @@ protected[bridge] object HTMLRunner {
     }
 
     private class RootBox(excludedTestCount: Int,
-        totalTestCount: Int) extends MoveTarget {
+        totalTestCount: Int)
+        extends MoveTarget {
       private val box = {
         val caption = {
           if (excludedTestCount == 0) {
@@ -401,7 +418,7 @@ protected[bridge] object HTMLRunner {
       box.checkbox.onclick = testUpdater(excludedTests, box.checkbox)
 
       for (taskDef <- excludedTaskDefs) {
-        excludedTests += new ExcludedTest(taskDef.fullyQualifiedName)
+        excludedTests += new ExcludedTest(taskDef.fullyQualifiedName())
       }
 
       def setNextSibling(that: TestBox): Unit = box.setNextSibling(that)
@@ -442,15 +459,16 @@ protected[bridge] object HTMLRunner {
 
   // Mini dom facade.
   private object dom {
-    @JSGlobal("window")
+    @JSGlobal
     @js.native
     object window extends js.Object {
       def addEventListener(tpe: String, handler: js.Function0[Unit]): Unit = js.native
     }
 
-    @JSGlobal("document")
+    @JSGlobal
     @js.native
     object document extends js.Object {
+      def readyState: String = js.native
       def body: Element = js.native
       def createElement(tag: String): Element = js.native
       def createTextNode(tag: String): Node = js.native
@@ -488,8 +506,7 @@ protected[bridge] object HTMLRunner {
       var search: String = js.native
     }
 
-    implicit class RichElement private[dom] (private val element: Element)
-        extends AnyVal {
+    implicit class RichElement private[dom] (private val element: Element) extends AnyVal {
 
       def newElement(clss: String = "", text: String = "",
           tpe: String = "div"): dom.Element = {

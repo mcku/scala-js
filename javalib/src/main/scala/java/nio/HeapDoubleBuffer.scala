@@ -80,21 +80,26 @@ private[nio] final class HeapDoubleBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Double], offset: Int, length: Int): Unit =
+      dst: Array[Double], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Double], offset: Int, length: Int): Unit =
+      src: Array[Double], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }
 
 private[nio] object HeapDoubleBuffer {
   private[nio] implicit object NewHeapDoubleBuffer
       extends GenHeapBuffer.NewHeapBuffer[DoubleBuffer, Double] {
+    @inline
     def apply(capacity: Int, array: Array[Double], arrayOffset: Int,
         initialPosition: Int, initialLimit: Int,
-        readOnly: Boolean): DoubleBuffer = {
+        readOnly: Boolean, direct: Boolean): DoubleBuffer = {
+      if (direct)
+        throw new AssertionError("Cannot create a direct HeapDoubleBuffer")
       new HeapDoubleBuffer(capacity, array, arrayOffset,
           initialPosition, initialLimit, readOnly)
     }

@@ -20,7 +20,6 @@ import org.junit.Test
 
 import org.scalajs.testsuite.utils.CollectionsTestBase
 
-import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
 
 trait CollectionsOnCollectionsTest extends CollectionsTestBase {
@@ -30,7 +29,7 @@ trait CollectionsOnCollectionsTest extends CollectionsTestBase {
   def testMinMax1[T <: AnyRef with Comparable[T]: ClassTag](
       factory: CollectionFactory, toElem: Int => T, isMin: Boolean): Unit = {
     val coll = factory.empty[T]
-    coll.addAll(range.map(toElem).asJava)
+    coll.addAll(rangeOfElems(toElem))
 
     val minMax = if (isMin) range.head else range.last
     def getMinMax(): T =
@@ -40,10 +39,10 @@ trait CollectionsOnCollectionsTest extends CollectionsTestBase {
     assertEquals(0, getMinMax().compareTo(toElem(minMax)))
 
     coll match {
-      case list: List[_] =>
-        ju.Collections.shuffle(list.asJava, new ju.Random(42))
+      case list: ju.List[_] =>
+        ju.Collections.shuffle(list, new ju.Random(42))
         assertEquals(0, getMinMax().compareTo(toElem(minMax)))
-        ju.Collections.shuffle(list.asJava, new ju.Random(100000))
+        ju.Collections.shuffle(list, new ju.Random(100000))
         assertEquals(0, getMinMax().compareTo(toElem(minMax)))
       case _ =>
     }
@@ -52,7 +51,7 @@ trait CollectionsOnCollectionsTest extends CollectionsTestBase {
   def testMinMax2[T: ClassTag](factory: CollectionFactory, toElem: Int => T,
       isMin: Boolean, cmp: ju.Comparator[T]): Unit = {
     val coll = factory.empty[T]
-    coll.addAll(range.map(toElem).asJava)
+    coll.addAll(rangeOfElems(toElem))
 
     val minMax = if (isMin) range.head else range.last
     def getMinMax: T =
@@ -62,16 +61,16 @@ trait CollectionsOnCollectionsTest extends CollectionsTestBase {
     assertEquals(0, cmp.compare(getMinMax, toElem(minMax)))
 
     coll match {
-      case list: List[_] =>
-        ju.Collections.shuffle(list.asJava, new ju.Random(42))
+      case list: ju.List[_] =>
+        ju.Collections.shuffle(list, new ju.Random(42))
         assertEquals(0, cmp.compare(getMinMax, toElem(minMax)))
-        ju.Collections.shuffle(list.asJava, new ju.Random(100000))
+        ju.Collections.shuffle(list, new ju.Random(100000))
         assertEquals(0, cmp.compare(getMinMax, toElem(minMax)))
       case _ =>
     }
   }
 
-  @Test def min_on_comparables(): Unit = {
+  @Test def minOnComparables(): Unit = {
     def test[T <: AnyRef with Comparable[T]: ClassTag](toElem: Int => T): Unit =
       testMinMax1(factory, toElem, true)
 
@@ -80,19 +79,16 @@ trait CollectionsOnCollectionsTest extends CollectionsTestBase {
     test[jl.Double](_.toDouble)
   }
 
-  @Test def min_with_comparator(): Unit = {
-    def test[T: ClassTag](toElem: Int => T, cmpFun: (T, T) => Int): Unit = {
-      testMinMax2(factory, toElem, true, new Comparator[T] {
-        override def compare(o1: T, o2: T): Int = cmpFun(o1, o2)
-      })
-    }
+  @Test def minWithComparator(): Unit = {
+    def test[T: ClassTag](toElem: Int => T, cmp: Comparator[T]): Unit =
+      testMinMax2(factory, toElem, true, cmp)
 
-    test[jl.Integer](_.toInt, (x: jl.Integer, y: jl.Integer) => x.compareTo(y))
-    test[jl.Long](_.toLong, (x: jl.Long, y: jl.Long) => x.compareTo(y))
-    test[jl.Double](_.toDouble, (x: jl.Double, y: jl.Double) => x.compareTo(y))
+    test[jl.Integer](_.toInt, Comparator.naturalOrder[jl.Integer])
+    test[jl.Long](_.toLong, Comparator.naturalOrder[jl.Long])
+    test[jl.Double](_.toDouble, Comparator.naturalOrder[jl.Double])
   }
 
-  @Test def max_on_comparables(): Unit = {
+  @Test def maxOnComparables(): Unit = {
     def test[T <: AnyRef with Comparable[T]: ClassTag](toElem: Int => T): Unit =
       testMinMax1(factory, toElem, false)
 
@@ -101,16 +97,13 @@ trait CollectionsOnCollectionsTest extends CollectionsTestBase {
     test[jl.Double](_.toDouble)
   }
 
-  @Test def max_with_comparator(): Unit = {
-    def test[T: ClassTag](toElem: Int => T, cmpFun: (T, T) => Int): Unit = {
-      testMinMax2(factory, toElem, false, new Comparator[T] {
-        override def compare(o1: T, o2: T): Int = cmpFun(o1, o2)
-      })
-    }
+  @Test def maxWithComparator(): Unit = {
+    def test[T: ClassTag](toElem: Int => T, cmp: Comparator[T]): Unit =
+      testMinMax2(factory, toElem, false, cmp)
 
-    test[jl.Integer](_.toInt, (x: jl.Integer, y: jl.Integer) => x.compareTo(y))
-    test[jl.Long](_.toLong, (x: jl.Long, y: jl.Long) => x.compareTo(y))
-    test[jl.Double](_.toDouble, (x: jl.Double, y: jl.Double) => x.compareTo(y))
+    test[jl.Integer](_.toInt, Comparator.naturalOrder[jl.Integer])
+    test[jl.Long](_.toLong, Comparator.naturalOrder[jl.Long])
+    test[jl.Double](_.toDouble, Comparator.naturalOrder[jl.Double])
   }
 
   @Test def frequency(): Unit = {
@@ -123,9 +116,9 @@ trait CollectionsOnCollectionsTest extends CollectionsTestBase {
       }
 
       expectAllFrequenciesToBe(0)
-      coll.addAll(range.map(toElem).asJava)
+      coll.addAll(rangeOfElems(toElem))
       expectAllFrequenciesToBe(1)
-      coll.addAll(range.map(toElem).asJava)
+      coll.addAll(rangeOfElems(toElem))
       coll match {
         case _: ju.Set[_]  => expectAllFrequenciesToBe(1)
         case _: ju.List[_] => expectAllFrequenciesToBe(2)
@@ -158,10 +151,10 @@ trait CollectionsOnCollectionsTest extends CollectionsTestBase {
     def test[E: ClassTag](toElem: Int => E): Unit = {
       val coll = factory.empty[E]
       testCollectionUnmodifiability(ju.Collections.unmodifiableCollection(coll),
-        toElem(0))
-      coll.addAll(range.map(toElem).asJava)
+          toElem(0))
+      coll.addAll(rangeOfElems(toElem))
       testCollectionUnmodifiability(ju.Collections.unmodifiableCollection(coll),
-        toElem(0))
+          toElem(0))
     }
 
     test[jl.Integer](_.toInt)

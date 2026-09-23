@@ -13,17 +13,17 @@
 package org.scalajs.testsuite.jsinterop
 
 import scala.scalajs.js
-import scala.scalajs.LinkingInfo.assumingES6
 
 import org.junit.Assert._
 import org.junit.Assume._
 import org.junit.Test
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.Platform.useECMAScript2015Semantics
 
 class FunctionTest {
 
-  @Test def should_support_call_with_expanded_arguments(): Unit = {
+  @Test def expandedArguments(): Unit = {
     val f = js.eval("""
         var f = function() { return arguments; }; f;
     """).asInstanceOf[js.Function]
@@ -34,7 +34,7 @@ class FunctionTest {
     assertFalse(res.contains("2"))
   }
 
-  @Test def `should_support_call_with_the_:_*_notation_to_expand_a_Seq`(): Unit = {
+  @Test def expandSeqWithUnderscoreAsteriskNotation(): Unit = {
     val f = js.eval("""
         var f = function() { return arguments; }; f;
     """).asInstanceOf[js.Function]
@@ -47,7 +47,7 @@ class FunctionTest {
   }
 
   @Test def functionWithConversionIsAnArrowFunction(): Unit = {
-    assumeTrue("In ES 5.1, arrow functions do not exist", assumingES6)
+    assumeTrue("Requires ECMAScript 2015 semantics", useECMAScript2015Semantics)
 
     val ctor: js.Function = (x: js.Any) => x
     val ctorDyn = ctor.asInstanceOf[js.Dynamic]
@@ -59,7 +59,7 @@ class FunctionTest {
   }
 
   @Test def functionWithSAMIsAnArrowFunction(): Unit = {
-    assumeTrue("In ES 5.1, arrow functions do not exist", assumingES6)
+    assumeTrue("Requires ECMAScript 2015 semantics", useECMAScript2015Semantics)
 
     val ctor: js.Function1[js.Any, Any] = (x: js.Any) => x
     val ctorDyn = ctor.asInstanceOf[js.Dynamic]

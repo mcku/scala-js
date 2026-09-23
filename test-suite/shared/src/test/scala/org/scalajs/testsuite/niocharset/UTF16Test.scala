@@ -18,6 +18,7 @@ import java.nio.charset._
 import BaseCharsetTest._
 
 import org.junit.Test
+import org.junit.Assert._
 
 abstract class BaseUTF16Test(charset: Charset) extends BaseCharsetTest(charset) {
   @Test def decode(): Unit = {
@@ -106,7 +107,14 @@ abstract class BaseUTF16Test(charset: Charset) extends BaseCharsetTest(charset) 
   }
 }
 
-class UTF16BETest extends BaseUTF16Test(Charset.forName("UTF-16BE"))
+class UTF16BETest extends BaseUTF16Test(Charset.forName("UTF-16BE")) {
+  @Test def testHeuristicProperties(): Unit = {
+    assertEquals(0.5f, charset.newDecoder().averageCharsPerByte(), 0.0f)
+    assertEquals(1.0f, charset.newDecoder().maxCharsPerByte(), 0.0f)
+    assertEquals(2.0f, charset.newEncoder().averageBytesPerChar(), 0.0f)
+    assertEquals(2.0f, charset.newEncoder().maxBytesPerChar(), 0.0f)
+  }
+}
 
 class UTF16LETest extends BaseUTF16Test(Charset.forName("UTF-16LE")) {
   import UTF16LETest._
@@ -123,9 +131,17 @@ class UTF16LETest extends BaseUTF16Test(Charset.forName("UTF-16LE")) {
       flipByteBuffer(buf)
     super.testEncode(in)(outParts: _*)
   }
+
+  @Test def testHeuristicProperties(): Unit = {
+    assertEquals(0.5f, charset.newDecoder().averageCharsPerByte(), 0.0f)
+    assertEquals(1.0f, charset.newDecoder().maxCharsPerByte(), 0.0f)
+    assertEquals(2.0f, charset.newEncoder().averageBytesPerChar(), 0.0f)
+    assertEquals(2.0f, charset.newEncoder().maxBytesPerChar(), 0.0f)
+  }
 }
 
 object UTF16LETest {
+
   /** Flips all pairs of bytes in a byte buffer, except a potential lonely
    *  last byte.
    */
@@ -152,7 +168,7 @@ class UTF16Test extends BaseUTF16Test(Charset.forName("UTF-16")) {
     super.testDecode(in)(outParts: _*)
 
     // With BOM, big endian
-    val inWithBOM = ByteBuffer.allocate(2+in.remaining)
+    val inWithBOM = ByteBuffer.allocate(2 + in.remaining)
     inWithBOM.put(BigEndianBOM).put(in).flip()
     super.testDecode(inWithBOM)(outParts: _*)
 
@@ -165,5 +181,12 @@ class UTF16Test extends BaseUTF16Test(Charset.forName("UTF-16")) {
       outParts: OutPart[ByteBuffer]*): Unit = {
     if (in.remaining == 0) super.testEncode(in)(outParts: _*)
     else super.testEncode(in)(BufferPart(BigEndianBOM) +: outParts: _*)
+  }
+
+  @Test def testHeuristicProperties(): Unit = {
+    assertEquals(0.5f, charset.newDecoder().averageCharsPerByte(), 0.0f)
+    assertEquals(1.0f, charset.newDecoder().maxCharsPerByte(), 0.0f)
+    assertEquals(2.0f, charset.newEncoder().averageBytesPerChar(), 0.0f)
+    assertEquals(4.0f, charset.newEncoder().maxBytesPerChar(), 0.0f)
   }
 }

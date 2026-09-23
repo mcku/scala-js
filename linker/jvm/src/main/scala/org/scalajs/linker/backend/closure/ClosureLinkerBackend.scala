@@ -14,10 +14,10 @@ package org.scalajs.linker.backend.closure
 
 import scala.concurrent._
 
-import java.io._
-import java.net.URI
+import java.io.{ByteArrayOutputStream, Writer}
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.{Arrays, HashSet}
 
 import com.google.javascript.jscomp.{
   SourceFile => ClosureSource,
@@ -28,18 +28,20 @@ import com.google.javascript.jscomp.{
 
 import org.scalajs.logging.Logger
 
-import org.scalajs.linker._
+import org.scalajs.linker.interface._
+import org.scalajs.linker.interface.unstable.OutputPatternsImpl
 import org.scalajs.linker.backend._
 import org.scalajs.linker.backend.emitter.Emitter
+import org.scalajs.linker.backend.javascript.{Trees => js}
 import org.scalajs.linker.standard._
+import org.scalajs.linker.standard.ModuleSet.ModuleID
 
 /** The Closure backend of the Scala.js linker.
  *
  *  Runs a the Google Closure Compiler in advanced mode on the emitted code.
  *  Use this for production builds.
  */
-final class ClosureLinkerBackend(config: LinkerBackendImpl.Config)
-    extends LinkerBackendImpl(config) {
+final class ClosureLinkerBackend(config: LinkerBackendImpl.Config) extends LinkerBackendImpl(config) {
 
   import config.commonConfig.coreSpec._
 
@@ -50,69 +52,126 @@ final class ClosureLinkerBackend(config: LinkerBackendImpl.Config)
   require(moduleKind != ModuleKind.ESModule,
       s"Cannot use module kind $moduleKind with the Closure Compiler")
 
+  require(!targetIsWebAssembly,
+      s"A JavaScript backend cannot be used with CoreSpec targeting WebAssembly")
+
   private[this] val emitter = {
-    new Emitter(config.commonConfig)
+    // Note that we do not transfer `minify` -- Closure will do its own thing anyway
+    val emitterConfig = Emitter.Config(config.commonConfig.coreSpec)
+      .withJSHeader(config.jsHeader)
       .withOptimizeBracketSelects(false)
       .withTrackAllGlobalRefs(true)
+      .withInternalModulePattern(m => OutputPatternsImpl.moduleName(config.outputPatterns, m.id))
+
+    // Do not pre-print trees: We do not want the printed form.
+    val prePrinter = Emitter.PrePrinter.Off
+
+    new Emitter(emitterConfig, prePrinter)
   }
 
   val symbolRequirements: SymbolRequirement = emitter.symbolRequirements
 
-  private val needsIIFEWrapper = moduleKind match {
-    case ModuleKind.NoModule                             => true
-    case ModuleKind.ESModule | ModuleKind.CommonJSModule => false
+  override def injectedIRFiles: Seq[IRFile] = emitter.injectedIRFiles
+
+  private val languageMode: ClosureOptions.LanguageMode = {
+    import ClosureOptions.LanguageMode._
+
+    esFeatures.esVersion match {
+      case ESVersion.ES2015 => ECMASCRIPT_2015
+      case ESVersion.ES2016 => ECMASCRIPT_2016
+      case ESVersion.ES2017 => ECMASCRIPT_2017
+      case ESVersion.ES2018 => ECMASCRIPT_2018
+      case ESVersion.ES2019 => ECMASCRIPT_2019
+      case ESVersion.ES2020 => ECMASCRIPT_2020
+      case ESVersion.ES2021 => ECMASCRIPT_2021
+
+      // GCC does not have constants for later versions of ECMAScript
+      case esVersion if esVersion > ESVersion.ES2021 => ECMASCRIPT_2021
+
+      // Test for ESVersion.ES5_1 without triggering the deprecation warning
+      case esVersion if esVersion.edition == 5 =>
+        ECMASCRIPT5_STRICT
+
+      case _ =>
+        throw new AssertionError(s"Unknown ES version ${esFeatures.esVersion}")
+    }
   }
 
-  /** Emit the given [[standard.LinkingUnit LinkingUnit]] to the target output.
+  /** Emit the given [[standard.ModuleSet ModuleSet]] to the target output.
    *
-   *  @param unit [[standard.LinkingUnit LinkingUnit]] to emit
-   *  @param output File to write to
+   *  @param moduleSet [[standard.ModuleSet ModuleSet]] to emit
+   *  @param output Directory to write to
    */
-  def emit(unit: LinkingUnit, output: LinkerOutput, logger: Logger)(
-      implicit ec: ExecutionContext): Future[Unit] = {
-    Future(compile(unit, output, logger)).flatMap { case (topLevelVarDeclarations, code, sourceMap) =>
-      logger.timeFuture("Closure: Write result") {
-        writeResult(topLevelVarDeclarations, code, sourceMap, output)
+  def emit(moduleSet: ModuleSet, output: OutputDirectory, logger: Logger)(
+      implicit ec: ExecutionContext): Future[Report] = {
+    require(moduleSet.modules.size <= 1,
+        "Cannot use multiple modules with the Closure Compiler")
+
+    // Run Emitter even with 0 modules, to keep its internal state consistent.
+    val emitterResult = logger.time("Emitter") {
+      emitter.emit(moduleSet, logger)
+    }
+
+    val compileResult = for {
+      sjsModule <- moduleSet.modules.headOption
+    } yield {
+      val closureChunk = logger.time("Closure: Create trees)") {
+        val (trees, _) = emitterResult.body(sjsModule.id)
+        buildChunk(trees)
+      }
+
+      logger.time("Closure: Compiler pass") {
+        val options = closureOptions(sjsModule.id)
+
+        val externs = Arrays.asList(
+            ClosureSource.fromCode("ScalaJSExterns.js",
+                ClosureLinkerBackend.ScalaJSExterns),
+            ClosureSource.fromCode("ScalaJSGlobalRefs.js",
+                makeExternsForGlobalRefs(emitterResult.globalRefs)),
+            ClosureSource.fromCode("ScalaJSExportExterns.js",
+                makeExternsForExports(emitterResult.topLevelVarDecls, sjsModule)))
+
+        val (code, sourceMap) = compile(externs, closureChunk, options, logger)
+        (sjsModule.id, code, sourceMap)
+      }
+    }
+
+    logger.timeFuture("Closure: Write result") {
+      for {
+        _ <- writeResult(emitterResult.header, emitterResult.footer, compileResult, output)
+      } yield {
+        LinkerBackendImpl.report(moduleSet, moduleKind, config.outputPatterns, config.sourceMap)
       }
     }
   }
 
-  private def compile(unit: LinkingUnit, output: LinkerOutput, logger: Logger) = {
-    verifyUnit(unit)
+  private def buildChunk(topLevelTrees: List[js.Tree]): JSChunk = {
+    val root = ClosureAstTransformer.transformScript(topLevelTrees,
+        languageMode.toFeatureSet(), config.relativizeSourceMapBase)
 
-    // Build Closure IR
-    val (topLevelVarDeclarations, globalRefs, module) = {
-      logger.time("Closure: Emitter (create Closure trees)") {
-        val builder = new ClosureModuleBuilder(config.relativizeSourceMapBase)
-        val (topLevelVarDeclarations, globalRefs) =
-          emitter.emitForClosure(unit, builder, logger)
-        (topLevelVarDeclarations, globalRefs, builder.result())
-      }
-    }
+    val chunk = new JSChunk("Scala.js")
+    chunk.add(new CompilerInput(new SyntheticAst(root)))
+    chunk
+  }
 
-    // Compile the module
-    val closureExterns = java.util.Arrays.asList(
-        ClosureSource.fromCode("ScalaJSExterns.js", ClosureLinkerBackend.ScalaJSExterns),
-        ClosureSource.fromCode("ScalaJSGlobalRefs.js", makeExternsForGlobalRefs(globalRefs)),
-        ClosureSource.fromCode("ScalaJSExportExterns.js", makeExternsForExports(topLevelVarDeclarations, unit)))
-    val options = closureOptions(output)
-    val compiler = closureCompiler(logger)
+  private def compile(externs: java.util.List[ClosureSource], chunk: JSChunk,
+      options: ClosureOptions, logger: Logger) = {
+    val compiler = new ClosureCompiler
+    compiler.setErrorManager(new SortingErrorManager(new HashSet(Arrays.asList(
+        new LoggerErrorReportGenerator(logger)))))
 
-    val result = logger.time("Closure: Compiler pass") {
-      compiler.compileModules(
-          closureExterns, java.util.Arrays.asList(module), options)
-    }
+    val result =
+      compiler.compileChunks(externs, Arrays.asList(chunk), options)
 
     if (!result.success) {
       throw new LinkingException(
           "There were errors when applying the Google Closure Compiler")
     }
 
-    (topLevelVarDeclarations, compiler.toSource + "\n", Option(compiler.getSourceMap()))
+    (compiler.toSource + "\n", compiler.getSourceMap())
   }
 
-  /** Constructs an externs file listing all the global refs.
-   */
+  /** Constructs an externs file listing all the global refs. */
   private def makeExternsForGlobalRefs(globalRefs: Set[String]): String =
     globalRefs.map("var " + _ + ";\n").mkString
 
@@ -122,20 +181,21 @@ final class ClosureLinkerBackend(config: LinkerBackendImpl.Config)
    *  This is necessary to avoid name clashes with renamed properties (#2491).
    */
   private def makeExternsForExports(topLevelVarDeclarations: List[String],
-      linkingUnit: LinkingUnit): String = {
+      sjsModule: ModuleSet.Module): String = {
     import org.scalajs.ir.Trees._
+    import org.scalajs.linker.backend.javascript.Trees.Ident.isValidJSIdentifierName
 
     def exportName(memberDef: MemberDef): Option[String] = memberDef match {
-      case MethodDef(_, StringLiteral(name), _, _, _) => Some(name)
-      case PropertyDef(_, StringLiteral(name), _, _)  => Some(name)
-      case _                                          => None
+      case JSMethodDef(_, StringLiteral(name), _, _, _) => Some(name)
+      case JSPropertyDef(_, StringLiteral(name), _, _)  => Some(name)
+      case _                                            => None
     }
 
     val exportedPropertyNames = for {
-      classDef <- linkingUnit.classDefs
+      classDef <- sjsModule.classDefs
       member <- classDef.exportedMembers
-      name <- exportName(member.value)
-      if isValidIdentifier(name)
+      name <- exportName(member)
+      if isValidJSIdentifierName(name)
     } yield {
       name
     }
@@ -149,86 +209,66 @@ final class ClosureLinkerBackend(config: LinkerBackendImpl.Config)
     content.toString()
   }
 
-  private def closureCompiler(logger: Logger) = {
-    import com.google.common.collect.ImmutableSet
-
-    val compiler = new ClosureCompiler
-    compiler.setErrorManager(new SortingErrorManager(ImmutableSet.of(
-        new LoggerErrorReportGenerator(logger))))
-    compiler
-  }
-
-  private def writeResult(topLevelVarDeclarations: List[String],
-      outputContent: String, sourceMap: Option[SourceMap], output: LinkerOutput)(
+  private def writeResult(header: String, footer: String,
+      compileResult: Option[(ModuleID, String, SourceMap)], output: OutputDirectory)(
       implicit ec: ExecutionContext): Future[Unit] = {
+    // `compileResult` is an Option, because we might have no module at all.
 
-    def ifIIFE(str: String): String = if (needsIIFEWrapper) str else ""
+    val inputs = compileResult.iterator.flatMap { case (moduleID, code, sourceMap) =>
+      val jsFileName = OutputPatternsImpl.jsFile(config.outputPatterns, moduleID.id)
+      val sourceMapFileName = OutputPatternsImpl.sourceMapFile(config.outputPatterns, moduleID.id)
+      val jsFileURI = OutputPatternsImpl.jsFileURI(config.outputPatterns, moduleID.id)
+      val sourceMapURI = OutputPatternsImpl.sourceMapURI(config.outputPatterns, moduleID.id)
 
-    val header = {
-      val maybeTopLevelVarDecls = if (topLevelVarDeclarations.nonEmpty) {
-        val kw = if (esFeatures.useECMAScript2015) "let " else "var "
-        topLevelVarDeclarations.mkString(kw, ",", ";\n")
-      } else {
-        ""
-      }
-      maybeTopLevelVarDecls + ifIIFE("(function(){") + "'use strict';\n"
-    }
-    val footer = ifIIFE("}).call(this);\n")
+      val jsFile = OutputWriter.OneFile(jsFileName, true, () => {
+        val jsFileWriter = new ByteArrayOutputStream()
+        val jsFileStrWriter =
+          new java.io.OutputStreamWriter(jsFileWriter, StandardCharsets.UTF_8)
+        jsFileStrWriter.write(header)
+        jsFileStrWriter.write(code)
+        jsFileStrWriter.write(footer)
+        if (config.sourceMap)
+          jsFileStrWriter.write("//# sourceMappingURL=" + sourceMapURI + "\n")
+        jsFileStrWriter.flush()
+        ByteBuffer.wrap(jsFileWriter.toByteArray())
+      })
 
-    def writeToFile(file: LinkerOutput.File)(content: Writer => Unit): Future[Unit] = {
-      val out = new ByteArrayOutputStream()
-      val writer = new OutputStreamWriter(out, StandardCharsets.UTF_8)
-      try content(writer)
-      finally writer.close()
+      val sourceMapFile = OutputWriter.OneFile(sourceMapFileName, true, () => {
+        val sourceMapWriter = new ByteArrayOutputStream()
+        val sourceMapStrWriter =
+          new java.io.OutputStreamWriter(sourceMapWriter, StandardCharsets.UTF_8)
+        sourceMap.setWrapperPrefix(header)
+        sourceMap.appendTo(sourceMapStrWriter, jsFileURI)
+        sourceMapStrWriter.flush()
 
-      OutputFileImpl.fromOutputFile(file)
-        .writeFull(ByteBuffer.wrap(out.toByteArray))
-    }
+        ByteBuffer.wrap(sourceMapWriter.toByteArray())
+      })
 
-    // Write optimized code
-    val codeWritten = writeToFile(output.jsFile) { w =>
-      w.write(header)
-      w.write(outputContent)
-      w.write(footer)
-      output.sourceMapURI.foreach(uri =>
-          w.write("//# sourceMappingURL=" + uri.toASCIIString + "\n"))
-    }
-
-    // Write source map (if available)
-    val smWritten = for {
-      sm  <- sourceMap
-      smf <- output.sourceMap
-    } yield {
-      sm.setWrapperPrefix(header)
-      writeToFile(smf) { w =>
-        sm.appendTo(w, output.jsFileURI.fold("")(_.toASCIIString))
-      }
+      if (config.sourceMap) Iterator(jsFile, sourceMapFile)
+      else Iterator(jsFile)
     }
 
-    smWritten.fold(codeWritten)(_.flatMap(_ => codeWritten))
+    OutputWriter.write(inputs, output, config.maxConcurrentWrites, skipContentCheck = false)
   }
 
-  private def closureOptions(output: LinkerOutput) = {
+  private def closureOptions(moduleID: ModuleID) = {
     val options = new ClosureOptions
     options.setPrettyPrint(config.prettyPrint)
     CompilationLevel.ADVANCED_OPTIMIZATIONS.setOptionsForCompilationLevel(options)
 
-    val language =
-      if (esFeatures.useECMAScript2015) ClosureOptions.LanguageMode.ECMASCRIPT_2015
-      else ClosureOptions.LanguageMode.ECMASCRIPT5_STRICT
-    options.setLanguageIn(language)
-    options.setLanguageOut(language)
-
-    options.setCheckGlobalThisLevel(CheckLevel.OFF)
+    options.setLanguage(languageMode)
+    options.setWarningLevel(DiagnosticGroups.GLOBAL_THIS, CheckLevel.OFF)
     options.setWarningLevel(DiagnosticGroups.DUPLICATE_VARS, CheckLevel.OFF)
     options.setWarningLevel(DiagnosticGroups.CHECK_REGEXP, CheckLevel.OFF)
     options.setWarningLevel(DiagnosticGroups.CHECK_TYPES, CheckLevel.OFF)
     options.setWarningLevel(DiagnosticGroups.CHECK_USELESS_CODE, CheckLevel.OFF)
 
-    if (config.sourceMap && output.sourceMap.isDefined) {
+    if (config.sourceMap) {
+      val sourceMapFileName =
+        OutputPatternsImpl.sourceMapFile(config.outputPatterns, moduleID.id)
+
       options.setSourceMapDetailLevel(SourceMap.DetailLevel.ALL)
-      output.sourceMapURI.foreach(uri =>
-        options.setSourceMapOutputPath(uri.toASCIIString))
+      options.setSourceMapOutputPath(sourceMapFileName)
     }
 
     options
@@ -236,7 +276,24 @@ final class ClosureLinkerBackend(config: LinkerBackendImpl.Config)
 }
 
 private object ClosureLinkerBackend {
-  /** Minimal set of externs to compile Scala.js-emitted code with Closure. */
+
+  /** Minimal set of externs to compile Scala.js-emitted code with Closure.
+   *
+   *  These must be externs in all cases because they are generated outside of
+   *  global ref tracking and CoreJSLib.
+   *
+   *  * `constructor` is generated for classes
+   *  * `toString` is used by [[java.lang.Object#toString]]
+   *  * `$classData` needs to be protected from renaming because it must not
+   *    be renamed to something short and ubiquitous, otherwise
+   *    `$isScalaJSObject` and `$is_` functions cease to function properly.
+   *  * `length` is generated by [[ArrayLength org.scalajs.ir.ArrayLength]]
+   *  * `call` is generated for super calls
+   *  * `apply` is generated when desugaring `...spread` arguments
+   *  * `NaN`, `Infinity` and `undefined` need to be in externs for
+   *    Closure not to crash in cases where it constant-folds an expression into
+   *    one of these (this was confirmed to us as intended by Closure devs).
+   */
   private val ScalaJSExterns = """
     var Object;
     Object.prototype.constructor;
@@ -247,8 +304,6 @@ private object ClosureLinkerBackend {
     var Function;
     Function.prototype.call;
     Function.prototype.apply;
-    var require;
-    var exports;
     var NaN = 0.0/0.0, Infinity = 1.0/0.0, undefined = void 0;
     """
 }

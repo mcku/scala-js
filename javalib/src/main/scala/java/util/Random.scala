@@ -14,12 +14,22 @@ package java.util
 
 import scala.annotation.tailrec
 
-import scala.scalajs.js
+import scala.scalajs.LinkingInfo
 
-class Random(seed_in: Long) extends AnyRef with java.io.Serializable {
+import java.util.random.RandomGenerator
 
-  private var seedHi: Int = _ // 24 msb of the seed
-  private var seedLo: Int = _ // 24 lsb of the seed
+class Random(seed_in: Long) extends AnyRef with RandomGenerator with java.io.Serializable {
+
+  /* This class has two different implementations of seeding and computing
+   * bits, depending on whether we are on Wasm or JS.
+   *
+   * On Wasm, we use the implementation specified in the JavaDoc verbatim.
+   *
+   * On JS, the naive implementation is too slow, due to the use of `Long`s.
+   * We use semantically equivalent formulas that better fold away.
+   */
+
+  private var seed: Long = _
 
   // see nextGaussian()
   private var nextNextGaussian: Double = _
@@ -30,70 +40,65 @@ class Random(seed_in: Long) extends AnyRef with java.io.Serializable {
   def this() = this(Random.randomSeed())
 
   def setSeed(seed_in: Long): Unit = {
-    val seed = ((seed_in ^ 0x5DEECE66DL) & ((1L << 48) - 1)) // as documented
-    seedHi = (seed >>> 24).toInt
-    seedLo = seed.toInt & ((1 << 24) - 1)
+    val seed = ((seed_in ^ 0x5deece66dL) & ((1L << 48) - 1)) // as documented
+    this.seed = seed
     haveNextNextGaussian = false
   }
 
-  protected def next(bits: Int): Int = {
-    /* This method is originally supposed to work with a Long seed from which
-     * 48 bits are used.
-     * Since Longs are too slow, we manually decompose the 48-bit seed in two
-     * parts of 24 bits each.
-     * The computation below is the translation in 24-by-24 bits of the
-     * specified computation, taking care never to produce intermediate values
-     * requiring more than 52 bits of precision.
-     */
+  @noinline
+  protected def next(bits: Int): Int =
+    if (LinkingInfo.isWebAssembly) nextWasm(bits)
+    else nextJS(bits)
 
-    @inline
-    def rawToInt(x: Double): Int =
-      (x.asInstanceOf[js.Dynamic] | 0.asInstanceOf[js.Dynamic]).asInstanceOf[Int]
-
-    @inline
-    def _24msbOf(x: Double): Int = rawToInt(x / (1 << 24).toDouble)
-
-    @inline
-    def _24lsbOf(x: Double): Int = rawToInt(x) & ((1 << 24) - 1)
-
-    // seed = (seed * 0x5DEECE66DL + 0xBL) & ((1L << 48) - 1)
-
-    val twoPow24 = (1 << 24).toDouble
-
-    val oldSeedHi = seedHi
-    val oldSeedLo = seedLo
-
-    val mul = 0x5DEECE66DL
-    val mulHi = (mul >>> 24).toInt
-    val mulLo = mul.toInt & ((1 << 24) - 1)
-
-    val loProd = oldSeedLo.toDouble * mulLo.toDouble + 0xB
-    val hiProd = oldSeedLo.toDouble * mulHi.toDouble + oldSeedHi.toDouble * mulLo.toDouble
-    val newSeedHi =
-      (_24msbOf(loProd) + _24lsbOf(hiProd)) & ((1 << 24) - 1)
-    val newSeedLo =
-      _24lsbOf(loProd)
-
-    seedHi = newSeedHi
-    seedLo = newSeedLo
-
-    // (seed >>> (48 - bits)).toInt
-    //   === ((seed >>> 16) >>> (32 - bits)).toInt because (bits <= 32)
-
-    val result32 = (newSeedHi << 8) | (newSeedLo >> 16)
-    result32 >>> (32 - bits)
+  @inline
+  private def nextWasm(bits: Int): Int = {
+    // as documented
+    val newSeed = (seed * 0x5deece66dL + 0xbL) & ((1L << 48) - 1)
+    seed = newSeed
+    (newSeed >>> (48 - bits)).toInt
   }
 
-  def nextDouble(): Double = {
+  @inline
+  private def nextJS(bits: Int): Int = {
+    /* Spec: seed = (seed * 0x5DEECE66DL + 0xBL) & ((1L << 48) - 1)
+     *
+     * Instead we compute the new seed << 16 (where 16 = 64 - 48).
+     * This is done by shifting both constants by 16 (appending 0000 at the end
+     * of their hex value) and removing the & ...
+     *
+     * Then we compute the new value of `seed` and the result by adding 16 to
+     * all the shifts.
+     *
+     * By doing this, the `a0` part of the multiplicative constants is `0`.
+     * That allows the optimizer to constant-fold away 2 of the 6 int
+     * multiplications it would normally have to do.
+     */
+
+    val newSeedShift16 = 0x5deece66d0000L * seed + 0xb0000L
+    seed = newSeedShift16 >>> 16
+
+    /* Spec:       (newSeed >>> (48 - bits)).toInt
+     * with shift: (newSeedShift16 >>> (16 + 48 - bits)).toInt
+     *
+     * Since 1 <= bits <= 32 (by spec of next(bits)), the shift is
+     * 32 <= 64 - bits <= 63, which should result in a branchless shift inside
+     * RuntimeLong. The optimizer does not know that, though, so we help it by
+     * first shifting by 32 (which is free), extracting the `toInt` (also free),
+     * then shifting by `32 - bits`.
+     */
+    (newSeedShift16 >>> 32).toInt >>> (32 - bits)
+  }
+
+  override def nextDouble(): Double = {
     // ((next(26).toLong << 27) + next(27)) / (1L << 53).toDouble
     ((next(26).toDouble * (1L << 27).toDouble) + next(27).toDouble) / (1L << 53).toDouble
   }
 
-  def nextBoolean(): Boolean = next(1) != 0
+  override def nextBoolean(): Boolean = next(1) != 0
 
-  def nextInt(): Int = next(32)
+  override def nextInt(): Int = next(32)
 
-  def nextInt(n: Int): Int = {
+  override def nextInt(n: Int): Int = {
     if (n <= 0) {
       throw new IllegalArgumentException("n must be positive")
     } else if ((n & -n) == n) { // i.e., n is a power of 2
@@ -114,7 +119,7 @@ class Random(seed_in: Long) extends AnyRef with java.io.Serializable {
       def loop(): Int = {
         val bits = next(31)
         val value = bits % n
-        if (bits - value + (n-1) < 0) loop()
+        if (bits - value + (n - 1) < 0) loop()
         else value
       }
 
@@ -124,12 +129,12 @@ class Random(seed_in: Long) extends AnyRef with java.io.Serializable {
 
   def nextLong(): Long = (next(32).toLong << 32) + next(32)
 
-  def nextFloat(): Float = {
+  override def nextFloat(): Float = {
     // next(24).toFloat / (1 << 24).toFloat
     (next(24).toDouble / (1 << 24).toDouble).toFloat
   }
 
-  def nextBytes(bytes: Array[Byte]): Unit = {
+  override def nextBytes(bytes: Array[Byte]): Unit = {
     var i = 0
     while (i < bytes.length) {
       var rnd = nextInt()
@@ -163,19 +168,19 @@ class Random(seed_in: Long) extends AnyRef with java.io.Serializable {
        * Rejection sampling throws away about 20% of the pairs.
        */
       do {
-        x = nextDouble()*2-1
-        y = nextDouble()*2-1
-        rds = x*x + y*y
+        x = nextDouble() * 2 - 1
+        y = nextDouble() * 2 - 1
+        rds = x * x + y * y
       } while (rds == 0 || rds > 1)
 
       val c = Math.sqrt(-2 * Math.log(rds) / rds)
 
       // Save y*c for next time
-      nextNextGaussian = y*c
+      nextNextGaussian = y * c
       haveNextNextGaussian = true
 
       // And return x*c
-      x*c
+      x * c
     }
   }
 }
@@ -187,6 +192,6 @@ object Random {
     (randomInt().toLong << 32) | (randomInt().toLong & 0xffffffffL)
 
   private def randomInt(): Int =
-    (Math.floor(js.Math.random() * 4294967296.0) - 2147483648.0).toInt
+    (Math.floor(Math.random() * 4294967296.0) - 2147483648.0).toInt
 
 }

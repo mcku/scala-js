@@ -12,8 +12,6 @@
 
 package org.scalajs.testsuite.scalalib
 
-import scala.language.implicitConversions
-
 import scala.reflect._
 import scala.collection.mutable.ArrayBuilder
 
@@ -61,11 +59,12 @@ class ArrayBuilderTest {
     zerosInline[T](length)
 
   @noinline def someInt: Int = 53
+  @noinline def someLong: Long = 65
   @noinline def someChar: Char = 'S'
   @noinline def someBoolean: Boolean = false
   @noinline def someString: String = "world"
 
-  @Test def Int_normal_case_inline(): Unit = {
+  @Test def intNormalCaseInline(): Unit = {
     val b = ArrayBuilder.make[Int]
     b += 42
     b += someInt
@@ -78,7 +77,7 @@ class ArrayBuilderTest {
     assertEquals(53, erase(a(1)))
   }
 
-  @Test def Int_normal_case_noinline(): Unit = {
+  @Test def intNormalCaseNoinline(): Unit = {
     val b = makeNoInline[Int]
     b += 42
     b += someInt
@@ -91,7 +90,7 @@ class ArrayBuilderTest {
     assertEquals(53, erase(a(1)))
   }
 
-  @Test def Int_zeros_inline(): Unit = {
+  @Test def intZerosInline(): Unit = {
     val a = zerosInline[Int](3)
     assertSame(classOf[Array[Int]], a.getClass)
     assertEquals(3, a.length)
@@ -99,7 +98,7 @@ class ArrayBuilderTest {
     assertEquals(0, erase(a(0)))
   }
 
-  @Test def Int_zeros_noinline(): Unit = {
+  @Test def intZerosNoinline(): Unit = {
     val a = zerosNoInline[Int](3)
     assertSame(classOf[Array[Int]], a.getClass)
     assertEquals(3, a.length)
@@ -107,7 +106,49 @@ class ArrayBuilderTest {
     assertEquals(0, erase(a(0)))
   }
 
-  @Test def Char_normal_case_inline(): Unit = {
+  @Test def longNormalCaseInline(): Unit = {
+    val b = ArrayBuilder.make[Long]
+    b += 42L
+    b += someLong
+    val a = b.result()
+
+    assertSame(classOf[Array[Long]], a.getClass)
+    assertEquals(2, a.length)
+    assertTrue(erase(a(0)).isInstanceOf[Long])
+    assertEquals(42L, erase(a(0)))
+    assertEquals(65L, erase(a(1)))
+  }
+
+  @Test def longNormalCaseNoinline(): Unit = {
+    val b = makeNoInline[Long]
+    b += 42L
+    b += someLong
+    val a = b.result()
+
+    assertSame(classOf[Array[Long]], a.getClass)
+    assertEquals(2, a.length)
+    assertTrue(erase(a(0)).isInstanceOf[Long])
+    assertEquals(42L, erase(a(0)))
+    assertEquals(65L, erase(a(1)))
+  }
+
+  @Test def longZerosInline(): Unit = {
+    val a = zerosInline[Long](3)
+    assertSame(classOf[Array[Long]], a.getClass)
+    assertEquals(3, a.length)
+    assertTrue(erase(a(0)).isInstanceOf[Long])
+    assertEquals(0L, erase(a(0)))
+  }
+
+  @Test def longZerosNoinline(): Unit = {
+    val a = zerosNoInline[Long](3)
+    assertSame(classOf[Array[Long]], a.getClass)
+    assertEquals(3, a.length)
+    assertTrue(erase(a(0)).isInstanceOf[Long])
+    assertEquals(0L, erase(a(0)))
+  }
+
+  @Test def charNormalCaseInline(): Unit = {
     val b = ArrayBuilder.make[Char]
     b += 'A'
     b += someChar
@@ -120,7 +161,7 @@ class ArrayBuilderTest {
     assertEquals('S', erase(a(1)))
   }
 
-  @Test def Char_normal_case_noinline(): Unit = {
+  @Test def charNormalCaseNoinline(): Unit = {
     val b = makeNoInline[Char]
     b += 'A'
     b += someChar
@@ -133,7 +174,7 @@ class ArrayBuilderTest {
     assertEquals('S', erase(a(1)))
   }
 
-  @Test def Char_zeros_inline(): Unit = {
+  @Test def charZerosInline(): Unit = {
     val a = zerosInline[Char](3)
     assertSame(classOf[Array[Char]], a.getClass)
     assertEquals(3, a.length)
@@ -141,7 +182,7 @@ class ArrayBuilderTest {
     assertEquals('\u0000', erase(a(0)))
   }
 
-  @Test def Char_zeros_noinline(): Unit = {
+  @Test def charZerosNoinline(): Unit = {
     val a = zerosNoInline[Char](3)
     assertSame(classOf[Array[Char]], a.getClass)
     assertEquals(3, a.length)
@@ -149,7 +190,7 @@ class ArrayBuilderTest {
     assertEquals('\u0000', erase(a(0)))
   }
 
-  @Test def Boolean_normal_case_inline(): Unit = {
+  @Test def booleanNormalCaseInline(): Unit = {
     val b = ArrayBuilder.make[Boolean]
     b += true
     b += someBoolean
@@ -162,7 +203,7 @@ class ArrayBuilderTest {
     assertEquals(false, erase(a(1)))
   }
 
-  @Test def Boolean_normal_case_noinline(): Unit = {
+  @Test def booleanNormalCaseNoinline(): Unit = {
     val b = makeNoInline[Boolean]
     b += true
     b += someBoolean
@@ -175,7 +216,7 @@ class ArrayBuilderTest {
     assertEquals(false, erase(a(1)))
   }
 
-  @Test def Boolean_zeros_inline(): Unit = {
+  @Test def booleanZerosInline(): Unit = {
     val a = zerosInline[Boolean](3)
     assertSame(classOf[Array[Boolean]], a.getClass)
     assertEquals(3, a.length)
@@ -183,7 +224,7 @@ class ArrayBuilderTest {
     assertEquals(false, erase(a(0)))
   }
 
-  @Test def Boolean_zeros_noinline(): Unit = {
+  @Test def booleanZerosNoinline(): Unit = {
     val a = zerosNoInline[Boolean](3)
     assertSame(classOf[Array[Boolean]], a.getClass)
     assertEquals(3, a.length)
@@ -191,7 +232,7 @@ class ArrayBuilderTest {
     assertEquals(false, erase(a(0)))
   }
 
-  @Test def Unit_normal_case_inline(): Unit = {
+  @Test def unitNormalCaseInline(): Unit = {
     val b = ArrayBuilder.make[Unit]
     b += ()
     val a = b.result()
@@ -202,7 +243,7 @@ class ArrayBuilderTest {
     assertEquals((), erase(a(0)))
   }
 
-  @Test def Unit_normal_case_noinline(): Unit = {
+  @Test def unitNormalCaseNoinline(): Unit = {
     val b = makeNoInline[Unit]
     b += ()
     val a = b.result()
@@ -213,7 +254,7 @@ class ArrayBuilderTest {
     assertEquals((), erase(a(0)))
   }
 
-  @Test def Unit_zeros_inline(): Unit = {
+  @Test def unitZerosInline(): Unit = {
     val a = zerosInline[Unit](3)
     assertSame(classOf[Array[Unit]], a.getClass)
     assertEquals(3, a.length)
@@ -223,7 +264,7 @@ class ArrayBuilderTest {
     }
   }
 
-  @Test def Unit_zeros_noinline(): Unit = {
+  @Test def unitZerosNoinline(): Unit = {
     val a = zerosNoInline[Unit](3)
     assertSame(classOf[Array[Unit]], a.getClass)
     assertEquals(3, a.length)
@@ -233,7 +274,7 @@ class ArrayBuilderTest {
     }
   }
 
-  @Test def String_normal_case_inline(): Unit = {
+  @Test def stringNormalCaseInline(): Unit = {
     val b = ArrayBuilder.make[String]
     b += "hello"
     b += someString
@@ -246,7 +287,7 @@ class ArrayBuilderTest {
     assertEquals("world", erase(a(1)))
   }
 
-  @Test def String_normal_case_noinline(): Unit = {
+  @Test def stringNormalCaseNoinline(): Unit = {
     val b = makeNoInline[String]
     b += "hello"
     b += someString
@@ -259,43 +300,66 @@ class ArrayBuilderTest {
     assertEquals("world", erase(a(1)))
   }
 
-  @Test def String_zeros_inline(): Unit = {
+  @Test def stringZerosInline(): Unit = {
     val a = zerosInline[String](3)
     assertSame(classOf[Array[String]], a.getClass)
     assertEquals(3, a.length)
     assertEquals(null, erase(a(0)))
   }
 
-  @Test def String_zeros_noinline(): Unit = {
+  @Test def stringZerosNoinline(): Unit = {
     val a = zerosNoInline[String](3)
     assertSame(classOf[Array[String]], a.getClass)
     assertEquals(3, a.length)
     assertEquals(null, erase(a(0)))
   }
 
-  @Test def Nothing_and_Null(): Unit = {
-    assertSame(classOf[Array[Nothing]], ArrayBuilder.make[Nothing].result().getClass)
-    assertSame(classOf[Array[Null]], ArrayBuilder.make[Null].result().getClass)
-
-    assertSame(classOf[Array[Nothing]], makeNoInline[Nothing].result().getClass)
-    assertSame(classOf[Array[Null]], makeNoInline[Null].result().getClass)
-  }
-
   @Test def addAll(): Unit = {
-    assumeFalse("Needs at least Scala 2.13",
-        scalaVersion.startsWith("2.11.") ||
-        scalaVersion.startsWith("2.12."))
+    assumeFalse("Needs at least Scala 2.13", scalaVersion.startsWith("2.12."))
 
     val b = ArrayBuilder.make[Int]
     val arr = Array[Int](1, 2, 3, 4, 5)
     b.addAll(arr, 3, 2)
     assertArrayEquals(Array[Int](4, 5), b.result())
   }
+
+  @Test def lengthAndKnownSize_Issue4627(): Unit = {
+    assumeFalse("Needs at least Scala 2.13", scalaVersion.startsWith("2.12."))
+
+    val b = ArrayBuilder.make[Int]
+    assertEquals(0, b.length)
+    assertEquals(0, b.knownSize)
+
+    b += 5
+    b += 7
+    assertEquals(2, b.length)
+    assertEquals(2, b.knownSize)
+
+    b += -1
+    b += 98
+    b += 4
+    assertEquals(5, b.length)
+    assertEquals(5, b.knownSize)
+
+    b.clear()
+    assertEquals(0, b.length)
+    assertEquals(0, b.knownSize)
+
+    b += 4
+    assertEquals(1, b.length)
+    assertEquals(1, b.knownSize)
+  }
 }
 
 object ArrayBuilderTest {
   implicit class ArrayBuilderCompat[A](val __sef: ArrayBuilder[A]) extends AnyVal {
     def addAll(xs: Array[_ <: A], offset: Int, length: Int): Unit =
+      throw new AssertionError("unreachable code")
+
+    def length: Int =
+      throw new AssertionError("unreachable code")
+
+    def knownSize: Int =
       throw new AssertionError("unreachable code")
   }
 }

@@ -1,0 +1,85 @@
+/*
+ * Scala.js (https://www.scala-js.org/)
+ *
+ * Copyright EPFL.
+ *
+ * Licensed under Apache License 2.0
+ * (https://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
+package org.scalajs.linker
+
+import scala.concurrent._
+
+import org.junit.Test
+import org.junit.Assert._
+
+import org.scalajs.ir.Trees._
+import org.scalajs.ir.Types._
+import org.scalajs.ir.WellKnownNames._
+
+import org.scalajs.junit.async._
+
+import org.scalajs.linker.interface._
+import org.scalajs.linker.testutils.LinkingUtils._
+import org.scalajs.linker.testutils.TestIRBuilder._
+
+class SmallestModulesSplittingTest {
+  import scala.concurrent.ExecutionContext.Implicits.global
+
+  /** Smoke test to ensure modules do not get merged too much. */
+  @Test
+  def splitsModules(): AsyncResult = await {
+    val strClsType = ClassType(BoxedStringClass, nullable = true, exact = false)
+
+    val greetMethodName = m("greet", Nil, T)
+
+    val greeterMethods = List(
+      trivialCtor("lib.Greeter"),
+
+      // @noinline def greet(): String = "Hello world!"
+      MethodDef(EMF, greetMethodName, NON, Nil, strClsType, Some {
+        str("Hello world!")
+      })(EOH.withNoinline(true), UNV)
+    )
+
+    val classDefs = Seq(
+      classDef(
+        "lib.Greeter",
+        superClass = Some(ObjectClass),
+        methods = greeterMethods
+      ),
+
+      mainTestClassDef {
+        // console.log(new lib.Greeter().greet())
+        val newGreeter = New("lib.Greeter", NoArgConstructorName, Nil)
+        val callGreet = Apply(EAF, newGreeter, greetMethodName, Nil)(strClsType)
+        consoleLog(callGreet)
+      }
+    )
+
+    val expectedFiles = Set(
+      "java.lang.-Object.js",
+      "-Test.js",
+      "lib.-Greeter.js",
+      "main.js"
+    )
+
+    val linkerConfig = StandardConfig()
+      .withModuleKind(ModuleKind.ESModule)
+      .withModuleSplitStyle(ModuleSplitStyle.SmallestModules)
+      .withSourceMap(false)
+
+    val outputDirectory = MemOutputDirectory()
+
+    for {
+      _ <- testLink(classDefs, MainTestModuleInitializers,
+          config = linkerConfig, output = outputDirectory)
+    } yield {
+      assertEquals(expectedFiles, outputDirectory.fileNames().toSet)
+    }
+  }
+}

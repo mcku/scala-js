@@ -17,13 +17,13 @@ import scala.tools.nsc._
 import scala.collection.mutable
 
 import org.scalajs.ir.Trees.JSNativeLoadSpec
+import org.scalajs.ir.{Trees => js}
 
 /** Additions to Global meaningful for the JavaScript backend
  *
  *  @author Sébastien Doeraene
  */
-trait JSGlobalAddons extends JSDefinitions
-                        with CompatComponent {
+trait JSGlobalAddons extends JSDefinitions with CompatComponent {
   val global: Global
 
   import global._
@@ -33,23 +33,9 @@ trait JSGlobalAddons extends JSDefinitions
   /** JavaScript primitives, used in jscode */
   object jsPrimitives extends JSPrimitives {
     val global: JSGlobalAddons.this.global.type = JSGlobalAddons.this.global
+
     val jsAddons: ThisJSGlobalAddons =
       JSGlobalAddons.this.asInstanceOf[ThisJSGlobalAddons]
-  }
-
-  sealed abstract class ExportDestination
-
-  object ExportDestination {
-    /** Export in the "normal" way: as an instance member, or at the top-level
-     *  for naturally top-level things (classes and modules).
-     */
-    case object Normal extends ExportDestination
-
-    /** Export at the top-level. */
-    case object TopLevel extends ExportDestination
-
-    /** Export as a static member of the companion class. */
-    case object Static extends ExportDestination
   }
 
   /** Extracts the super type of a `Template`, with type parameters reinvented
@@ -101,9 +87,13 @@ trait JSGlobalAddons extends JSDefinitions
     import scala.reflect.NameTransformer
     import scala.reflect.internal.Flags
 
-    /** Symbols of constructors and modules that are to be exported */
-    private val exportedSymbols =
-      mutable.Map.empty[Symbol, List[ExportInfo]]
+    /** TopLevel exports, by owner. */
+    private val topLevelExports =
+      mutable.Map.empty[Symbol, List[TopLevelExportInfo]]
+
+    /** Static exports, by owner. */
+    private val staticExports =
+      mutable.Map.empty[Symbol, List[StaticExportInfo]]
 
     /** JS native load specs of the symbols in the current compilation run. */
     private val jsNativeLoadSpecs =
@@ -113,11 +103,19 @@ trait JSGlobalAddons extends JSDefinitions
     private val methodExportPrefix = exportPrefix + "meth$"
     private val propExportPrefix = exportPrefix + "prop$"
 
-    trait ExportInfo {
-      val jsName: String
+    /** Info for a non-member export. */
+    sealed trait ExportInfo {
       val pos: Position
-      val destination: ExportDestination
     }
+
+    /* Not final because it causes the following compile warning:
+     * "The outer reference in this type test cannot be checked at run time."
+     */
+    case class TopLevelExportInfo(moduleID: String, jsName: String)(
+        val pos: Position)
+        extends ExportInfo
+
+    case class StaticExportInfo(jsName: String)(val pos: Position) extends ExportInfo
 
     sealed abstract class JSName {
       def displayName: String
@@ -135,20 +133,153 @@ trait JSGlobalAddons extends JSDefinitions
       }
     }
 
+    sealed abstract class JSCallingConvention {
+      def displayName: String
+    }
+
+    object JSCallingConvention {
+      case object Call extends JSCallingConvention {
+        def displayName: String = "function application"
+      }
+
+      case object BracketAccess extends JSCallingConvention {
+        def displayName: String = "bracket access"
+      }
+
+      case object BracketCall extends JSCallingConvention {
+        def displayName: String = "bracket call"
+      }
+
+      case class Method(name: JSName) extends JSCallingConvention {
+        def displayName: String = "method '" + name.displayName + "'"
+      }
+
+      case class Property(name: JSName) extends JSCallingConvention {
+        def displayName: String = "property '" + name.displayName + "'"
+      }
+
+      case class UnaryOp(code: js.JSUnaryOp.Code) extends JSCallingConvention {
+        def displayName: String = "unary operator"
+      }
+
+      case class BinaryOp(code: js.JSBinaryOp.Code) extends JSCallingConvention {
+        def displayName: String = "binary operator"
+      }
+
+      def of(sym: Symbol): JSCallingConvention = {
+        assert(sym.isTerm, s"got non-term symbol: $sym")
+
+        if (isJSBracketAccess(sym)) {
+          BracketAccess
+        } else if (isJSBracketCall(sym)) {
+          BracketCall
+        } else {
+          def default = {
+            val jsName = jsNameOf(sym)
+            if (isJSProperty(sym)) Property(jsName)
+            else Method(jsName)
+          }
+
+          if (!sym.hasAnnotation(JSNameAnnotation)) {
+            lazy val pc = sym.paramss.map(_.size).sum
+
+            sym.name match {
+              case nme.apply => Call
+
+              case JSUnaryOpMethodName(code, defaultsToOp)
+                  if (defaultsToOp || sym.hasAnnotation(JSOperatorAnnotation)) && pc == 0 =>
+                UnaryOp(code)
+
+              case JSBinaryOpMethodName(code, defaultsToOp)
+                  if (defaultsToOp || sym.hasAnnotation(JSOperatorAnnotation)) && pc == 1 =>
+                BinaryOp(code)
+
+              case _ =>
+                default
+            }
+          } else {
+            default
+          }
+        }
+      }
+
+      /** Tests whether the calling convention of the specified symbol is `Call`.
+       *
+       *  This helper is provided because we use this test in a few places.
+       */
+      def isCall(sym: Symbol): Boolean =
+        of(sym) == Call
+    }
+
+    object JSUnaryOpMethodName {
+      private val map = Map[Name, (js.JSUnaryOp.Code, Boolean)](
+        nme.UNARY_+ -> (js.JSUnaryOp.+, true),
+        nme.UNARY_- -> (js.JSUnaryOp.-, true),
+        nme.UNARY_~ -> (js.JSUnaryOp.~, true),
+        nme.UNARY_! -> (js.JSUnaryOp.!, true)
+      )
+
+      /* We use Name instead of TermName to work around
+       * https://github.com/scala/bug/issues/11534
+       */
+      def unapply(name: Name): Option[(js.JSUnaryOp.Code, Boolean)] =
+        map.get(name)
+    }
+
+    object JSBinaryOpMethodName {
+      private val map = Map[Name, (js.JSBinaryOp.Code, Boolean)](
+        nme.ADD -> (js.JSBinaryOp.+, true),
+        nme.SUB -> (js.JSBinaryOp.-, true),
+        nme.MUL -> (js.JSBinaryOp.*, true),
+        nme.DIV -> (js.JSBinaryOp./, true),
+        nme.MOD -> (js.JSBinaryOp.%, true),
+
+        nme.LSL -> (js.JSBinaryOp.<<, true),
+        nme.ASR -> (js.JSBinaryOp.>>, true),
+        nme.LSR -> (js.JSBinaryOp.>>>, true),
+        nme.OR -> (js.JSBinaryOp.|, true),
+        nme.AND -> (js.JSBinaryOp.&, true),
+        nme.XOR -> (js.JSBinaryOp.^, true),
+
+        nme.LT -> (js.JSBinaryOp.<, true),
+        nme.LE -> (js.JSBinaryOp.<=, true),
+        nme.GT -> (js.JSBinaryOp.>, true),
+        nme.GE -> (js.JSBinaryOp.>=, true),
+
+        nme.ZAND -> (js.JSBinaryOp.&&, true),
+        nme.ZOR -> (js.JSBinaryOp.||, true),
+
+        global.encode("**") -> (js.JSBinaryOp.**, false)
+      )
+
+      /* We use Name instead of TermName to work around
+       * https://github.com/scala/bug/issues/11534
+       */
+      def unapply(name: Name): Option[(js.JSBinaryOp.Code, Boolean)] =
+        map.get(name)
+    }
+
     def clearGlobalState(): Unit = {
-      exportedSymbols.clear()
+      topLevelExports.clear()
+      staticExports.clear()
       jsNativeLoadSpecs.clear()
     }
 
-    def registerForExport(sym: Symbol, infos: List[ExportInfo]): Unit = {
-      assert(!exportedSymbols.contains(sym),
-          "Same symbol exported twice: " + sym)
-      exportedSymbols.put(sym, infos)
+    def registerTopLevelExports(sym: Symbol, infos: List[TopLevelExportInfo]): Unit = {
+      assert(!topLevelExports.contains(sym), s"symbol exported twice: $sym")
+      topLevelExports.put(sym, infos)
     }
 
-    def registeredExportsOf(sym: Symbol): List[ExportInfo] = {
-      exportedSymbols.getOrElse(sym, Nil)
+    def registerStaticExports(sym: Symbol, infos: List[StaticExportInfo]): Unit = {
+      assert(!staticExports.contains(sym), s"symbol exported twice: $sym")
+      staticExports.put(sym, infos)
     }
+
+    def topLevelExportsOf(sym: Symbol): List[TopLevelExportInfo] =
+      topLevelExports.getOrElse(sym, Nil)
+
+    def staticExportsOf(sym: Symbol): List[StaticExportInfo] =
+      staticExports.getOrElse(sym, Nil)
 
     /** creates a name for an export specification */
     def scalaExportName(jsName: String, isProp: Boolean): TermName = {
@@ -165,7 +296,7 @@ trait JSGlobalAddons extends JSDefinitions
      *  is a property
      */
     def jsExportInfo(name: Name): (String, Boolean) = {
-      def dropPrefix(prefix: String) ={
+      def dropPrefix(prefix: String) = {
         if (name.startsWith(prefix)) {
           // We can't decode right away due to $ separators
           val enc = name.toString.substring(prefix.length)
@@ -173,8 +304,8 @@ trait JSGlobalAddons extends JSDefinitions
         } else None
       }
 
-      dropPrefix(methodExportPrefix).map((_,false)).orElse {
-        dropPrefix(propExportPrefix).map((_,true))
+      dropPrefix(methodExportPrefix).map((_, false)).orElse {
+        dropPrefix(propExportPrefix).map((_, true))
       }.getOrElse {
         throw new IllegalArgumentException(
             "non-exported name passed to jsExportInfo")
@@ -197,8 +328,8 @@ trait JSGlobalAddons extends JSDefinitions
 
     /** has this symbol to be translated into a JS getter (both directions)? */
     def isJSGetter(sym: Symbol): Boolean = {
-      /* We only get here when `sym.isMethod`, thus `sym.isModule` implies that
-       * `sym` is the module's accessor. In 2.12, module accessors are synthesized
+      /* `sym.isModule` implies that `sym` is the module's accessor. In 2.12,
+       * module accessors are synthesized
        * after uncurry, thus their first info is a MethodType at phase fields.
        */
       sym.isModule || (sym.tpe.params.isEmpty && enteringUncurryIfAtPhaseAfter {
@@ -213,23 +344,6 @@ trait JSGlobalAddons extends JSDefinitions
     /** has this symbol to be translated into a JS setter (both directions)? */
     def isJSSetter(sym: Symbol): Boolean =
       nme.isSetterName(sym.name) && sym.isMethod && !sym.isConstructor
-
-    /** Is this field symbol a static field at the IR level? */
-    def isFieldStatic(sym: Symbol): Boolean = {
-      sym.owner.isModuleClass && // usually false, avoids a lookup in the map
-      registeredExportsOf(sym).nonEmpty
-    }
-
-    /** The export info of a static field.
-     *
-     *  Requires `isFieldStatic(sym)`.
-     *
-     *  The result is non-empty. If it contains an `ExportInfo` with
-     *  `isStatic = true`, then it is the only element in the list. Otherwise,
-     *  all elements have `isTopLevel = true`.
-     */
-    def staticFieldInfoOf(sym: Symbol): List[ExportInfo] =
-      registeredExportsOf(sym)
 
     /** has this symbol to be translated into a JS bracket access (JS to Scala) */
     def isJSBracketAccess(sym: Symbol): Boolean =
@@ -248,9 +362,10 @@ trait JSGlobalAddons extends JSDefinitions
       sym.getAnnotation(JSNameAnnotation).fold[JSName] {
         JSName.Literal(defaultJSNameOf(sym))
       } { annotation =>
-        annotation.args.head match {
-          case Literal(Constant(name: String)) => JSName.Literal(name)
-          case tree                            => JSName.Computed(tree.symbol)
+        annotation.constantAtIndex(0).collect {
+          case Constant(name: String) => JSName.Literal(name)
+        }.getOrElse {
+          JSName.Computed(annotation.args.head.symbol)
         }
       }
     }
@@ -264,31 +379,18 @@ trait JSGlobalAddons extends JSDefinitions
     /** Stores the JS native load spec of a symbol for the current compilation
      *  run.
      */
-    def storeJSNativeLoadSpec(sym: Symbol, spec: JSNativeLoadSpec): Unit = {
-      assert(sym.isClass,
-          s"storeJSNativeLoadSpec called for non-class symbol $sym")
-
+    def storeJSNativeLoadSpec(sym: Symbol, spec: JSNativeLoadSpec): Unit =
       jsNativeLoadSpecs(sym) = spec
-    }
 
-    /** Gets the JS native load spec of a symbol in the current compilation run.
-     */
-    def jsNativeLoadSpecOf(sym: Symbol): JSNativeLoadSpec = {
-      assert(sym.isClass,
-          s"jsNativeLoadSpecOf called for non-class symbol $sym")
-
+    /** Gets the JS native load spec of a symbol in the current compilation run. */
+    def jsNativeLoadSpecOf(sym: Symbol): JSNativeLoadSpec =
       jsNativeLoadSpecs(sym)
-    }
 
     /** Gets the JS native load spec of a symbol in the current compilation run,
      *  if it has one.
      */
-    def jsNativeLoadSpecOfOption(sym: Symbol): Option[JSNativeLoadSpec] = {
-      assert(sym.isClass,
-          s"jsNativeLoadSpecOfOption called for non-class symbol $sym")
-
+    def jsNativeLoadSpecOfOption(sym: Symbol): Option[JSNativeLoadSpec] =
       jsNativeLoadSpecs.get(sym)
-    }
 
   }
 

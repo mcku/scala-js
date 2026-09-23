@@ -1,10 +1,15 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___      __ ____  Scala.js Test Suite        **
-**    / __/ __// _ | / /  / _ | __ / // __/  (c) 2013-2016, LAMP/EPFL   **
-**  __\ \/ /__/ __ |/ /__/ __ |/_// /_\ \    http://scala-js.org/       **
-** /____/\___/_/ |_/____/_/ | |__/ /____/                               **
-**                          |/____/                                     **
-\*                                                                      */
+/*
+ * Scala.js (https://www.scala-js.org/)
+ *
+ * Copyright EPFL.
+ *
+ * Licensed under Apache License 2.0
+ * (https://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package org.scalajs.testsuite.jsinterop
 
 import scala.scalajs.js
@@ -18,22 +23,14 @@ import org.junit.Test
 
 import org.scalajs.junit.async._
 
-/* This is currently hard-coded for Node.js modules in particular.
- * We are importing built-in Node.js modules, because we do not have any
- * infrastructure to load non-built-in modules. In the future, we should use
- * our own user-defined ES6 modules written in JavaScript.
- */
 class DynamicImportTest {
   import DynamicImportTest._
 
   @Test def testSuccessfulImport(): AsyncResult = await {
-    js.`import`[QueryStringAPI]("querystring").toFuture.map { qs =>
-      assertEquals("object", js.typeOf(qs))
-
-      val dict = js.Dictionary("foo" -> "bar", "baz" -> "qux")
-
-      assertEquals("foo=bar&baz=qux", qs.stringify(dict))
-      assertEquals("foo:bar;baz:qux", qs.stringify(dict, ";", ":"))
+    js.`import`[ModulesTestModuleAPI]("../test-classes/modules-test.js").toFuture.map { m =>
+      assertEquals("object", js.typeOf(m))
+      assertEquals(5, m.ssum(2))
+      assertEquals(13, m.ssum(2, 3))
     }
   }
 
@@ -44,8 +41,8 @@ class DynamicImportTest {
 }
 
 object DynamicImportTest {
-  trait QueryStringAPI extends js.Any {
-    def stringify(obj: js.Dictionary[String]): String
-    def stringify(obj: js.Dictionary[String], sep: String, eq: String): String
+  trait ModulesTestModuleAPI extends js.Any {
+    def ssum(x: Int): Int
+    def ssum(x: Int, y: Int): Int
   }
 }

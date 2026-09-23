@@ -15,12 +15,28 @@ package org.scalajs.testsuite.jsinterop
 import scala.scalajs.js
 
 import org.junit.Assert._
+import org.junit.Assume._
 import org.junit.Test
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.Platform
 
 class SpecialTest {
   import SpecialTest._
+
+  // scala.scalajs.js.special.strictEquals
+
+  @Test def strictEqualsTest(): Unit = {
+    import js.special.strictEquals
+
+    val o1 = new js.Object
+    val o2 = new js.Object
+    assertTrue(strictEquals(o1, o1))
+    assertFalse(strictEquals(o1, o2))
+    assertTrue(strictEquals(+0.0, -0.0))
+    assertTrue(strictEquals(-0.0, +0.0))
+    assertFalse(strictEquals(Double.NaN, Double.NaN))
+  }
 
   // scala.scalajs.js.special.in
 
@@ -58,7 +74,7 @@ class SpecialTest {
 
   // scala.scalajs.js.special.delete
 
-  @Test def should_provide_an_equivalent_of_the_JS_delete_keyword_issue_255(): Unit = {
+  @Test def equivalentOfTheJSDeleteKeyword_Issue255(): Unit = {
     val obj = js.Dynamic.literal(foo = 42, bar = "foobar")
 
     assertEquals(42, obj.foo)
@@ -68,7 +84,7 @@ class SpecialTest {
     assertEquals("foobar", obj.bar)
   }
 
-  @Test def should_behave_as_specified_when_deleting_a_non_configurable_property_issue_461_issue_679(): Unit = {
+  @Test def allowDeletingNonConfigurableProperty_Issue461_Issue679(): Unit = {
     val obj = js.Dynamic.literal()
     js.Object.defineProperty(obj, "nonconfig",
         js.Dynamic.literal(value = 4, writable = false).asInstanceOf[js.PropertyDescriptor])
@@ -77,44 +93,158 @@ class SpecialTest {
     assertEquals(4, obj.nonconfig)
   }
 
-  @Test def should_treat_delete_as_a_statement_issue_907(): Unit = {
+  @Test def deleteAsStatement_Issue907(): Unit = {
     val obj = js.Dynamic.literal(a = "A")
     js.special.delete(obj, "a")
   }
 
-  @Test def should_desugar_arguments_to_delete_statements_issue_908(): Unit = {
+  @Test def desugarArgumentsToDeleteStatements_Issue908(): Unit = {
     val kh = js.Dynamic.literal(key = "a").asInstanceOf[KeyHolder]
     val obj = js.Dynamic.literal(a = "A")
     def a[T](foo: String): T = obj.asInstanceOf[T]
     js.special.delete(a[js.Object]("foo"), kh.key)
   }
 
+  // js.special.tryCatch
+
+  @Test def jsThrow(): Unit = {
+    val e = assertThrows(classOf[js.JavaScriptException], js.special.`throw`("foo"))
+    assertEquals("foo", e.exception)
+
+    assertThrows(classOf[IllegalArgumentException], js.special.`throw`(new IllegalArgumentException))
+  }
+
+  @Test def jsTryCatch(): Unit = {
+    @noinline def interrupt(): Unit = throw new IllegalStateException
+
+    // No exception
+    locally {
+      var order = "0"
+      js.special.tryCatch {
+        order += "1"
+
+        { () => order += "3" }
+      } {
+        order += "2"
+
+        { (e: Any) => fail("no exception should be thrown and caught") }
+      }
+      assertEquals("0123", order)
+    }
+
+    // Exception thrown during execution of the body
+    locally {
+      var order = "0"
+      js.special.tryCatch {
+        order += "1"
+
+        { () =>
+          order += "3"
+          interrupt()
+        }
+      } {
+        order += "2"
+
+        { (e: Any) =>
+          order += "4"
+          assertTrue(e.isInstanceOf[IllegalStateException])
+        }
+      }
+      assertEquals("01234", order)
+    }
+
+    // Exception thrown when computing the body
+    locally {
+      var order = "0"
+      assertThrows(classOf[IllegalStateException], {
+        js.special.tryCatch {
+          order += "1"
+          interrupt()
+
+          { () => fail("unreachable 1") }
+        } {
+          fail("unreachable 2")
+
+          { (e: Any) => fail("unreachable 3") }
+        }
+      })
+      assertEquals("01", order)
+    }
+
+    // Exception thrown when computing the handler
+    locally {
+      var order = "0"
+      assertThrows(classOf[IllegalStateException], {
+        js.special.tryCatch {
+          order += "1"
+
+          { () => fail("unreachable 1") }
+        } {
+          order += "2"
+          interrupt()
+
+          { (e: Any) => fail("unreachable 2") }
+        }
+      })
+      assertEquals("012", order)
+    }
+  }
+
+  // js.special.wrapAsThrowable
+
+  @Test def wrapAsThrowable(): Unit = {
+    // Wraps a js.Object
+    val obj = new js.Object
+    val e1 = js.special.wrapAsThrowable(obj)
+    e1 match {
+      case js.JavaScriptException(o) => assertSame(obj, o)
+    }
+
+    // Wraps null
+    val e2 = js.special.wrapAsThrowable(null)
+    e2 match {
+      case js.JavaScriptException(v) => assertNull(v)
+    }
+
+    // Does not wrap a Throwable
+    val th = new IllegalArgumentException
+    assertSame(th, js.special.wrapAsThrowable(th))
+
+    // Does not double-wrap
+    assertSame(e1, js.special.wrapAsThrowable(e1))
+  }
+
+  // js.special.unwrapFromThrowable
+
+  @Test def unwrapFromThrowable(): Unit = {
+    // Unwraps a JavaScriptException
+    val obj = new js.Object
+    assertSame(obj, js.special.unwrapFromThrowable(js.JavaScriptException(obj)))
+
+    // Does not unwrap a Throwable
+    val th = new IllegalArgumentException
+    assertSame(th, js.special.unwrapFromThrowable(th))
+  }
+
+  @Test def unwrapFromThrowableNull(): Unit = {
+    assumeTrue("assumed compliant NPEs", Platform.hasCompliantNullPointers)
+
+    // Unwrapping null throws
+    assertThrows(classOf[NullPointerException], js.special.unwrapFromThrowable(null))
+  }
+
   // js.special.fileLevelThis
 
-  @Test def fileLevelThis_can_be_used_to_detect_the_global_object(): Unit = {
-    val globalObject = {
-      import js.Dynamic.{global => g}
-      if (js.typeOf(g.global) != "undefined" && (g.global.Object eq g.Object)) {
-        // Node.js environment detected
-        g.global
-      } else {
-        // In all other well-known environment, we can use the global `this`
-        js.special.fileLevelThis.asInstanceOf[js.Dynamic]
-      }
-    }
+  @Test def fileLevelThisCanBeUsedToDetectTheGlobalObject(): Unit = {
+    assumeTrue(Platform.isNoModule)
+    val globalObject = js.special.fileLevelThis.asInstanceOf[js.Dynamic]
 
     assertSame(js.Math, globalObject.Math)
   }
 
-  // js.special.globalThis (deprecated)
-
-  @Test def globalThis_is_fileLevelThis(): Unit = {
-    assertSame(js.special.fileLevelThis, js.special.globalThis)
-  }
-
   // js.special.debugger
 
-  @Test def should_support_debugger_statements_through_the_whole_pipeline_issue_1402(): Unit = {
+  @Test def debuggerStatementsThroughTheWholePipeline_Issue1402(): Unit = {
     /* A function that hopefully persuades the optimizer not to optimize
      * we need a debugger statement that is unreachable, but not eliminated.
      */

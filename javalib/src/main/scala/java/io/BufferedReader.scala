@@ -16,7 +16,7 @@ class BufferedReader(in: Reader, sz: Int) extends Reader {
 
   def this(in: Reader) = this(in, 4096)
 
-  private[this] var buf = new Array[Char](sz)
+  private[this] var buf: Array[Char] = new Array[Char](sz)
 
   /** Last valid value in the buffer (exclusive) */
   private[this] var end = 0
@@ -41,7 +41,7 @@ class BufferedReader(in: Reader, sz: Int) extends Reader {
     ensureOpen()
 
     val srcBuf = buf
-    if (buf.size < readAheadLimit)
+    if (buf.length < readAheadLimit)
       buf = new Array[Char](readAheadLimit)
 
     // Move data to beginning of buffer
@@ -69,8 +69,7 @@ class BufferedReader(in: Reader, sz: Int) extends Reader {
   override def read(cbuf: Array[Char], off: Int, len: Int): Int = {
     ensureOpen()
 
-    if (off < 0 || len < 0 || len > cbuf.length - off)
-      throw new IndexOutOfBoundsException
+    BoundsChecks.checkOffsetCount(off, len, cbuf.length)
 
     if (len == 0) 0
     else if (prepareRead()) {
@@ -102,7 +101,7 @@ class BufferedReader(in: Reader, sz: Int) extends Reader {
       // Check whether we have a \r\n. This may overrun the buffer
       // and then push a value back which may unnecessarily invalidate
       // the mark. This mimics java behavior
-      if (buf(pos-1) == '\r' && prepareRead() && buf(pos) == '\n')
+      if (buf(pos - 1) == '\r' && prepareRead() && buf(pos) == '\n')
         pos += 1 // consume '\n'
 
       res

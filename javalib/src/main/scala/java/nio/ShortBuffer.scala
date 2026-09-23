@@ -17,8 +17,10 @@ import scala.scalajs.js.typedarray._
 object ShortBuffer {
   private final val HashSeed = 383731478 // "java.nio.ShortBuffer".##
 
-  def allocate(capacity: Int): ShortBuffer =
+  def allocate(capacity: Int): ShortBuffer = {
+    BoundsChecks.checkCapacity(capacity)
     wrap(new Array[Short](capacity))
+  }
 
   def wrap(array: Array[Short], offset: Int, length: Int): ShortBuffer =
     HeapShortBuffer.wrap(array, 0, array.length, offset, length, false)
@@ -28,8 +30,8 @@ object ShortBuffer {
 
   // Extended API
 
-  def wrap(array: Int16Array): ShortBuffer =
-    TypedArrayShortBuffer.wrap(array)
+  def wrapInt16Array(array: Int16Array): ShortBuffer =
+    TypedArrayShortBuffer.wrapInt16Array(array)
 }
 
 abstract class ShortBuffer private[nio] (
@@ -136,7 +138,7 @@ abstract class ShortBuffer private[nio] (
 
   @noinline
   def compareTo(that: ShortBuffer): Int =
-    GenBuffer(this).generic_compareTo(that)(_.compareTo(_))
+    GenBuffer(this).generic_compareTo(that)(java.lang.Short.compare(_, _))
 
   def order(): ByteOrder
 
@@ -148,11 +150,13 @@ abstract class ShortBuffer private[nio] (
 
   @inline
   private[nio] def load(startIndex: Int,
-      dst: Array[Short], offset: Int, length: Int): Unit =
+      dst: Array[Short], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   private[nio] def store(startIndex: Int,
-      src: Array[Short], offset: Int, length: Int): Unit =
+      src: Array[Short], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }

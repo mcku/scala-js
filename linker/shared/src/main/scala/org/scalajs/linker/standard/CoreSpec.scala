@@ -12,7 +12,7 @@
 
 package org.scalajs.linker.standard
 
-import org.scalajs.linker._
+import org.scalajs.linker.interface._
 
 /** Core specification for the Scala.js code. */
 final class CoreSpec private (
@@ -21,15 +21,62 @@ final class CoreSpec private (
     /** Module kind. */
     val moduleKind: ModuleKind,
     /** ECMAScript features to use. */
-    val esFeatures: ESFeatures
+    val esFeatures: ESFeatures,
+    /** Wasm features to use. */
+    val wasmFeatures: WasmFeatures
 ) {
   import CoreSpec._
+
+  private def this() = {
+    this(
+      semantics = Semantics.Defaults,
+      moduleKind = ModuleKind.NoModule,
+      esFeatures = ESFeatures.Defaults,
+      wasmFeatures = WasmFeatures.Defaults
+    )
+  }
+
+  /** `true` iff we are targeting WebAssembly.
+   *
+   *  Currently, this is only true if `esFeatures.useWebAssembly` is true.
+   *  However, in the future, it may also report true for Wasm-only module
+   *  kinds that do not depend on `ESFeatures`. It is therefore the recommended
+   *  way to test whether non-interop code uses Wasm, for example for
+   *  performance-related decisions.
+   */
+  val targetIsWebAssembly: Boolean = esFeatures.useWebAssembly
+
+  def withSemantics(semantics: Semantics): CoreSpec =
+    copy(semantics = semantics)
+
+  def withSemantics(f: Semantics => Semantics): CoreSpec =
+    copy(semantics = f(semantics))
+
+  def withModuleKind(moduleKind: ModuleKind): CoreSpec =
+    copy(moduleKind = moduleKind)
+
+  def withESFeatures(esFeatures: ESFeatures): CoreSpec =
+    copy(esFeatures = esFeatures)
+
+  def withESFeatures(f: ESFeatures => ESFeatures): CoreSpec =
+    copy(esFeatures = f(esFeatures))
+
+  def withWasmFeatures(wasmFeatures: WasmFeatures): CoreSpec =
+    copy(wasmFeatures = wasmFeatures)
+
+  def withWasmFeatures(f: WasmFeatures => WasmFeatures): CoreSpec =
+    copy(wasmFeatures = f(wasmFeatures))
+
+  @deprecated("use withESFeatures(_.withUseWebAssembly(.)) instead", since = "1.22.0")
+  def withTargetIsWebAssembly(targetIsWebAssembly: Boolean): CoreSpec =
+    withESFeatures(_.withUseWebAssembly(targetIsWebAssembly))
 
   override def equals(that: Any): Boolean = that match {
     case that: CoreSpec =>
       this.semantics == that.semantics &&
       this.moduleKind == that.moduleKind &&
-      this.esFeatures == that.esFeatures
+      this.esFeatures == that.esFeatures &&
+      this.wasmFeatures == that.wasmFeatures
     case _ =>
       false
   }
@@ -39,16 +86,32 @@ final class CoreSpec private (
     var acc = HashSeed
     acc = mix(acc, semantics.##)
     acc = mix(acc, moduleKind.##)
-    acc = mixLast(acc, esFeatures.##)
-    finalizeHash(acc, 3)
+    acc = mix(acc, esFeatures.##)
+    acc = mixLast(acc, wasmFeatures.##)
+    finalizeHash(acc, 4)
   }
 
   override def toString(): String = {
     s"""CoreSpec(
        |  semantics  = $semantics,
        |  moduleKind = $moduleKind,
-       |  esFeatures = $esFeatures
+       |  esFeatures = $esFeatures,
+       |  wasmFeatures = $wasmFeatures,
        |)""".stripMargin
+  }
+
+  private def copy(
+      semantics: Semantics = semantics,
+      moduleKind: ModuleKind = moduleKind,
+      esFeatures: ESFeatures = esFeatures,
+      wasmFeatures: WasmFeatures = wasmFeatures
+  ): CoreSpec = {
+    new CoreSpec(
+      semantics,
+      moduleKind,
+      esFeatures,
+      wasmFeatures
+    )
   }
 }
 
@@ -56,17 +119,14 @@ private[linker] object CoreSpec {
   private val HashSeed =
     scala.util.hashing.MurmurHash3.stringHash(classOf[CoreSpec].getName)
 
-  private[linker] val Defaults: CoreSpec = {
-    new CoreSpec(
-        semantics = Semantics.Defaults,
-        moduleKind = ModuleKind.NoModule,
-        esFeatures = ESFeatures.Defaults)
-  }
+  val Defaults: CoreSpec = new CoreSpec()
 
-  private[linker] def apply(
-      semantics: Semantics,
-      moduleKind: ModuleKind,
-      esFeatures: ESFeatures): CoreSpec = {
-    new CoreSpec(semantics, moduleKind, esFeatures)
+  private[linker] def fromStandardConfig(config: StandardConfig): CoreSpec = {
+    new CoreSpec(
+      config.semantics,
+      config.moduleKind,
+      config.esFeatures,
+      config.wasmFeatures
+    )
   }
 }

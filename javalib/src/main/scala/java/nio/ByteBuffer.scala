@@ -12,16 +12,38 @@
 
 package java.nio
 
+import java.util.Objects.requireNonNull
+import java.util.function.IntConsumer
+
+import scala.scalajs.js
 import scala.scalajs.js.typedarray._
+
+import scala.scalajs.LinkingInfo
+import scala.scalajs.LinkingInfo.ESVersion
 
 object ByteBuffer {
   private final val HashSeed = -547316498 // "java.nio.ByteBuffer".##
 
-  def allocate(capacity: Int): ByteBuffer =
+  def allocate(capacity: Int): ByteBuffer = {
+    BoundsChecks.checkCapacity(capacity)
     wrap(new Array[Byte](capacity))
+  }
 
-  def allocateDirect(capacity: Int): ByteBuffer =
-    TypedArrayByteBuffer.allocate(capacity)
+  def allocateDirect(capacity: Int): ByteBuffer = {
+    BoundsChecks.checkCapacity(capacity)
+
+    if (LinkingInfo.esVersion >= ESVersion.ES2015 ||
+        js.typeOf(js.Dynamic.global.Int8Array) != "undefined") {
+      TypedArrayByteBuffer.allocate(capacity)
+    } else {
+      /* Create a direct ByteBuffer that is actually backed by a regular Array.
+       * We can do this because the JavaDoc explicitly leaves it unspecified
+       * whether direct buffers are actually backed by an array or not.
+       * They only need to return `true` from `isDirect()`.
+       */
+      HeapByteBuffer.allocateDirect(capacity)
+    }
+  }
 
   def wrap(array: Array[Byte], offset: Int, length: Int): ByteBuffer =
     HeapByteBuffer.wrap(array, 0, array.length, offset, length, false)
@@ -31,14 +53,8 @@ object ByteBuffer {
 
   // Extended API
 
-  def wrap(array: ArrayBuffer): ByteBuffer =
-    TypedArrayByteBuffer.wrap(array)
-
-  def wrap(array: ArrayBuffer, byteOffset: Int, length: Int): ByteBuffer =
-    TypedArrayByteBuffer.wrap(array, byteOffset, length)
-
-  def wrap(array: Int8Array): ByteBuffer =
-    TypedArrayByteBuffer.wrap(array)
+  def wrapInt8Array(array: Int8Array): ByteBuffer =
+    TypedArrayByteBuffer.wrapInt8Array(array)
 }
 
 abstract class ByteBuffer private[nio] (
@@ -147,16 +163,14 @@ abstract class ByteBuffer private[nio] (
 
   @noinline
   def compareTo(that: ByteBuffer): Int =
-    GenBuffer(this).generic_compareTo(that)(_.compareTo(_))
+    GenBuffer(this).generic_compareTo(that)(java.lang.Byte.compare(_, _))
 
   final def order(): ByteOrder =
     if (_isBigEndian) ByteOrder.BIG_ENDIAN
-    else              ByteOrder.LITTLE_ENDIAN
+    else ByteOrder.LITTLE_ENDIAN
 
   final def order(bo: ByteOrder): ByteBuffer = {
-    if (bo == null)
-      throw new NullPointerException
-    _isBigEndian = bo == ByteOrder.BIG_ENDIAN
+    _isBigEndian = requireNonNull(bo) == ByteOrder.BIG_ENDIAN
     this
   }
 
@@ -213,11 +227,33 @@ abstract class ByteBuffer private[nio] (
 
   @inline
   private[nio] def load(startIndex: Int,
-      dst: Array[Byte], offset: Int, length: Int): Unit =
+      dst: Array[Byte], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   private[nio] def store(startIndex: Int,
-      src: Array[Byte], offset: Int, length: Int): Unit =
+      src: Array[Byte], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
+
+  @inline
+  private[nio] def validateIndex(index: Int, bytes: Int): Int = {
+    BoundsChecks.checkOffsetCount(index, bytes, limit())
+    index
+  }
+
+  @inline
+  private[nio] def multiByteRelWrite(bytes: Int)(op: IntConsumer): this.type = {
+    ensureNotReadOnly()
+    op.accept(getPosAndAdvanceWrite(bytes))
+    this
+  }
+
+  @inline
+  private[nio] def multiByteAbsWrite(bytes: Int, index: Int)(op: IntConsumer): this.type = {
+    ensureNotReadOnly()
+    op.accept(validateIndex(index, bytes))
+    this
+  }
 }

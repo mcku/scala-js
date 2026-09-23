@@ -12,28 +12,29 @@
 
 package java.io
 
-import java.nio.CharBuffer
-
 import scala.annotation.tailrec
 
-abstract class Reader private[this] (_lock: Option[Object])
-    extends Readable with Closeable {
+import java.nio.CharBuffer
+import java.util.Objects.requireNonNull
 
-  protected val lock = _lock.getOrElse(this)
+abstract class Reader() extends Readable with Closeable {
+  protected var lock: Object = this
 
-  protected def this(lock: Object) = this(Some(lock))
-  protected def this() = this(None)
+  protected def this(lock: Object) = {
+    this()
+    this.lock = requireNonNull(lock)
+  }
 
   def read(target: CharBuffer): Int = {
-    if (!target.hasRemaining) 0
-    else if (target.hasArray) {
-      val charsRead = read(target.array,
-          target.position() + target.arrayOffset, target.remaining)
+    if (!target.hasRemaining()) 0
+    else if (target.hasArray()) {
+      val charsRead = read(target.array(),
+          target.position() + target.arrayOffset(), target.remaining())
       if (charsRead != -1)
         target.position(target.position() + charsRead)
       charsRead
     } else {
-      val buf = new Array[Char](target.remaining)
+      val buf = new Array[Char](target.remaining())
       val charsRead = read(buf)
       if (charsRead != -1)
         target.put(buf, 0, charsRead)

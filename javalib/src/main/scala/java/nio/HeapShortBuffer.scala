@@ -80,21 +80,26 @@ private[nio] final class HeapShortBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Short], offset: Int, length: Int): Unit =
+      dst: Array[Short], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Short], offset: Int, length: Int): Unit =
+      src: Array[Short], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }
 
 private[nio] object HeapShortBuffer {
   private[nio] implicit object NewHeapShortBuffer
       extends GenHeapBuffer.NewHeapBuffer[ShortBuffer, Short] {
+    @inline
     def apply(capacity: Int, array: Array[Short], arrayOffset: Int,
         initialPosition: Int, initialLimit: Int,
-        readOnly: Boolean): ShortBuffer = {
+        readOnly: Boolean, direct: Boolean): ShortBuffer = {
+      if (direct)
+        throw new AssertionError("Cannot create a direct HeapShortBuffer")
       new HeapShortBuffer(capacity, array, arrayOffset,
           initialPosition, initialLimit, readOnly)
     }

@@ -94,10 +94,10 @@ private[testing] abstract class RPCCore()(implicit ec: ExecutionContext) {
                * future, we can improve this.
                */
               val detail = opCode match {
-                case JSEndpoints.msgSlave.opCode =>
+                case JSEndpoints.msgWorker.opCode =>
                   "; " +
-                  "The test adapter could not send a message to a slave, " +
-                  "which probably happens because the slave terminated early, " +
+                  "The test adapter could not send a message to a worker, " +
+                  "which probably happens because the worker terminated early, " +
                   "without waiting for the reply to a call to send(). " +
                   "This is probably a bug in the testing framework you are " +
                   "using. See also #3201."
@@ -148,7 +148,7 @@ private[testing] abstract class RPCCore()(implicit ec: ExecutionContext) {
     val msg = makeRPCMsg(opCode, id, req)
 
     // Register pending call.
-    val promise = Promise[Resp]
+    val promise = Promise[Resp]()
     val oldCall = pending.put(id, PendingCall(promise))
 
     if (oldCall != null) {
@@ -178,9 +178,8 @@ private[testing] abstract class RPCCore()(implicit ec: ExecutionContext) {
   }
 
   /** Attaches the given method to the given (local) endpoint. */
-  final def attach(ep: RPCEndpoint)(ex: ep.Req => ep.Resp): Unit = {
+  final def attach(ep: RPCEndpoint)(ex: ep.Req => ep.Resp): Unit =
     attachAsync(ep)(x => Future.fromTry(Try(ex(x))))
-  }
 
   /** Attaches the given method to the given (local) endpoint. */
   final def attachAsync(ep: RPCEndpoint)(ex: ep.Req => Future[ep.Resp]): Unit = {

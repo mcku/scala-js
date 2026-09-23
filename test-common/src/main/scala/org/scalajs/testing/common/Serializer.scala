@@ -27,25 +27,21 @@ private[testing] object Serializer {
    * In the future we might want to deduplicate things like package prefixes,
    * since a lot of data seems to be redundant.
    */
-  final class SerializeState private[Serializer](val out: DataOutputStream)
-      extends AnyVal {
+  final class SerializeState private[Serializer] (val out: DataOutputStream) extends AnyVal {
     def write[T](t: T)(implicit s: Serializer[T]): Unit = s.serialize(t, this)
   }
 
-  final class DeserializeState private[Serializer](val in: DataInputStream)
-      extends AnyVal {
+  final class DeserializeState private[Serializer] (val in: DataInputStream) extends AnyVal {
     def read[T]()(implicit s: Serializer[T]): T = s.deserialize(this)
   }
 
   // Methods to actually perform serialization and deserialization.
 
-  def serialize[T](t: T, out: DataOutputStream)(implicit s: Serializer[T]): Unit = {
+  def serialize[T](t: T, out: DataOutputStream)(implicit s: Serializer[T]): Unit =
     s.serialize(t, new SerializeState(out))
-  }
 
-  def deserialize[T](in: DataInputStream)(implicit s: Serializer[T]): T = {
+  def deserialize[T](in: DataInputStream)(implicit s: Serializer[T]): T =
     s.deserialize(new DeserializeState(in))
-  }
 
   def serialize[T: Serializer](t: T): String =
     withOutputStream(Serializer.serialize(t, _))
@@ -69,7 +65,85 @@ private[testing] object Serializer {
     try body(dataOut)
     finally dataOut.close()
 
-    new String(byteOut.toByteArray.map(b => (b & 0xFF).toChar))
+    new String(byteOut.toByteArray.map(b => (b & 0xff).toChar))
+  }
+
+  implicit object BooleanSerializer extends Serializer[Boolean] {
+    def serialize(x: Boolean, out: SerializeState): Unit = out.out.writeBoolean(x)
+    def deserialize(in: DeserializeState): Boolean = in.in.readBoolean()
+  }
+
+  implicit object ByteSerializer extends Serializer[Byte] {
+    def serialize(x: Byte, out: SerializeState): Unit = out.out.writeByte(x)
+    def deserialize(in: DeserializeState): Byte = in.in.readByte()
+  }
+
+  implicit object IntSerializer extends Serializer[Int] {
+    def serialize(x: Int, out: SerializeState): Unit = out.out.writeInt(x)
+    def deserialize(in: DeserializeState): Int = in.in.readInt()
+  }
+
+  implicit object LongSerializer extends Serializer[Long] {
+    def serialize(x: Long, out: SerializeState): Unit = out.out.writeLong(x)
+    def deserialize(in: DeserializeState): Long = in.in.readLong()
+  }
+
+  implicit object StringSerializer extends Serializer[String] {
+    def serialize(x: String, out: SerializeState): Unit = {
+      // Modified version of writeUTF to support strings longer than Short.MaxValue (#3667)
+      out.out.writeInt(x.length)
+
+      import out.out.write
+
+      for (i <- 0 until x.length()) {
+        val c = x.charAt(i)
+        if (c <= 0x7f && c >= 0x01) {
+          write(c)
+        } else if (c < 0x0800) {
+          write((c >> 6) | 0xc0)
+          write((c & 0x3f) | 0x80)
+        } else {
+          write((c >> 12) | 0xe0)
+          write(((c >> 6) & 0x3f) | 0x80)
+          write((c & 0x3f) | 0x80)
+        }
+      }
+    }
+
+    def deserialize(in: DeserializeState): String = {
+      import in.in.readByte
+
+      val chars = Array.fill(in.in.readInt()) {
+        val a = readByte()
+
+        if ((a & 0x80) == 0x00) { // 0xxxxxxx
+          a.toChar
+        } else if ((a & 0xe0) == 0xc0) { // 110xxxxx
+          val b = readByte()
+
+          require((b & 0xc0) == 0x80) // 10xxxxxx
+
+          (((a & 0x1f) << 6) | (b & 0x3f)).toChar
+        } else if ((a & 0xf0) == 0xe0) { // 1110xxxx
+          val b = readByte()
+          val c = readByte()
+
+          require((b & 0xc0) == 0x80) // 10xxxxxx
+          require((c & 0xc0) == 0x80) // 10xxxxxx
+
+          (((a & 0x0f) << 12) | ((b & 0x3f) << 6) | (c & 0x3f)).toChar
+        } else {
+          throw new IllegalArgumentException(s"bad byte: $a")
+        }
+      }
+
+      new String(chars)
+    }
+  }
+
+  implicit object UnitSerializer extends Serializer[Unit] {
+    def serialize(x: Unit, out: SerializeState): Unit = ()
+    def deserialize(in: DeserializeState): Unit = ()
   }
 
   implicit def listSerializer[T: Serializer]: Serializer[List[T]] = {
@@ -98,36 +172,6 @@ private[testing] object Serializer {
     }
   }
 
-  implicit object BooleanSerializer extends Serializer[Boolean] {
-    def serialize(x: Boolean, out: SerializeState): Unit = out.out.writeBoolean(x)
-    def deserialize(in: DeserializeState): Boolean = in.in.readBoolean()
-  }
-
-  implicit object ByteSerializer extends Serializer[Byte] {
-    def serialize(x: Byte, out: SerializeState): Unit = out.out.writeByte(x)
-    def deserialize(in: DeserializeState): Byte = in.in.readByte()
-  }
-
-  implicit object IntSerializer extends Serializer[Int] {
-    def serialize(x: Int, out: SerializeState): Unit = out.out.writeInt(x)
-    def deserialize(in: DeserializeState): Int = in.in.readInt()
-  }
-
-  implicit object LongSerializer extends Serializer[Long] {
-    def serialize(x: Long, out: SerializeState): Unit = out.out.writeLong(x)
-    def deserialize(in: DeserializeState): Long = in.in.readLong()
-  }
-
-  implicit object StringSerializer extends Serializer[String] {
-    def serialize(x: String, out: SerializeState): Unit = out.out.writeUTF(x)
-    def deserialize(in: DeserializeState): String = in.in.readUTF()
-  }
-
-  implicit object UnitSerializer extends Serializer[Unit] {
-    def serialize(x: Unit, out: SerializeState): Unit = ()
-    def deserialize(in: DeserializeState): Unit = ()
-  }
-
   implicit object StackTraceElementSerializer extends Serializer[StackTraceElement] {
     def serialize(x: StackTraceElement, out: SerializeState): Unit = {
       out.write(x.getClassName())
@@ -137,8 +181,9 @@ private[testing] object Serializer {
     }
 
     def deserialize(in: DeserializeState): StackTraceElement = {
+      // TODO Switch back .getOrElse(null) to .orNull when we upgrade Scala 3 to 3.9+
       new StackTraceElement(in.read[String](), in.read[String](),
-          in.read[Option[String]]().orNull, in.read[Int]())
+          in.read[Option[String]]().getOrElse(null), in.read[Int]())
     }
   }
 
@@ -151,12 +196,13 @@ private[testing] object Serializer {
     }
 
     def deserialize(in: DeserializeState): Throwable = {
-      val msg = in.read[Option[String]]().orNull
+      // TODO Switch back .getOrElse(null) to .orNull when we upgrade Scala 3 to 3.9+
+      val msg = in.read[Option[String]]().getOrElse(null)
       val toStr = in.read[String]()
       val trace = in.read[List[StackTraceElement]]()
       val cause = in.read[Option[Throwable]]()
 
-      val res = new Throwable(msg, cause.orNull) {
+      val res = new Throwable(msg, cause.getOrElse(null)) {
         override def toString(): String = toStr
       }
 
@@ -174,16 +220,16 @@ private[testing] object Serializer {
     def serialize(fp: Fingerprint, out: SerializeState): Unit = fp match {
       case fp: AnnotatedFingerprint =>
         out.write(Annotated)
-        out.write(fp.isModule)
-        out.write(fp.annotationName)
+        out.write(fp.isModule())
+        out.write(fp.annotationName())
       case fp: SubclassFingerprint =>
         out.write(Subclass)
-        out.write(fp.isModule)
-        out.write(fp.superclassName)
-        out.write(fp.requireNoArgConstructor)
+        out.write(fp.isModule())
+        out.write(fp.superclassName())
+        out.write(fp.requireNoArgConstructor())
       case _ =>
         throw new IllegalArgumentException(
-            s"Unknown Fingerprint type: ${fp.getClass}")
+            s"Unknown Fingerprint type: ${fp.getClass()}")
     }
 
     def deserialize(in: DeserializeState): Fingerprint = in.read[Byte]() match {
@@ -218,24 +264,24 @@ private[testing] object Serializer {
 
       case sel: TestSelector =>
         out.write(Test)
-        out.write(sel.testName)
+        out.write(sel.testName())
 
       case sel: NestedSuiteSelector =>
         out.write(NestedSuite)
-        out.write(sel.suiteId)
+        out.write(sel.suiteId())
 
       case sel: NestedTestSelector =>
         out.write(NestedTest)
-        out.write(sel.suiteId)
-        out.write(sel.testName)
+        out.write(sel.suiteId())
+        out.write(sel.testName())
 
       case sel: TestWildcardSelector =>
         out.write(TestWildcard)
-        out.write(sel.testWildcard)
+        out.write(sel.testWildcard())
 
       case _ =>
         throw new IllegalArgumentException(
-            s"Unknown Selector type: ${sel.getClass}")
+            s"Unknown Selector type: ${sel.getClass()}")
     }
 
     def deserialize(in: DeserializeState): Selector = in.read[Byte]() match {
@@ -250,10 +296,10 @@ private[testing] object Serializer {
 
   implicit object TaskDefSerializer extends Serializer[TaskDef] {
     def serialize(x: TaskDef, out: SerializeState): Unit = {
-      out.write(x.fullyQualifiedName)
-      out.write(x.fingerprint)
-      out.write(x.explicitlySpecified)
-      out.write(x.selectors.toList)
+      out.write(x.fullyQualifiedName())
+      out.write(x.fingerprint())
+      out.write(x.explicitlySpecified())
+      out.write(x.selectors().toList)
     }
 
     def deserialize(in: DeserializeState): TaskDef = {
@@ -289,12 +335,12 @@ private[testing] object Serializer {
 
   implicit object EventSerializer extends Serializer[Event] {
     def serialize(x: Event, out: SerializeState): Unit = {
-      out.write(x.fullyQualifiedName)
-      out.write(x.fingerprint)
-      out.write(x.selector)
-      out.write(x.status)
-      out.write(x.throwable)
-      out.write(x.duration)
+      out.write(x.fullyQualifiedName())
+      out.write(x.fingerprint())
+      out.write(x.selector())
+      out.write(x.status())
+      out.write(x.throwable())
+      out.write(x.duration())
     }
 
     def deserialize(in: DeserializeState): Event = new Event {

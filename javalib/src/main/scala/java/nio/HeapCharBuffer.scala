@@ -39,10 +39,9 @@ private[nio] final class HeapCharBuffer private (
     GenHeapBuffer(this).generic_asReadOnlyBuffer()
 
   def subSequence(start: Int, end: Int): CharBuffer = {
-    if (start < 0 || end < start || end > remaining)
-      throw new IndexOutOfBoundsException
-    new HeapCharBuffer(capacity, _array, _arrayOffset,
-        position() + start, position() + end, isReadOnly)
+    BoundsChecks.checkStartEnd(start, end, remaining())
+    new HeapCharBuffer(capacity(), _array, _arrayOffset,
+        position() + start, position() + end, isReadOnly())
   }
 
   @noinline
@@ -87,21 +86,26 @@ private[nio] final class HeapCharBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Char], offset: Int, length: Int): Unit =
+      dst: Array[Char], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Char], offset: Int, length: Int): Unit =
+      src: Array[Char], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }
 
 private[nio] object HeapCharBuffer {
   private[nio] implicit object NewHeapCharBuffer
       extends GenHeapBuffer.NewHeapBuffer[CharBuffer, Char] {
+    @inline
     def apply(capacity: Int, array: Array[Char], arrayOffset: Int,
         initialPosition: Int, initialLimit: Int,
-        readOnly: Boolean): CharBuffer = {
+        readOnly: Boolean, direct: Boolean): CharBuffer = {
+      if (direct)
+        throw new AssertionError("Cannot create a direct HeapCharBuffer")
       new HeapCharBuffer(capacity, array, arrayOffset,
           initialPosition, initialLimit, readOnly)
     }

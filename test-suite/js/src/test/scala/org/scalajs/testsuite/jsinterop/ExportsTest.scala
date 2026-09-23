@@ -12,80 +12,27 @@
 
 package org.scalajs.testsuite.jsinterop
 
+import scala.language.higherKinds
+
 import scala.scalajs.js
 import scala.scalajs.js.annotation._
-import scala.scalajs.js.Dynamic.global
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
 import org.scalajs.testsuite.utils.JSAssert._
 import org.scalajs.testsuite.utils.Platform._
 
-import scala.annotation.meta
-
 import org.junit.Assert._
 import org.junit.Assume._
-import org.junit.Test
-
-import org.scalajs.testsuite.utils.{JSUtils, Platform}
-import org.scalajs.testsuite.utils.AssertThrows.assertThrows
-
-object ExportsTest {
-  /* When using ES modules, there is no way to get hold of our own exports
-   * namespace from within. The build instead sets up a small script that will
-   * import our module and call `setExportsNamespaceForExportsTest` with our
-   * module namespace.
-   */
-
-  private[this] var explicitlySetExportsNamespace: Option[js.Dynamic] = None
-
-  @JSExportTopLevel("setExportsNamespaceForExportsTest")
-  def setExportsNamespaceForExportsTest(value: js.Dynamic): Unit =
-    explicitlySetExportsNamespace = Some(value)
-
-  /** The namespace in which top-level exports are stored.
-   *
-   *  If it has been explicitly set, which is the case for `ESModule`, take
-   *  that value.
-   *
-   *  If we are linking the test suite in `NoModule`, then exports are in the
-   *  global object (technically they're in the global scope, but at least so
-   *  far we can find them in the global object too).
-   *
-   *  If we are linking in `CommonJSModule`, then exports are in the `exports`
-   *  module-global variable, which we can retrieve as if it were in the global
-   *  scope.
-   */
-  def exportsNameSpace: js.Dynamic = {
-    explicitlySetExportsNamespace.getOrElse {
-      assert(!Platform.isESModule,
-          "The exportsNamespace should have been explicitly set for an ES " +
-          "module")
-      if (Platform.isNoModule) {
-        null // need to use `global` instead
-      } else if (Platform.isCommonJSModule) {
-        js.Dynamic.global.exports
-      } else {
-        throw new NotImplementedError(
-            "Don't know how to fetch the exports namespace in an unknown " +
-            "module kind.")
-      }
-    }
-  }
-}
+import org.junit.{BeforeClass, Test}
 
 class ExportsTest {
 
-  /** The namespace in which top-level exports are stored. */
-  val exportsNamespace = ExportsTest.exportsNameSpace
-
-  // @JSExport
-
-  @Test def exports_for_methods_with_implicit_name(): Unit = {
+  @Test def exportsForMethodsWithImplicitName(): Unit = {
     class Foo {
       @JSExport
       def bar(): Int = 42
       @JSExport
-      def double(x: Int): Int = x*2
+      def double(x: Int): Int = x * 2
     }
 
     val foo = (new Foo).asInstanceOf[js.Dynamic]
@@ -94,12 +41,12 @@ class ExportsTest {
     assertEquals(6, foo.double(3))
   }
 
-  @Test def exports_for_methods_with_explicit_name(): Unit = {
+  @Test def exportsForMethodsWithExplicitName(): Unit = {
     class Foo {
       @JSExport("theAnswer")
       def bar(): Int = 42
       @JSExport("doubleTheParam")
-      def double(x: Int): Int = x*2
+      def double(x: Int): Int = x * 2
     }
 
     val foo = (new Foo).asInstanceOf[js.Dynamic]
@@ -109,7 +56,7 @@ class ExportsTest {
     assertEquals(6, foo.doubleTheParam(3))
   }
 
-  @Test def exports_for_methods_with_constant_folded_name(): Unit = {
+  @Test def exportsForMethodsWithConstantFoldedName(): Unit = {
     class Foo {
       @JSExport(ExportNameHolder.methodName)
       def bar(): Int = 42
@@ -120,7 +67,7 @@ class ExportsTest {
     assertEquals(42, foo.myMethod())
   }
 
-  @Test def exports_for_methods_whose_encodedName_starts_with_dollar_issue_3219(): Unit = {
+  @Test def exportsForMethodsWhoseEncodedNameStartsWithDollar_Issue3219(): Unit = {
     class ExportsForMethodsWhoseEncodedNameStartsWithDollar {
       @JSExport("$a")
       def f(x: Int): Int = x + 1
@@ -144,7 +91,7 @@ class ExportsTest {
     assertEquals(9, fns.applyDynamic("plus")(5))
   }
 
-  @Test def exports_for_protected_methods(): Unit = {
+  @Test def exportsForProtectedMethods(): Unit = {
     class Foo {
       @JSExport
       protected def bar(): Int = 42
@@ -160,7 +107,314 @@ class ExportsTest {
     assertEquals(100, foo.foo())
   }
 
-  @Test def exports_for_properties_with_implicit_name(): Unit = {
+  @Test def exportsForNestedClassesInClass(): Unit = {
+    class A(x: Int) {
+      @JSExport
+      class Nested(y: Int) {
+        @JSExport
+        def this() = this(2)
+
+        @JSExport
+        def witness = x + y
+      }
+
+      @JSExport
+      class Nested2(y: Int) extends js.Object {
+        def witness = x + y
+      }
+    }
+
+    val scalaA = new A(2)
+    val jsA = scalaA.asInstanceOf[js.Dynamic]
+
+    val n0 = jsA.Nested(3)
+    assertTrue(n0.isInstanceOf[scalaA.Nested])
+    assertEquals(5, n0.witness)
+
+    val n1 = jsA.Nested()
+    assertTrue(n1.isInstanceOf[scalaA.Nested])
+    assertEquals(4, n1.witness)
+
+    val n2 = js.Dynamic.newInstance(jsA.Nested2)(4)
+    assertTrue(n2.isInstanceOf[scalaA.Nested2])
+    assertEquals(6, n2.witness)
+  }
+
+  @Test def exportsForNestedClassesInTrait(): Unit = {
+    trait A {
+      val x: Int
+
+      @JSExport
+      class Nested(y: Int) {
+        @JSExport
+        def this() = this(2)
+
+        @JSExport
+        def witness = x + y
+      }
+
+      @JSExport
+      class Nested2(y: Int) extends js.Object {
+        def witness = x + y
+      }
+    }
+
+    val scalaA = new A { val x = 2 }
+    val jsA = scalaA.asInstanceOf[js.Dynamic]
+
+    val n0 = jsA.Nested(3)
+    assertTrue(n0.isInstanceOf[scalaA.Nested])
+    assertEquals(5, n0.witness)
+
+    val n1 = jsA.Nested()
+    assertTrue(n1.isInstanceOf[scalaA.Nested])
+    assertEquals(4, n1.witness)
+
+    val n2 = js.Dynamic.newInstance(jsA.Nested2)(4)
+    assertTrue(n2.isInstanceOf[scalaA.Nested2])
+    assertEquals(6, n2.witness)
+  }
+
+  @Test def exportsForNestedClassesInObject(): Unit = {
+    object A {
+      val x = 2
+
+      @JSExport
+      class Nested(y: Int) {
+        @JSExport
+        def this() = this(2)
+
+        @JSExport
+        def witness = x + y
+      }
+
+      @JSExport
+      class Nested2(y: Int) extends js.Object {
+        def witness = x + y
+      }
+    }
+
+    val jsA = A.asInstanceOf[js.Dynamic]
+
+    val n0 = jsA.Nested(3)
+    assertTrue(n0.isInstanceOf[A.Nested])
+    assertEquals(5, n0.witness)
+
+    val n1 = jsA.Nested()
+    assertTrue(n1.isInstanceOf[A.Nested])
+    assertEquals(4, n1.witness)
+
+    val n2 = js.Dynamic.newInstance(jsA.Nested2)(4)
+    assertTrue(n2.isInstanceOf[A.Nested2])
+    assertEquals(6, n2.witness)
+  }
+
+  @Test def exportsForNestedClassesInStaticObject(): Unit = {
+    val jsObj = StaticObjectWithNestedClasses.asInstanceOf[js.Dynamic]
+
+    val n0 = jsObj.Nested(3)
+    assertTrue(n0.isInstanceOf[StaticObjectWithNestedClasses.Nested])
+    assertEquals(5, n0.witness)
+
+    val n1 = jsObj.Nested()
+    assertTrue(n1.isInstanceOf[StaticObjectWithNestedClasses.Nested])
+    assertEquals(4, n1.witness)
+
+    val n2 = js.Dynamic.newInstance(jsObj.Nested2)(4)
+    assertTrue(n2.isInstanceOf[StaticObjectWithNestedClasses.Nested2])
+    assertEquals(6, n2.witness)
+  }
+
+  @Test def exportsForNestedGenericClasses(): Unit = {
+    class A[A](x: A) {
+      @JSExport
+      class Nested[B](y: B) {
+        @JSExport
+        def witness: (A, B) = (x, y)
+      }
+    }
+
+    val scalaA = new A("foo")
+    val jsA = scalaA.asInstanceOf[js.Dynamic]
+
+    val n0 = jsA.Nested(3)
+    assertTrue(n0.isInstanceOf[scalaA.Nested[_]])
+    assertEquals(("foo", 3), n0.witness)
+
+    val n1 = jsA.Nested("bar")
+    assertTrue(n1.isInstanceOf[scalaA.Nested[_]])
+    assertEquals(("foo", "bar"), n1.witness)
+  }
+
+  @Test def exportsForNestedGenericJSClasses(): Unit = {
+    class A[A](x: A) {
+      @JSExport
+      class Nested[B](y: B) extends js.Object {
+        def witness: (A, B) = (x, y)
+      }
+    }
+
+    val scalaA = new A("foo")
+    val jsA = scalaA.asInstanceOf[js.Dynamic]
+
+    val n0 = js.Dynamic.newInstance(jsA.Nested)(3)
+    assertTrue(n0.isInstanceOf[scalaA.Nested[_]])
+    assertEquals(("foo", 3), n0.witness)
+
+    val n1 = js.Dynamic.newInstance(jsA.Nested)("bar")
+    assertTrue(n1.isInstanceOf[scalaA.Nested[_]])
+    assertEquals(("foo", "bar"), n1.witness)
+  }
+
+  @Test def exportsForNestedAbstractJSClasses(): Unit = {
+    class A(x: String) {
+      @JSExport
+      abstract class Nested(y: String) extends js.Object {
+        def foo(): String
+        def witness: String = s"$x | $y | ${foo()}"
+      }
+    }
+
+    val scalaA = new A("outer")
+    val jsA = scalaA.asInstanceOf[js.Dynamic]
+
+    val body = if (useECMAScript2015Semantics) {
+      """
+      class SubClass extends constr {
+        constructor(x) {
+          super(x + " from super");
+        }
+        foo() {
+           return "foo result";
+        }
+      }
+      return SubClass;
+      """
+    } else {
+      """
+      function SubClass(x) {
+        constr.call(this, x + " from super");
+      }
+      SubClass.prototype = Object.create(constr.prototype);
+      SubClass.prototype.foo = function(y) {
+        return "foo result";
+      };
+      return SubClass;
+      """
+    }
+
+    val subclassFun = new js.Function("constr", body)
+      .asInstanceOf[js.Function1[js.Dynamic, js.Dynamic]]
+    val subclass = subclassFun(jsA.Nested)
+    val obj = js.Dynamic.newInstance(subclass)("inner")
+
+    assertEquals("outer | inner from super | foo result", obj.witness)
+  }
+
+  @Test def exportsForNestedObjectsInClass(): Unit = {
+    class Foo(x: Int) {
+      @JSExport
+      object obj {
+        @JSExport
+        def witness = x + 1
+      }
+
+      @JSExport
+      object jsObj extends js.Object {
+        def witness = x + 1
+      }
+    }
+
+    val scalaFoo0 = new Foo(0)
+    val scalaFoo1 = new Foo(1)
+
+    val foo0 = scalaFoo0.asInstanceOf[js.Dynamic]
+    val foo1 = scalaFoo1.asInstanceOf[js.Dynamic]
+
+    assertSame(scalaFoo0.obj, foo0.obj)
+    assertSame(scalaFoo1.obj, foo1.obj)
+    assertNotSame(foo0.obj, foo1.obj)
+    assertEquals(1, foo0.obj.witness)
+    assertEquals(2, foo1.obj.witness)
+
+    assertSame(scalaFoo0.jsObj, foo0.jsObj)
+    assertSame(scalaFoo1.jsObj, foo1.jsObj)
+    assertNotSame(foo0.jsObj, foo1.jsObj)
+    assertEquals(1, foo0.jsObj.witness)
+    assertEquals(2, foo1.jsObj.witness)
+  }
+
+  @Test def exportsForNestedObjectsInTrait(): Unit = {
+    trait Foo {
+      val x: Int
+
+      @JSExport
+      object obj {
+        @JSExport
+        def witness = x + 1
+      }
+
+      @JSExport
+      object jsObj extends js.Object {
+        def witness = x + 1
+      }
+    }
+
+    val scalaFoo0 = new Foo { val x = 0 }
+    val scalaFoo1 = new Foo { val x = 1 }
+
+    val foo0 = scalaFoo0.asInstanceOf[js.Dynamic]
+    val foo1 = scalaFoo1.asInstanceOf[js.Dynamic]
+
+    assertSame(scalaFoo0.obj, foo0.obj)
+    assertSame(scalaFoo1.obj, foo1.obj)
+    assertNotSame(foo0.obj, foo1.obj)
+    assertEquals(1, foo0.obj.witness)
+    assertEquals(2, foo1.obj.witness)
+
+    assertSame(scalaFoo0.jsObj, foo0.jsObj)
+    assertSame(scalaFoo1.jsObj, foo1.jsObj)
+    assertNotSame(foo0.jsObj, foo1.jsObj)
+    assertEquals(1, foo0.jsObj.witness)
+    assertEquals(2, foo1.jsObj.witness)
+  }
+
+  @Test def exportsForNestedObjectsInObject(): Unit = {
+    object Foo {
+      val x: Int = 1
+
+      @JSExport
+      object obj {
+        @JSExport
+        def witness = x + 1
+      }
+
+      @JSExport
+      object jsObj extends js.Object {
+        def witness = x + 1
+      }
+    }
+
+    val foo = Foo.asInstanceOf[js.Dynamic]
+
+    assertSame(Foo.obj, foo.obj)
+    assertEquals(2, foo.obj.witness)
+
+    assertSame(Foo.jsObj, foo.jsObj)
+    assertEquals(2, foo.jsObj.witness)
+  }
+
+  @Test def exportsForNestedObjectsInStaticObject(): Unit = {
+    val foo = StaticObjectWithNestedObjects.asInstanceOf[js.Dynamic]
+
+    assertSame(StaticObjectWithNestedObjects.obj, foo.obj)
+    assertEquals(2, foo.obj.witness)
+
+    assertSame(StaticObjectWithNestedObjects.jsObj, foo.jsObj)
+    assertEquals(2, foo.jsObj.witness)
+  }
+
+  @Test def exportsForPropertiesWithImplicitName(): Unit = {
     class Foo {
       private[this] var myY: String = "hello"
       @JSExport
@@ -168,14 +422,15 @@ class ExportsTest {
       @JSExport
       var x: Int = 3
       @JSExport
-      def doubleX: Int = x*2
+      def doubleX: Int = x * 2
       @JSExport
       def y: String = myY + " get"
       @JSExport
       def y_=(v: String): Unit = myY = v + " set"
     }
 
-    val foo = (new Foo).asInstanceOf[js.Dynamic]
+    val scalaFoo = new Foo
+    val foo = scalaFoo.asInstanceOf[js.Dynamic]
     assertEquals("number", js.typeOf(foo.answer))
     assertEquals(42, foo.answer)
     assertEquals(3, foo.x)
@@ -188,7 +443,7 @@ class ExportsTest {
     assertEquals("world set get", foo.y)
   }
 
-  @Test def exports_for_properties_with_explicit_name(): Unit = {
+  @Test def exportsForPropertiesWithExplicitName(): Unit = {
     class Foo {
       private[this] var myY: String = "hello"
       @JSExport("answer")
@@ -196,7 +451,7 @@ class ExportsTest {
       @JSExport("x")
       var xScala: Int = 3
       @JSExport("doubleX")
-      def doubleXScala: Int = xScala*2
+      def doubleXScala: Int = xScala * 2
       @JSExport("y")
       def yGetter: String = myY + " get"
       @JSExport("y")
@@ -217,7 +472,7 @@ class ExportsTest {
     assertEquals("world set get", foo.y)
   }
 
-  @Test def exports_for_properties_whose_encodedName_starts_with_dollar_issue_3219(): Unit = {
+  @Test def exportsForPropertiesWhoseEncodedNameStartsWithDollar_Issue3219(): Unit = {
     class ExportsForPropertiesWhoseEncodedNameStartsWithDollar {
       @JSExport("$a")
       def f: Int = 6
@@ -241,7 +496,7 @@ class ExportsTest {
     assertEquals(9, fns.selectDynamic("plus"))
   }
 
-  @Test def exports_for_protected_properties(): Unit = {
+  @Test def exportsForProtectedProperties(): Unit = {
     class Foo {
       @JSExport
       protected val x: Int = 42
@@ -254,7 +509,7 @@ class ExportsTest {
     assertEquals(43, foo.y)
   }
 
-  @Test def exports_for_abstract_properties_in_class_issue_2513(): Unit = {
+  @Test def exportsForAbstractPropertiesInClass_Issue2513(): Unit = {
     abstract class Foo {
       @JSExport
       val x: Int
@@ -274,7 +529,7 @@ class ExportsTest {
     assertEquals(7, bar.y)
   }
 
-  @Test def exports_for_abstract_properties_in_trait_issue_2513(): Unit = {
+  @Test def exportsForAbstractPropertiesInTrait_Issue2513(): Unit = {
     trait Foo {
       @JSExport
       val x: Int
@@ -294,7 +549,49 @@ class ExportsTest {
     assertEquals(7, bar.y)
   }
 
-  @Test def readonly_properties(): Unit = {
+  @Test def exportsForAbstractClassPropertiesImplementedWithObject(): Unit = {
+    abstract class Foo {
+      @JSExport
+      def x: js.Object
+    }
+
+    class Bar extends Foo {
+      object x extends js.Object {
+        val y = 1
+      }
+    }
+
+    val bar = (new Bar).asInstanceOf[js.Dynamic]
+    assertEquals(1, bar.x.y)
+  }
+
+  @Test def exportsForTraitPropertiesImplementedWithObject(): Unit = {
+    trait Foo {
+      @JSExport
+      def x: js.Object
+    }
+
+    class Bar extends Foo {
+      object x extends js.Object {
+        val y = 1
+      }
+    }
+
+    val bar = (new Bar).asInstanceOf[js.Dynamic]
+    assertEquals(1, bar.x.y)
+  }
+
+  @Test def exportsForAbstractClassPropertiesImplementedWithStaticObject(): Unit = {
+    val bar = StaticObjectWithObjectForExportFromAbstractClass.asInstanceOf[js.Dynamic]
+    assertEquals(1, bar.x.y)
+  }
+
+  @Test def exportsForTraitPropertiesImplementedWithStaticObject(): Unit = {
+    val bar = StaticObjectWithObjectForExportFromTrait.asInstanceOf[js.Dynamic]
+    assertEquals(1, bar.x.y)
+  }
+
+  @Test def readonlyProperties(): Unit = {
     class Foo {
       @JSExport
       val foo: Int = 1
@@ -310,24 +607,37 @@ class ExportsTest {
     assertThrows(classOf[js.JavaScriptException], {
       x.bar = 2
     })
+
+    // Read the properties to trick GCC into not discarding the writes.
+    assertEquals(1, x.foo)
+    assertEquals(1, x.bar)
   }
 
-  @Test def properties_are_not_enumerable(): Unit = {
+  @Test def propertiesAreNotEnumerable(): Unit = {
     class Foo {
       @JSExport
       def myProp: Int = 1
     }
 
-    val x: js.Any = (new Foo()).asInstanceOf[js.Any]
-    assertFalse(js.Object.properties(x).contains("myProp"))
+    val x: js.Object = (new Foo()).asInstanceOf[js.Object]
+
+    /* With Wasm and custom descriptors, we still cannot iterate the Wasm
+     * struct directly. However, we do test that the property is not enumerable
+     * anyway by working directly on the prototype.
+     */
+    val testObj =
+      if (executingInWebAssembly) js.Object.getPrototypeOf(x)
+      else x
+
+    assertFalse(js.Object.properties(testObj).contains("myProp"))
   }
 
-  @Test def overloaded_exports_for_methods(): Unit = {
+  @Test def overloadedExportsForMethods(): Unit = {
     class Foo {
       @JSExport("foobar")
       def foo(): Int = 42
       @JSExport("foobar")
-      def bar(x: Int): Int = x*2
+      def bar(x: Int): Int = x * 2
     }
 
     val foo = (new Foo).asInstanceOf[js.Dynamic]
@@ -336,7 +646,7 @@ class ExportsTest {
     assertEquals(6, foo.foobar(3))
   }
 
-  @Test def multiple_exports_for_the_same_method(): Unit = {
+  @Test def multipleExportsForTheSameMethod(): Unit = {
     class Foo {
       @JSExport
       @JSExport("b")
@@ -354,13 +664,19 @@ class ExportsTest {
     assertEquals(1, foo.c())
   }
 
-  @Test def should_inherit_exports_from_traits(): Unit = {
+  @Test def inheritExportsFromTraits(): Unit = {
     trait Foo {
       @JSExport
       def x: Int
 
       @JSExport
+      def y: Int = 42
+
+      @JSExport
       def method(x: Int): Int
+
+      @JSExport
+      def otherMethod(x: Int): Int = 3 * x
     }
 
     class Bar extends Foo {
@@ -370,11 +686,14 @@ class ExportsTest {
 
     val bar = (new Bar).asInstanceOf[js.Dynamic]
     assertEquals(1, bar.x)
+    assertEquals(42, bar.y)
     assertEquals("function", js.typeOf(bar.method))
     assertEquals(4, bar.method(2))
+    assertEquals("function", js.typeOf(bar.otherMethod))
+    assertEquals(6, bar.otherMethod(2))
   }
 
-  @Test def should_inherit_exports_from_traits_with_value_classes(): Unit = {
+  @Test def inheritExportsFromTraitsWithValueClasses(): Unit = {
     trait Foo {
       @JSExport
       def x: SomeValueClass = new SomeValueClass(5)
@@ -391,7 +710,7 @@ class ExportsTest {
     assertEquals(4, bar.method(vc.asInstanceOf[js.Any]))
   }
 
-  @Test def should_inherit_exports_from_traits_with_varargs_issue_3538(): Unit = {
+  @Test def inheritExportsFromTraitsWithVarargs_Issue3538(): Unit = {
     trait Foo {
       @JSExport
       def method(args: Int*): Int = args.sum
@@ -403,13 +722,27 @@ class ExportsTest {
     assertEquals(18, bar.method(5, 6, 7))
   }
 
-  @Test def overloading_with_inherited_exports(): Unit = {
+  @Test def exportsInsideValueClass(): Unit = {
+    val obj = new ValueClassWithExports(5).asInstanceOf[js.Dynamic]
+
+    // Explicit export
+    assertEquals(12, obj.add(7))
+
+    // Export for toString() inherited from jl.Object
+    assertEquals("ValueClassWithExports(value = 5)", obj.toString())
+
+    // Export for toString() visible from JavaScript
+    val f = new js.Function("obj", "return '' + obj;").asInstanceOf[js.Function1[Any, String]]
+    assertEquals("ValueClassWithExports(value = 5)", f(obj))
+  }
+
+  @Test def overloadingWithInheritedExports(): Unit = {
     class A {
       @JSExport
-      def foo(x: Int): Int = 2*x
+      def foo(x: Int): Int = 2 * x
     }
 
-    class B extends A{
+    class B extends A {
       @JSExport("foo")
       def bar(x: String): String = s"Hello $x"
     }
@@ -420,7 +753,7 @@ class ExportsTest {
     assertEquals("Hello World", b.foo("World"))
   }
 
-  @Test def exports_for_generic_methods(): Unit = {
+  @Test def exportsForGenericMethods(): Unit = {
     class Foo {
       @JSExport
       def gen[T <: AnyRef](x: T): T = x
@@ -433,7 +766,7 @@ class ExportsTest {
     assertSame(x, foo.gen(x))
   }
 
-  @Test def exports_for_lambda_return_types(): Unit = {
+  @Test def exportsForLambdaReturnTypes(): Unit = {
     class Foo {
       @JSExport
       def lambda(x: Int): Int => Int = (y: Int) => x + y
@@ -442,12 +775,12 @@ class ExportsTest {
     val foo = (new Foo).asInstanceOf[js.Dynamic]
     assertEquals("function", js.typeOf(foo.lambda))
 
-    val lambda = foo.lambda(5).asInstanceOf[Function1[Int,Int]]
+    val lambda = foo.lambda(5).asInstanceOf[Function1[Int, Int]]
 
     assertEquals(9, lambda(4))
   }
 
-  @Test def exports_for_multi_parameter_lists(): Unit = {
+  @Test def exportsForMultiParameterLists(): Unit = {
     class Foo {
       @JSExport
       def multiParam(x: Int)(y: Int): Int = x + y
@@ -455,10 +788,10 @@ class ExportsTest {
 
     val foo = (new Foo).asInstanceOf[js.Dynamic]
     assertEquals("function", js.typeOf(foo.multiParam))
-    assertEquals(11, foo.multiParam(5,6))
+    assertEquals(11, foo.multiParam(5, 6))
   }
 
-  @Test def exports_for_default_arguments(): Unit = {
+  @Test def exportsForDefaultArguments(): Unit = {
     class Foo {
       @JSExport
       def defArg(x: Int = 1): Int = x
@@ -469,7 +802,20 @@ class ExportsTest {
     assertEquals(5, foo.defArg(5))
   }
 
-  @Test def exports_for_weird_stuff(): Unit = {
+  @Test def exportsForHigherKinds(): Unit = {
+    class HK {
+      /* Probably there's no real use case for this
+       * but make sure it doesn't crash the compiler.
+       */
+      @JSExport
+      def ahem[F[T] <: Seq[T]](x: F[Int]): F[String] = ???
+    }
+
+    val x = (new HK).asInstanceOf[js.Dynamic]
+    assertEquals("function", js.typeOf(x.ahem))
+  }
+
+  @Test def exportsForWeirdStuff(): Unit = {
     class UhOh {
       // Something no one should export
       @JSExport
@@ -480,7 +826,7 @@ class ExportsTest {
     assertEquals("function", js.typeOf(x.ahem))
   }
 
-  @Test def exports_with_value_class_return_types(): Unit = {
+  @Test def exportsWithValueClassReturnTypes(): Unit = {
     class Foo {
       @JSExport
       def vc(x: Int): SomeValueClass = new SomeValueClass(x)
@@ -496,7 +842,7 @@ class ExportsTest {
     assertTrue((result: Any) == (new SomeValueClass(5)))
   }
 
-  @Test def should_allow_exports_with_Any_as_return_type(): Unit = {
+  @Test def exportsWithAnyAsReturnType(): Unit = {
     class A
     class Foo {
       @JSExport
@@ -509,7 +855,7 @@ class ExportsTest {
     assertTrue((foo.foo(false): Any).isInstanceOf[A])
   }
 
-  @Test def boxed_value_classes_as_parameter(): Unit = {
+  @Test def boxedValueClassesAsParameter(): Unit = {
     class Foo {
       @JSExport
       def vc(x: SomeValueClass): Int = x.i
@@ -525,7 +871,7 @@ class ExportsTest {
     assertEquals(7, result)
   }
 
-  @Test def should_overload_on_boxed_value_classes_as_parameters(): Unit = {
+  @Test def overloadOnBoxedValueClassesAsParameters(): Unit = {
     class Foo {
       @JSExport
       def foo(x: String): Int = x.length
@@ -539,7 +885,7 @@ class ExportsTest {
     assertEquals(5, foo.foo("hello"))
   }
 
-  @Test def exports_for_overridden_methods_with_refined_return_type(): Unit = {
+  @Test def exportsForOverriddenMethodsWithRefinedReturnType(): Unit = {
     class A
     class B extends A
 
@@ -556,7 +902,7 @@ class ExportsTest {
     assertTrue((c2.x: Any).isInstanceOf[B])
   }
 
-  @Test def exports_for_methods_with_refined_types_as_return_type(): Unit = {
+  @Test def exportsForMethodsWithRefinedTypesAsReturnType(): Unit = {
     class A {
       @JSExport
       def foo(x: String): js.Object with js.Dynamic =
@@ -567,7 +913,7 @@ class ExportsTest {
     assertEquals(js.Dynamic.literal(arg = "hello").toMap, a.foo("hello").toMap)
   }
 
-  @Test def exports_for_polytype_nullary_method_issue_2445(): Unit = {
+  @Test def exportsForPolytypeNullaryMethod_Issue2445(): Unit = {
     class ExportPolyTypeNullaryMethod {
       @JSExport def emptyArray[T]: js.Array[T] = js.Array()
     }
@@ -578,7 +924,7 @@ class ExportsTest {
     assertEquals(0, a.length)
   }
 
-  @Test def exports_for_variable_argument_methods_issue_393(): Unit = {
+  @Test def exportsForVariableArgumentMethods_Issue393(): Unit = {
     class A {
       @JSExport
       def foo(i: String*): String = i.mkString("|")
@@ -591,7 +937,7 @@ class ExportsTest {
     assertEquals("a|b|c|d", a.foo("a", "b", "c", "d"))
   }
 
-  @Test def overload_in_view_of_difficult_repeated_parameter_lists(): Unit = {
+  @Test def overloadInViewOfDifficultRepeatedParameterLists(): Unit = {
     class A {
       @JSExport
       def foo(a: String, b: String, i: Int, c: String): Int = 1
@@ -615,7 +961,7 @@ class ExportsTest {
     assertEquals(100000, a.foo(1))
   }
 
-  @Test def exports_with_default_arguments(): Unit = {
+  @Test def exportsWithDefaultArguments(): Unit = {
     class A {
       var oneCount: Int = 0
       def one: Int = {
@@ -636,20 +982,20 @@ class ExportsTest {
     assertEquals(9, jsa.foo(2))
     assertEquals(5, a.oneCount)
 
-    assertEquals(11, jsa.foo(2,4))
+    assertEquals(11, jsa.foo(2, 4))
     assertEquals(6, a.oneCount)
 
-    assertEquals(16, jsa.foo(2,4,10))
+    assertEquals(16, jsa.foo(2, 4, 10))
     assertEquals(6, a.oneCount)
 
-    assertEquals(15, jsa.foo((),4,10))
+    assertEquals(15, jsa.foo((), 4, 10))
     assertEquals(7, a.oneCount)
 
-    assertEquals(10, jsa.foo((),4))
+    assertEquals(10, jsa.foo((), 4))
     assertEquals(9, a.oneCount)
   }
 
-  @Test def overload_methods_in_presence_of_default_parameters(): Unit = {
+  @Test def overloadMethodsInPresenceOfDefaultParameters(): Unit = {
     class A {
       @JSExport
       def foo(a: Int)(b: Int = 5)(c: Int = 7): Int = 1000 + a + b + c
@@ -671,7 +1017,7 @@ class ExportsTest {
 
   }
 
-  @Test def should_prefer_overloads_taking_a_Unit_over_methods_with_default_parameters(): Unit = {
+  @Test def preferOverloadsTakingUnitOverMethodsWithDefaultParameters(): Unit = {
     class A {
       @JSExport
       def foo(a: Int)(b: String = "asdf"): String = s"$a $b"
@@ -688,7 +1034,7 @@ class ExportsTest {
 
   }
 
-  @Test def overload_methods_in_presence_of_default_parameters_and_repeated_parameters(): Unit = {
+  @Test def overloadMethodsInPresenceOfDefaultParametersAndRepeatedParameters(): Unit = {
     class A {
       @JSExport
       def foo(x: Int, y: Int = 1): Int = x + y
@@ -702,11 +1048,11 @@ class ExportsTest {
     assertEquals(3, a.foo(1, 2))
     assertEquals("", a.foo())
     assertEquals("foo", a.foo("foo"))
-    assertEquals("foo|bar", a.foo("foo","bar"))
+    assertEquals("foo|bar", a.foo("foo", "bar"))
 
   }
 
-  @Test def overload_exports_called_toString(): Unit = {
+  @Test def overloadExportsCalledToString(): Unit = {
     class A {
       override def toString(): String = "no arg"
       @JSExport
@@ -718,7 +1064,7 @@ class ExportsTest {
     assertEquals("with arg: 1", a.applyDynamic("toString")(1))
   }
 
-  @Test def should_allow_to_explicitly_export_toString(): Unit = {
+  @Test def explicitExportToString(): Unit = {
     class A {
       @JSExport("toString")
       override def toString(): String = "called"
@@ -728,7 +1074,7 @@ class ExportsTest {
     assertEquals("called", a.applyDynamic("toString")())
   }
 
-  @Test def box_repeated_parameter_lists_with_value_classes(): Unit = {
+  @Test def boxRepeatedParameterListsWithValueClasses(): Unit = {
     class A {
       @JSExport
       def foo(vcs: SomeValueClass*): Int = vcs.map(_.i).sum
@@ -741,137 +1087,7 @@ class ExportsTest {
     assertEquals(3, a.foo(vc1.asInstanceOf[js.Any], vc2.asInstanceOf[js.Any]))
   }
 
-  @Test def toplevel_exports_for_objects(): Unit = {
-    val obj =
-      if (isNoModule) global.TopLevelExportedObject
-      else exportsNamespace.TopLevelExportedObject
-    assertJSNotUndefined(obj)
-    assertEquals("object", js.typeOf(obj))
-    assertEquals("witness", obj.witness)
-  }
-
-  @Test def toplevel_exports_for_Scala_js_defined_JS_objects(): Unit = {
-    val obj1 =
-      if (isNoModule) global.SJSDefinedTopLevelExportedObject
-      else exportsNamespace.SJSDefinedTopLevelExportedObject
-    assertJSNotUndefined(obj1)
-    assertEquals("object", js.typeOf(obj1))
-    assertEquals("witness", obj1.witness)
-
-    assertSame(obj1, SJSDefinedExportedObject)
-  }
-
-  @Test def toplevel_exports_for_nested_objects(): Unit = {
-    val obj =
-      if (isNoModule) global.NestedExportedObject
-      else exportsNamespace.NestedExportedObject
-    assertJSNotUndefined(obj)
-    assertEquals("object", js.typeOf(obj))
-    assertSame(obj, ExportHolder.ExportedObject)
-  }
-
-  @Test def exports_for_objects_with_constant_folded_name(): Unit = {
-    val obj =
-      if (isNoModule) global.ConstantFoldedObjectExport
-      else exportsNamespace.ConstantFoldedObjectExport
-    assertJSNotUndefined(obj)
-    assertEquals("object", js.typeOf(obj))
-    assertEquals("witness", obj.witness)
-  }
-
-  @Test def exports_for_protected_objects(): Unit = {
-    val obj =
-      if (isNoModule) global.ProtectedExportedObject
-      else exportsNamespace.ProtectedExportedObject
-    assertJSNotUndefined(obj)
-    assertEquals("object", js.typeOf(obj))
-    assertEquals("witness", obj.witness)
-  }
-
-  @Test def toplevel_exports_for_classes(): Unit = {
-    val constr =
-      if (isNoModule) global.TopLevelExportedClass
-      else exportsNamespace.TopLevelExportedClass
-    assertJSNotUndefined(constr)
-    assertEquals("function", js.typeOf(constr))
-    val obj = js.Dynamic.newInstance(constr)(5)
-    assertEquals(5, obj.x)
-  }
-
-  @Test def toplevel_exports_for_Scala_js_defined_JS_classes(): Unit = {
-    val constr =
-      if (isNoModule) global.SJSDefinedTopLevelExportedClass
-      else exportsNamespace.SJSDefinedTopLevelExportedClass
-    assertJSNotUndefined(constr)
-    assertEquals("function", js.typeOf(constr))
-    val obj = js.Dynamic.newInstance(constr)(5)
-    assertTrue((obj: Any).isInstanceOf[SJSDefinedTopLevelExportedClass])
-    assertEquals(5, obj.x)
-
-    assertSame(constr, js.constructorOf[SJSDefinedTopLevelExportedClass])
-  }
-
-  @Test def toplevel_exports_for_nested_classes(): Unit = {
-    val constr =
-      if (isNoModule) global.NestedExportedClass
-      else exportsNamespace.NestedExportedClass
-    assertJSNotUndefined(constr)
-    assertEquals("function", js.typeOf(constr))
-    val obj = js.Dynamic.newInstance(constr)()
-    assertTrue((obj: Any).isInstanceOf[ExportHolder.ExportedClass])
-  }
-
-  @Test def toplevel_exports_for_nested_sjs_defined_classes(): Unit = {
-    val constr =
-      if (isNoModule) global.NestedSJSDefinedExportedClass
-      else exportsNamespace.NestedSJSDefinedExportedClass
-    assertJSNotUndefined(constr)
-    assertEquals("function", js.typeOf(constr))
-    val obj = js.Dynamic.newInstance(constr)()
-    assertTrue((obj: Any).isInstanceOf[ExportHolder.SJSDefinedExportedClass])
-  }
-
-  @Test def exports_for_classes_with_constant_folded_name(): Unit = {
-    val constr =
-      if (isNoModule) global.ConstantFoldedClassExport
-      else exportsNamespace.ConstantFoldedClassExport
-    assertJSNotUndefined(constr)
-    assertEquals("function", js.typeOf(constr))
-    val obj = js.Dynamic.newInstance(constr)(5)
-    assertEquals(5, obj.x)
-  }
-
-  @Test def exports_for_protected_classes(): Unit = {
-    val constr =
-      if (isNoModule) global.ProtectedExportedClass
-      else exportsNamespace.ProtectedExportedClass
-    assertJSNotUndefined(constr)
-    assertEquals("function", js.typeOf(constr))
-    val obj = js.Dynamic.newInstance(constr)(5)
-    assertEquals(5, obj.x)
-  }
-
-  @Test def export_for_classes_with_repeated_parameters_in_ctor(): Unit = {
-    val constr =
-      if (isNoModule) global.ExportedVarArgClass
-      else exportsNamespace.ExportedVarArgClass
-    assertEquals("", js.Dynamic.newInstance(constr)().result)
-    assertEquals("a", js.Dynamic.newInstance(constr)("a").result)
-    assertEquals("a|b", js.Dynamic.newInstance(constr)("a", "b").result)
-    assertEquals("a|b|c", js.Dynamic.newInstance(constr)("a", "b", "c").result)
-    assertEquals("Number: <5>|a", js.Dynamic.newInstance(constr)(5, "a").result)
-  }
-
-  @Test def export_for_classes_with_default_parameters_in_ctor(): Unit = {
-    val constr =
-      if (isNoModule) global.ExportedDefaultArgClass
-      else exportsNamespace.ExportedDefaultArgClass
-    assertEquals(6, js.Dynamic.newInstance(constr)(1,2,3).result)
-    assertEquals(106, js.Dynamic.newInstance(constr)(1).result)
-    assertEquals(103, js.Dynamic.newInstance(constr)(1,2).result)
-  }
-
-  @Test def disambiguate_overloads_involving_longs(): Unit = {
+  @Test def disambiguateOverloadsInvolvingLongs(): Unit = {
 
     class Foo {
       @JSExport
@@ -894,60 +1110,51 @@ class ExportsTest {
     assertEquals(2, foo.foo(trueJsLong))
   }
 
-  @Test def should_return_boxed_Chars(): Unit = {
+  @Test def returnBoxedChars(): Unit = {
     class Foo {
       @JSExport
       def bar(x: Int): Char = x.toChar
     }
     val foo = (new Foo).asInstanceOf[js.Dynamic]
 
-    val funs = js.eval("""
-        var funs = {
-          testIsChar: function(JSUtils, foo) { return JSUtils.isChar(foo.bar(65)); },
-          testCharValue: function(JSUtils, foo) { return JSUtils.charToString(foo.bar(65)); }
-        }; funs;
-        """).asInstanceOf[js.Dynamic]
+    val charAsAny: Any = foo.bar(65)
+    assertTrue(charAsAny.isInstanceOf[Character])
+    assertEquals("A", charAsAny.toString())
 
-    assertTrue(funs.testIsChar(JSUtils, foo).asInstanceOf[Boolean])
-    assertEquals("A", funs.testCharValue(JSUtils, foo))
+    /* Do not use `assertEquals` otherwise it would re-box the Char, defeating
+     * the purpose of this test.
+     */
+    assertTrue('A' == charAsAny.asInstanceOf[Char])
   }
 
-  @Test def should_take_boxed_Chars_as_parameter(): Unit = {
+  @Test def boxedCharsAsParameter(): Unit = {
     class Foo {
       @JSExport
       def bar(x: Char): Int = x.toInt
     }
     val foo = (new Foo).asInstanceOf[js.Dynamic]
 
-    val f = js.eval("""
-        var f = function(JSUtils, foo) { return foo.bar(JSUtils.stringToChar('e')); };
-        f;
-        """).asInstanceOf[js.Dynamic]
-
-    assertEquals('e'.toInt, f(JSUtils, foo))
+    @noinline def eCharAsAny: Any = Character.valueOf('e')
+    assertEquals('e'.toInt, foo.bar(eCharAsAny.asInstanceOf[js.Any]))
   }
 
-  @Test def should_be_able_to_disambiguate_an_Int_from_a_Char(): Unit = {
+  @Test def distinguishIntFromChar(): Unit = {
     class Foo {
       @JSExport
-      def bar(x: Char): String = "char: "+x
+      def bar(x: Char): String = "char: " + x
       @JSExport
-      def bar(x: Int): String = "int: "+x
+      def bar(x: Int): String = "int: " + x
     }
     val foo = (new Foo).asInstanceOf[js.Dynamic]
 
-    val funs = js.eval("""
-        var funs = {
-          testChar: function(JSUtils, foo) { return foo.bar(JSUtils.stringToChar('S')); },
-          testInt: function(foo) { return foo.bar(68); }
-        }; funs;
-        """).asInstanceOf[js.Dynamic]
+    @noinline def charAsAny: Any = Character.valueOf('S')
+    assertEquals("char: S", foo.bar(charAsAny.asInstanceOf[js.Any]))
 
-    assertEquals("char: S", funs.testChar(JSUtils, foo))
-    assertEquals("int: 68", funs.testInt(foo))
+    @noinline def intAsAny: Any = Integer.valueOf(68)
+    assertEquals("int: 68", foo.bar(intAsAny.asInstanceOf[js.Any]))
   }
 
-  @Test def exporting_constructor_parameter_fields_issue_970(): Unit = {
+  @Test def exportingConstructorParameterFields_Issue970(): Unit = {
     class Foo(@JSExport val x: Int, @JSExport var y: Int)
 
     val foo = new Foo(5, 6).asInstanceOf[js.Dynamic]
@@ -957,7 +1164,7 @@ class ExportsTest {
     assertEquals(7, foo.y)
   }
 
-  @Test def exporting_case_class_fields_issue_970(): Unit = {
+  @Test def exportingCaseClassFields_Issue970(): Unit = {
     case class Bar(@JSExport x: Int, @JSExport var y: Int)
 
     val bar = Bar(5, 6).asInstanceOf[js.Dynamic]
@@ -967,7 +1174,7 @@ class ExportsTest {
     assertEquals(7, bar.y)
   }
 
-  @Test def exporting_lazy_values_issue_977(): Unit = {
+  @Test def exportingLazyValues_Issue977(): Unit = {
     class Foo {
       @JSExport
       lazy val x = 1
@@ -976,7 +1183,7 @@ class ExportsTest {
     assertEquals(1, foo.x)
   }
 
-  @Test def exporting_all_members_of_a_class(): Unit = {
+  @Test def exportingAllMembersOfClass(): Unit = {
     @JSExportAll
     class Foo {
       val a = 1
@@ -986,17 +1193,31 @@ class ExportsTest {
 
       lazy val c = 3
 
-      class Bar // not exported, but should not fail
+      object d
+
+      // Classes should not be exported automatically.
+      class Bar
+      class JSBar extends js.Object
+      abstract class AbstractBar
+      abstract class JSAbstractBar extends js.Object
+      trait Baz
     }
 
-    val foo = (new Foo).asInstanceOf[js.Dynamic]
+    val scalaFoo = new Foo
+    val jsFoo = scalaFoo.asInstanceOf[js.Dynamic]
 
-    assertEquals(1, foo.a)
-    assertEquals(2, foo.b)
-    assertEquals(3, foo.c)
+    assertEquals(1, jsFoo.a)
+    assertEquals(2, jsFoo.b)
+    assertEquals(3, jsFoo.c)
+    assertSame(scalaFoo.d, jsFoo.d)
+    assertJSUndefined(jsFoo.Bar)
+    assertJSUndefined(jsFoo.JSBar)
+    assertJSUndefined(jsFoo.AbstractBar)
+    assertJSUndefined(jsFoo.JSAbstractBar)
+    assertJSUndefined(jsFoo.Baz)
   }
 
-  @Test def should_not_export_synthetic_members_with_atJSExportAll_issue_1195(): Unit = {
+  @Test def noExportOfSyntheticMembersWithJSExportAll_Issue1195(): Unit = {
     @JSExportAll
     case class Foo(x: Int)
 
@@ -1006,7 +1227,7 @@ class ExportsTest {
     assertJSUndefined(foo.copy)
   }
 
-  @Test def should_allow_mutliple_equivalent_JSExport_annotations(): Unit = {
+  @Test def multipleEquivalentJSExportAnnotations(): Unit = {
     class Foo {
       @JSExport
       @JSExport("a")
@@ -1020,7 +1241,7 @@ class ExportsTest {
     assertEquals(1, foo.b)
   }
 
-  @Test def null_for_arguments_of_primitive_value_type_issue_1719(): Unit = {
+  @Test def nullForArgumentsOfPrimitiveValueType_Issue1719(): Unit = {
     @JSExportAll
     class Foo {
       def doBool(x: Boolean): Unit = assertTrue((x: Any) == false) // scalastyle:ignore
@@ -1047,7 +1268,7 @@ class ExportsTest {
     foo.doUnit(null)
   }
 
-  @Test def should_reject_bad_values_for_arguments_of_primitive_value_type(): Unit = {
+  @Test def throwOnBadValuesForArgumentsOfPrimitiveValueType(): Unit = {
     assumeTrue("Assumed compliant asInstanceOf", hasCompliantAsInstanceOfs)
 
     @JSExportAll
@@ -1099,7 +1320,7 @@ class ExportsTest {
     assertThrows(classOf[Exception], foo.doFloat("a"))
   }
 
-  @Test def should_reject_bad_values_for_arguments_of_value_class_type_issue_613(): Unit = {
+  @Test def throwOnBadValuesForArgumentsOfValueClassType_Issue613(): Unit = {
     assumeTrue("Assumed compliant asInstanceOf", hasCompliantAsInstanceOfs)
 
     class Foo {
@@ -1115,7 +1336,7 @@ class ExportsTest {
     assertThrows(classOf[Exception], foo.doVC("a"))
   }
 
-  @Test def should_reject_bad_values_for_arguments_of_class_type(): Unit = {
+  @Test def throwOnBadValuesForArgumentsOfClassType(): Unit = {
     assumeTrue("Assumed compliant asInstanceOf", hasCompliantAsInstanceOfs)
 
     class A
@@ -1135,7 +1356,7 @@ class ExportsTest {
 
   private abstract class JSAbstractClass extends js.Object
 
-  @Test def should_expose_public_members_of_new_js_Object_issue_1899(): Unit = {
+  @Test def exposePublicMembersOfNewJSObject_Issue1899(): Unit = {
 
     // Test that the bug is fixed for js.Any classes.
 
@@ -1241,334 +1462,83 @@ class ExportsTest {
     testExposure(getJSObj2())
     testExposure(getJSObj3())
     testExposure(getJSObj4())
-
-    // Test that non js.Any classes were unaffected by the fix.
-
-    def getObj(): AnyRef = new {
-      val x1 = "x1"
-      var y1 = "y1"
-      def z1() = "z1"
-      private val x2 = "x2"
-      private var y2 = "y2"
-      private def z2() = "z2"
-      private[this] val x3 = "x3"
-      private[this] var y3 = "y3"
-      private[this] def z3() = "z3"
-    }
-
-    import scala.language.reflectiveCalls
-
-    val obj2 = getObj().asInstanceOf[{ val x1: String; var y1: String; def z1(): String }]
-
-    assertThrows(classOf[Throwable], obj2.x1)
-    assertThrows(classOf[Throwable], obj2.y1)
-    assertThrows(classOf[Throwable], obj2.y1 = "y1+")
-    assertThrows(classOf[Throwable], obj2.z1)
   }
+}
 
-  // @JSExportTopLevel
-
-  @Test def basic_top_level_export(): Unit = {
-    if (isNoModule) {
-      assertEquals(1, global.TopLevelExport_basic())
-    } else {
-      assertEquals(1, exportsNamespace.TopLevelExport_basic())
-    }
+object ExportsTest {
+  @BeforeClass
+  def beforeClass(): Unit = {
+    assumeTrue(
+        "@JSExport and @JSExportAll are not supported on WebAssembly without custom descriptors",
+        hasJSExportsAndJSPrototypes)
   }
-
-  @Test def overloaded_top_level_export(): Unit = {
-    if (isNoModule) {
-      assertEquals("Hello World", global.TopLevelExport_overload("World"))
-      assertEquals(2, global.TopLevelExport_overload(2))
-      assertEquals(9, global.TopLevelExport_overload(2, 7))
-      assertEquals(10, global.TopLevelExport_overload(1, 2, 3, 4))
-    } else {
-      assertEquals("Hello World", exportsNamespace.TopLevelExport_overload("World"))
-      assertEquals(2, exportsNamespace.TopLevelExport_overload(2))
-      assertEquals(9, exportsNamespace.TopLevelExport_overload(2, 7))
-      assertEquals(10, exportsNamespace.TopLevelExport_overload(1, 2, 3, 4))
-    }
-  }
-
-  @Test def top_level_export_uses_unique_object(): Unit = {
-    if (isNoModule) {
-      global.TopLevelExport_set(3)
-      assertEquals(3, TopLevelExports.myVar)
-      global.TopLevelExport_set(7)
-      assertEquals(7, TopLevelExports.myVar)
-    } else {
-      exportsNamespace.TopLevelExport_set(3)
-      assertEquals(3, TopLevelExports.myVar)
-      exportsNamespace.TopLevelExport_set(7)
-      assertEquals(7, TopLevelExports.myVar)
-    }
-  }
-
-  @Test def top_level_export_from_nested_object(): Unit = {
-    if (isNoModule)
-      global.TopLevelExport_setNested(28)
-    else
-      exportsNamespace.TopLevelExport_setNested(28)
-    assertEquals(28, TopLevelExports.Nested.myVar)
-  }
-
-  @Test def top_level_export_with_double_underscore(): Unit = {
-    if (isNoModule) {
-      assertEquals(true, global.__topLevelExportWithDoubleUnderscore)
-    } else {
-      assertEquals(true, exportsNamespace.__topLevelExportWithDoubleUnderscore)
-    }
-  }
-
-  @Test def top_level_export_is_always_reachable(): Unit = {
-    if (isNoModule) {
-      assertEquals("Hello World", global.TopLevelExport_reachability())
-    } else {
-      assertEquals("Hello World", exportsNamespace.TopLevelExport_reachability())
-    }
-  }
-
-  // @JSExportTopLevel fields
-
-  @Test def top_level_export_basic_field(): Unit = {
-    if (isNoModule) {
-      // Initialization
-      assertEquals(5, global.TopLevelExport_basicVal)
-      assertEquals("hello", global.TopLevelExport_basicVar)
-
-      // Scala modifies var
-      TopLevelFieldExports.basicVar = "modified"
-      assertEquals("modified", TopLevelFieldExports.basicVar)
-      assertEquals("modified", global.TopLevelExport_basicVar)
-    } else {
-      // Initialization
-      assertEquals(5, exportsNamespace.TopLevelExport_basicVal)
-      assertEquals("hello", exportsNamespace.TopLevelExport_basicVar)
-
-      // Scala modifies var
-      TopLevelFieldExports.basicVar = "modified"
-      assertEquals("modified", TopLevelFieldExports.basicVar)
-      assertEquals("modified", exportsNamespace.TopLevelExport_basicVar)
-    }
-
-    // Reset var
-    TopLevelFieldExports.basicVar = "hello"
-  }
-
-  @Test def top_level_export_field_twice(): Unit = {
-    if (isNoModule) {
-      // Initialization
-      assertEquals(5, global.TopLevelExport_valExportedTwice1)
-      assertEquals("hello", global.TopLevelExport_varExportedTwice1)
-      assertEquals("hello", global.TopLevelExport_varExportedTwice2)
-
-      // Scala modifies var
-      TopLevelFieldExports.varExportedTwice = "modified"
-      assertEquals("modified", TopLevelFieldExports.varExportedTwice)
-      assertEquals("modified", global.TopLevelExport_varExportedTwice1)
-      assertEquals("modified", global.TopLevelExport_varExportedTwice2)
-    } else {
-      // Initialization
-      assertEquals(5, exportsNamespace.TopLevelExport_valExportedTwice1)
-      assertEquals("hello", exportsNamespace.TopLevelExport_varExportedTwice1)
-      assertEquals("hello", exportsNamespace.TopLevelExport_varExportedTwice2)
-
-      // Scala modifies var
-      TopLevelFieldExports.varExportedTwice = "modified"
-      assertEquals("modified", TopLevelFieldExports.varExportedTwice)
-      assertEquals("modified", exportsNamespace.TopLevelExport_varExportedTwice1)
-      assertEquals("modified", exportsNamespace.TopLevelExport_varExportedTwice2)
-    }
-
-    // Reset var
-    TopLevelFieldExports.varExportedTwice = "hello"
-  }
-
-  @Test def top_level_export_write_val_var_causes_typeerror(): Unit = {
-    assumeFalse("Unchecked in Script mode", isNoModule)
-
-    assertThrows(classOf[js.JavaScriptException], {
-      exportsNamespace.TopLevelExport_basicVal = 54
-    })
-
-    assertThrows(classOf[js.JavaScriptException], {
-      exportsNamespace.TopLevelExport_basicVar = 54
-    })
-  }
-
-  @Test def top_level_export_uninitialized_fields(): Unit = {
-    assertEquals(0, TopLevelFieldExports.uninitializedVarInt)
-    assertEquals(0L, TopLevelFieldExports.uninitializedVarLong)
-    assertEquals(null, TopLevelFieldExports.uninitializedVarString)
-    assertEquals('\u0000', TopLevelFieldExports.uninitializedVarChar)
-
-    if (isNoModule) {
-      assertEquals(null, global.TopLevelExport_uninitializedVarInt)
-      assertEquals(null, global.TopLevelExport_uninitializedVarLong)
-      assertEquals(null, global.TopLevelExport_uninitializedVarString)
-      assertEquals(null, global.TopLevelExport_uninitializedVarChar)
-    } else {
-      assertEquals(null, exportsNamespace.TopLevelExport_uninitializedVarInt)
-      assertEquals(null, exportsNamespace.TopLevelExport_uninitializedVarLong)
-      assertEquals(null, exportsNamespace.TopLevelExport_uninitializedVarString)
-      assertEquals(null, exportsNamespace.TopLevelExport_uninitializedVarChar)
-    }
-  }
-
-  @Test def top_level_export_field_is_always_reachable_and_initialized(): Unit = {
-    if (isNoModule) {
-      assertEquals("Hello World", global.TopLevelExport_fieldreachability)
-    } else {
-      assertEquals("Hello World", exportsNamespace.TopLevelExport_fieldreachability)
-    }
-  }
-
 }
 
 object ExportNameHolder {
-  final val className = "ConstantFoldedClassExport"
-  final val objectName = "ConstantFoldedObjectExport"
   final val methodName = "myMethod"
-}
-
-@JSExportTopLevel("TopLevelExportedObject")
-@JSExportTopLevel(ExportNameHolder.objectName)
-object TopLevelExportedObject {
-  @JSExport
-  val witness: String = "witness"
-}
-
-@JSExportTopLevel("SJSDefinedTopLevelExportedObject")
-object SJSDefinedExportedObject extends js.Object {
-  val witness: String = "witness"
-}
-
-@JSExportTopLevel("ProtectedExportedObject")
-protected object ProtectedExportedObject {
-  @JSExport
-  def witness: String = "witness"
-}
-
-@JSExportTopLevel("TopLevelExportedClass")
-@JSExportTopLevel(ExportNameHolder.className)
-class TopLevelExportedClass(_x: Int) {
-  @JSExport
-  val x = _x
-}
-
-@JSExportTopLevel("SJSDefinedTopLevelExportedClass")
-class SJSDefinedTopLevelExportedClass(val x: Int) extends js.Object
-
-@JSExportTopLevel("ProtectedExportedClass")
-protected class ProtectedExportedClass(_x: Int) {
-  @JSExport
-  val x = _x
-}
-
-@JSExportTopLevel("ExportedVarArgClass")
-class ExportedVarArgClass(x: String*) {
-
-  @JSExportTopLevel("ExportedVarArgClass")
-  def this(x: Int, y: String) = this(s"Number: <$x>", y)
-
-  @JSExport
-  def result: String = x.mkString("|")
-}
-
-@JSExportTopLevel("ExportedDefaultArgClass")
-class ExportedDefaultArgClass(x: Int, y: Int, z: Int) {
-
-  @JSExportTopLevel("ExportedDefaultArgClass")
-  def this(x: Int, y: Int = 5) = this(x, y, 100)
-
-  @JSExport
-  def result: Int = x + y + z
 }
 
 class SomeValueClass(val i: Int) extends AnyVal
 
-object ExportHolder {
-  @JSExportTopLevel("NestedExportedClass")
-  class ExportedClass
+class ValueClassWithExports(val value: Int) extends AnyVal {
+  @JSExport("add")
+  def addToValue(x: Int): Int = value + x
 
-  @JSExportTopLevel("NestedExportedObject")
-  object ExportedObject
-
-  @JSExportTopLevel("NestedSJSDefinedExportedClass")
-  class SJSDefinedExportedClass extends js.Object
+  override def toString(): String = s"ValueClassWithExports(value = $value)"
 }
 
-object TopLevelExports {
-  @JSExportTopLevel("TopLevelExport_basic")
-  def basic(): Int = 1
+abstract class AbstractClasstWithPropertyForExport {
+  @JSExport
+  def x: js.Object
+}
 
-  @JSExportTopLevel("TopLevelExport_overload")
-  def overload(x: String): String = "Hello " + x
+object StaticObjectWithObjectForExportFromAbstractClass
+    extends AbstractClasstWithPropertyForExport {
+  object x extends js.Object {
+    val y = 1
+  }
+}
 
-  @JSExportTopLevel("TopLevelExport_overload")
-  def overload(x: Int, y: Int*): Int = x + y.sum
+trait TraitWithPropertyForExport {
+  @JSExport
+  def x: js.Object
+}
 
-  var myVar: Int = _
+object StaticObjectWithObjectForExportFromTrait extends TraitWithPropertyForExport {
+  object x extends js.Object {
+    val y = 1
+  }
+}
 
-  @JSExportTopLevel("TopLevelExport_set")
-  def setMyVar(x: Int): Unit = myVar = x
+object StaticObjectWithNestedClasses {
+  val x = 2
 
-  object Nested {
-    var myVar: Int = _
+  @JSExport
+  class Nested(y: Int) {
+    @JSExport
+    def this() = this(2)
 
-    @JSExportTopLevel("TopLevelExport_setNested")
-    def setMyVar(x: Int): Unit = myVar = x
+    @JSExport
+    def witness: Int = x + y
   }
 
-  @JSExportTopLevel("__topLevelExportWithDoubleUnderscore")
-  val topLevelExportWithDoubleUnderscore: Boolean = true
+  @JSExport
+  class Nested2(y: Int) extends js.Object {
+    def witness: Int = x + y
+  }
 }
 
-/* This object is only reachable via the top level export to make sure the
- * analyzer behaves correctly.
- */
-object TopLevelExportsReachability {
-  private val name = "World"
+object StaticObjectWithNestedObjects {
+  val x: Int = 1
 
-  @JSExportTopLevel("TopLevelExport_reachability")
-  def basic(): String = "Hello " + name
-}
+  @JSExport
+  object obj {
+    @JSExport
+    def witness: Int = x + 1
+  }
 
-object TopLevelFieldExports {
-  @JSExportTopLevel("TopLevelExport_basicVal")
-  val basicVal: Int = 5
-
-  @JSExportTopLevel("TopLevelExport_basicVar")
-  var basicVar: String = "hello"
-
-  @JSExportTopLevel("TopLevelExport_valExportedTwice1")
-  @JSExportTopLevel("TopLevelExport_valExportedTwice2")
-  val valExportedTwice: Int = 5
-
-  @JSExportTopLevel("TopLevelExport_varExportedTwice1")
-  @JSExportTopLevel("TopLevelExport_varExportedTwice2")
-  var varExportedTwice: String = "hello"
-
-  @JSExportTopLevel("TopLevelExport_uninitializedVarInt")
-  var uninitializedVarInt: Int = _
-
-  @JSExportTopLevel("TopLevelExport_uninitializedVarLong")
-  var uninitializedVarLong: Long = _
-
-  @JSExportTopLevel("TopLevelExport_uninitializedVarString")
-  var uninitializedVarString: String = _
-
-  @JSExportTopLevel("TopLevelExport_uninitializedVarChar")
-  var uninitializedVarChar: Char = _
-}
-
-/* This object and its static initializer are only reachable via the top-level
- * export of its field, to make sure the analyzer and the static initiliazer
- * behave correctly.
- */
-object TopLevelFieldExportsReachability {
-  private val name = "World"
-
-  @JSExportTopLevel("TopLevelExport_fieldreachability")
-  val greeting = "Hello " + name
+  @JSExport
+  object jsObj extends js.Object {
+    def witness: Int = x + 1
+  }
 }

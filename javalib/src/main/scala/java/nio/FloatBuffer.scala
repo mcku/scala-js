@@ -17,8 +17,10 @@ import scala.scalajs.js.typedarray._
 object FloatBuffer {
   private final val HashSeed = 1920204022 // "java.nio.FloatBuffer".##
 
-  def allocate(capacity: Int): FloatBuffer =
+  def allocate(capacity: Int): FloatBuffer = {
+    BoundsChecks.checkCapacity(capacity)
     wrap(new Array[Float](capacity))
+  }
 
   def wrap(array: Array[Float], offset: Int, length: Int): FloatBuffer =
     HeapFloatBuffer.wrap(array, 0, array.length, offset, length, false)
@@ -28,8 +30,8 @@ object FloatBuffer {
 
   // Extended API
 
-  def wrap(array: Float32Array): FloatBuffer =
-    TypedArrayFloatBuffer.wrap(array)
+  def wrapFloat32Array(array: Float32Array): FloatBuffer =
+    TypedArrayFloatBuffer.wrapFloat32Array(array)
 }
 
 abstract class FloatBuffer private[nio] (
@@ -136,7 +138,7 @@ abstract class FloatBuffer private[nio] (
 
   @noinline
   def compareTo(that: FloatBuffer): Int =
-    GenBuffer(this).generic_compareTo(that)(_.compareTo(_))
+    GenBuffer(this).generic_compareTo(that)(java.lang.Float.compare(_, _))
 
   def order(): ByteOrder
 
@@ -148,11 +150,13 @@ abstract class FloatBuffer private[nio] (
 
   @inline
   private[nio] def load(startIndex: Int,
-      dst: Array[Float], offset: Int, length: Int): Unit =
+      dst: Array[Float], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   private[nio] def store(startIndex: Int,
-      src: Array[Float], offset: Int, length: Int): Unit =
+      src: Array[Float], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }

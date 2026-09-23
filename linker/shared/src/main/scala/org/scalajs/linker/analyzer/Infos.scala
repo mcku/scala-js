@@ -15,239 +15,243 @@ package org.scalajs.linker.analyzer
 import scala.collection.mutable
 
 import org.scalajs.ir.ClassKind
-import org.scalajs.ir.Definitions._
+import org.scalajs.ir.Names._
 import org.scalajs.ir.Traversers._
 import org.scalajs.ir.Trees._
 import org.scalajs.ir.Types._
+import org.scalajs.ir.Version
+import org.scalajs.ir.WellKnownNames._
 
-import org.scalajs.linker.backend.emitter.Transients._
+import org.scalajs.linker.frontend.{LinkTimeEvaluator, LinkTimeProperties, SyntheticClassKind}
+import org.scalajs.linker.standard.ModuleSet.ModuleID
 
 object Infos {
 
-  /** Name used for infos of top-level exports. */
-  private val TopLevelExportsName = "__topLevelExports"
+  private val StringArgConstructorName =
+    MethodName.constructor(List(ClassRef(BoxedStringClass)))
 
-  final case class NamespacedEncodedName(
-      namespace: MemberNamespace, encodedName: String)
+  private val cloneMethodName = MethodName("clone", Nil, ClassRef(ObjectClass))
 
-  final class ClassInfo private (
-      val encodedName: String,
-      val isExported: Boolean,
+  /* Elements of WrapAsThrowable and UnwrapFromThrowable used by the Emitter
+   * In theory, these should be an implementation detail of the Emitter, and
+   * requested through `symbolRequirements`. However, doing so would mean that
+   * we would never be able to dead-code-eliminate JavaScriptException, which
+   * would be annoying.
+   */
+  private val JavaScriptExceptionClass = ClassName("scala.scalajs.js.JavaScriptException")
+  private val AnyArgConstructorName = MethodName.constructor(List(ClassRef(ObjectClass)))
+
+  final case class NamespacedMethodName(
+      namespace: MemberNamespace, methodName: MethodName)
+
+  final class ClassInfo(
+      val className: ClassName,
       val kind: ClassKind,
-      val superClass: Option[String], // always None for interfaces
-      val interfaces: List[String], // direct parent interfaces only
-      val referencedFieldClasses: List[String],
-      val methods: List[MethodInfo],
-      val topLevelExportNames: List[String]
-  ) {
-    override def toString(): String = encodedName
-  }
-
-  object ClassInfo {
-    def apply(
-        encodedName: String,
-        isExported: Boolean = false,
-        kind: ClassKind = ClassKind.Class,
-        superClass: Option[String] = None,
-        interfaces: List[String] = Nil,
-        referencedFieldClasses: List[String] = Nil,
-        methods: List[MethodInfo] = Nil,
-        topLevelExportNames: List[String] = Nil): ClassInfo = {
-      new ClassInfo(encodedName, isExported, kind, superClass,
-          interfaces, referencedFieldClasses, methods, topLevelExportNames)
-    }
-  }
-
-  final class MethodInfo private (
-      val encodedName: String,
-      val namespace: MemberNamespace,
-      val isAbstract: Boolean,
-      val isExported: Boolean,
-      val staticFieldsRead: Map[String, List[String]],
-      val staticFieldsWritten: Map[String, List[String]],
-      val methodsCalled: Map[String, List[String]],
-      val methodsCalledStatically: Map[String, List[NamespacedEncodedName]],
-      /** For a Scala class, it is instantiated with a `New`; for a JS class,
-       *  its constructor is accessed with a `JSLoadConstructor`.
+      val syntheticKind: Option[SyntheticClassKind],
+      val nonExistent: Boolean,
+      val superClass: Option[ClassName], // always None for interfaces
+      val interfaces: List[ClassName], // direct parent interfaces only
+      val jsNativeLoadSpec: Option[JSNativeLoadSpec],
+      /* Referenced classes of non-static fields.
+       *
+       * Note that the classes referenced by static fields are reached
+       * implicitly by the call-sites that read or write the field: the
+       * SelectStatic expression has the same type as the field.
+       *
+       * Further, note that some existing fields might not appear in this map:
+       * This happens when they have non-class type (e.g. Int)
        */
-      val instantiatedClasses: List[String],
-      val accessedModules: List[String],
-      val usedInstanceTests: List[String],
-      val accessedClassData: List[String],
-      val referencedClasses: List[String]
+      val referencedFieldClasses: Map[FieldName, ClassName],
+      val methods: Array[Map[MethodName, MethodInfo]],
+      val jsNativeMembers: Map[MethodName, JSNativeLoadSpec],
+      val jsMethodProps: List[ReachabilityInfo],
+      val topLevelExports: List[TopLevelExportInfo]
   ) {
-    override def toString(): String = encodedName
+    override def toString(): String = className.nameString
   }
+
+  /* MethodInfo should contain, not be a ReachbilityInfo
+   *
+   * However, since this class is retained over multiple linker runs in the
+   * cache, the shallow size of the object shows up in memory performance
+   * profiles. Therefore, we (ab)use inheritance to lower the memory overhead.
+   */
+  final class MethodInfo private (
+      val isAbstract: Boolean,
+      version: Version,
+      byClass: Array[ReachabilityInfoInClass],
+      lambdaDescriptorsUsed: Array[NewLambda.Descriptor],
+      globalFlags: ReachabilityInfo.Flags,
+      referencedLinkTimeProperties: Array[(String, Type)]
+  ) extends ReachabilityInfo(version, byClass, lambdaDescriptorsUsed,
+          globalFlags, referencedLinkTimeProperties)
 
   object MethodInfo {
-    def apply(
-        encodedName: String,
-        namespace: MemberNamespace,
-        isAbstract: Boolean,
-        isExported: Boolean,
-        staticFieldsRead: Map[String, List[String]],
-        staticFieldsWritten: Map[String, List[String]],
-        methodsCalled: Map[String, List[String]],
-        methodsCalledStatically: Map[String, List[NamespacedEncodedName]],
-        instantiatedClasses: List[String],
-        accessedModules: List[String],
-        usedInstanceTests: List[String],
-        accessedClassData: List[String],
-        referencedClasses: List[String]): MethodInfo = {
-      new MethodInfo(encodedName, namespace, isAbstract, isExported,
-          staticFieldsRead, staticFieldsWritten, methodsCalled,
-          methodsCalledStatically, instantiatedClasses, accessedModules,
-          usedInstanceTests, accessedClassData, referencedClasses)
+    def apply(isAbstract: Boolean, reachabilityInfo: ReachabilityInfo): MethodInfo = {
+      import reachabilityInfo._
+      new MethodInfo(isAbstract, version, byClass, lambdaDescriptorsUsed,
+          globalFlags, referencedLinkTimeProperties)
     }
   }
 
-  final class ClassInfoBuilder {
-    private var encodedName: String = ""
-    private var kind: ClassKind = ClassKind.Class
-    private var isExported: Boolean = false
-    private var superClass: Option[String] = None
-    private val interfaces = mutable.ListBuffer.empty[String]
-    private val referencedFieldClasses = mutable.Set.empty[String]
-    private val methods = mutable.ListBuffer.empty[MethodInfo]
-    private var topLevelExportNames: List[String] = Nil
+  final class TopLevelExportInfo private[Infos] (
+      val reachability: ReachabilityInfo,
+      val moduleID: ModuleID,
+      val exportName: String
+  )
 
-    def setEncodedName(encodedName: String): this.type = {
-      this.encodedName = encodedName
-      this
-    }
+  sealed class ReachabilityInfo private[Infos] (
+      /* The version field does not belong here conceptually.
+       * However, it helps the InfoLoader re-use previous infos without
+       * additional data held in memory.
+       * This reduces the memory we need to cache infos between incremental runs.
+       */
+      val version: Version,
+      val byClass: Array[ReachabilityInfoInClass],
+      val lambdaDescriptorsUsed: Array[NewLambda.Descriptor],
+      val globalFlags: ReachabilityInfo.Flags,
+      val referencedLinkTimeProperties: Array[(String, Type)]
+  )
 
-    def setKind(kind: ClassKind): this.type = {
-      this.kind = kind
-      this
-    }
+  object ReachabilityInfo {
+    type Flags = Int
 
-    def setIsExported(isExported: Boolean): this.type = {
-      this.isExported = isExported
-      this
-    }
-
-    def setSuperClass(superClass: Option[String]): this.type = {
-      this.superClass = superClass
-      this
-    }
-
-    def addInterface(interface: String): this.type = {
-      interfaces += interface
-      this
-    }
-
-    def addInterfaces(interfaces: List[String]): this.type = {
-      this.interfaces ++= interfaces
-      this
-    }
-
-    def maybeAddReferencedFieldClass(tpe: Type): this.type = {
-      tpe match {
-        case ClassType(cls)                   => referencedFieldClasses += cls
-        case ArrayType(ArrayTypeRef(base, _)) => referencedFieldClasses += base
-        case _                                =>
-      }
-
-      this
-    }
-
-    def addMethod(methodInfo: MethodInfo): this.type = {
-      methods += methodInfo
-      this
-    }
-
-    def setTopLevelExportNames(names: List[String]): this.type = {
-      topLevelExportNames = names
-      this
-    }
-
-    def result(): ClassInfo = {
-      ClassInfo(encodedName, isExported, kind, superClass,
-          interfaces.toList, referencedFieldClasses.toList, methods.toList,
-          topLevelExportNames)
-    }
+    final val FlagAccessedClassClass = 1 << 0
+    final val FlagAccessedNewTarget = 1 << 1
+    final val FlagAccessedImportMeta = 1 << 2
+    final val FlagUsedExponentOperator = 1 << 3
+    final val FlagUsedAsync = 1 << 4
+    final val FlagUsedOrphanAwait = 1 << 5
+    final val FlagUsedClassSuperClass = 1 << 6
+    final val FlagNeedsDesugaring = 1 << 7
   }
 
-  final class MethodInfoBuilder {
-    private var encodedName: String = ""
-    private var namespace: MemberNamespace = MemberNamespace.Public
-    private var isAbstract: Boolean = false
-    private var isExported: Boolean = false
+  /** Things from a given class that are reached by one method. */
+  final class ReachabilityInfoInClass private[Infos] (
+      val className: ClassName,
+      /* We use a single field for all members to reduce memory consumption:
+       * Typically, there are very few members reached in a single
+       * ReachabilityInfoInClass, so the overhead of having a field per type
+       * becomes significant in terms of memory usage.
+       */
+      val memberInfos: Array[MemberReachabilityInfo],
+      val flags: ReachabilityInfoInClass.Flags
+  )
 
-    private val staticFieldsRead = mutable.Map.empty[String, mutable.Set[String]]
-    private val staticFieldsWritten = mutable.Map.empty[String, mutable.Set[String]]
-    private val methodsCalled = mutable.Map.empty[String, mutable.Set[String]]
-    private val methodsCalledStatically = mutable.Map.empty[String, mutable.Set[NamespacedEncodedName]]
-    private val instantiatedClasses = mutable.Set.empty[String]
-    private val accessedModules = mutable.Set.empty[String]
-    private val usedInstanceTests = mutable.Set.empty[String]
-    private val accessedClassData = mutable.Set.empty[String]
-    private val referencedClasses = mutable.Set.empty[String]
+  object ReachabilityInfoInClass {
+    type Flags = Int
 
-    def setEncodedName(encodedName: String): this.type = {
-      this.encodedName = encodedName
+    /** For a Scala class, it is instantiated with a `New`; for a JS class,
+     *  its constructor is accessed with a `JSLoadConstructor`.
+     */
+    final val FlagInstantiated = 1 << 0
+
+    final val FlagModuleAccessed = 1 << 1
+    final val FlagInstanceTestsUsed = 1 << 2
+    final val FlagClassDataAccessed = 1 << 3
+    final val FlagStaticallyReferenced = 1 << 4
+    final val FlagDynamicallyReferenced = 1 << 5
+  }
+
+  sealed trait MemberReachabilityInfo
+
+  private object MemberReachabilityInfo {
+    val EmptyArray: Array[MemberReachabilityInfo] = new Array(0)
+  }
+
+  final case class FieldReachable private[Infos] (
+      val fieldName: FieldName,
+      val read: Boolean = false,
+      val written: Boolean = false
+  ) extends MemberReachabilityInfo
+
+  final case class StaticFieldReachable private[Infos] (
+      val fieldName: FieldName,
+      val read: Boolean = false,
+      val written: Boolean = false
+  ) extends MemberReachabilityInfo
+
+  final case class MethodReachable private[Infos] (
+      val methodName: MethodName
+  ) extends MemberReachabilityInfo
+
+  final case class MethodStaticallyReachable private[Infos] (
+      val namespace: MemberNamespace,
+      val methodName: MethodName
+  ) extends MemberReachabilityInfo
+
+  object MethodStaticallyReachable {
+    private[Infos] def apply(m: NamespacedMethodName): MethodStaticallyReachable =
+      MethodStaticallyReachable(m.namespace, m.methodName)
+  }
+
+  final case class JSNativeMemberReachable private[Infos] (
+      val methodName: MethodName
+  ) extends MemberReachabilityInfo
+
+  final class ReachabilityInfoBuilder(version: Version) {
+    import ReachabilityInfoBuilder._
+    private val byClass = mutable.Map.empty[ClassName, ReachabilityInfoInClassBuilder]
+    private val lambdaDescriptorsUsed = mutable.Set.empty[NewLambda.Descriptor]
+    private var flags: ReachabilityInfo.Flags = 0
+    private val linkTimeProperties = mutable.ListBuffer.empty[(String, Type)]
+
+    private def forClass(cls: ClassName): ReachabilityInfoInClassBuilder =
+      byClass.getOrElseUpdate(cls, new ReachabilityInfoInClassBuilder(cls))
+
+    def addFieldRead(field: FieldName): this.type = {
+      forClass(field.className).addFieldRead(field)
       this
     }
 
-    def setNamespace(namespace: MemberNamespace): this.type = {
-      this.namespace = namespace
+    def addFieldWritten(field: FieldName): this.type = {
+      forClass(field.className).addFieldWritten(field)
       this
     }
 
-    def setIsAbstract(isAbstract: Boolean): this.type = {
-      this.isAbstract = isAbstract
+    def addStaticFieldRead(field: FieldName): this.type = {
+      forClass(field.className).addStaticFieldRead(field)
       this
     }
 
-    def setIsExported(isExported: Boolean): this.type = {
-      this.isExported = isExported
+    def addStaticFieldWritten(field: FieldName): this.type = {
+      forClass(field.className).addStaticFieldWritten(field)
       this
     }
 
-    def addStaticFieldRead(cls: String, field: String): this.type = {
-      staticFieldsRead.getOrElseUpdate(cls, mutable.Set.empty) += field
-      this
-    }
-
-    def addStaticFieldWritten(cls: String, field: String): this.type = {
-      staticFieldsWritten.getOrElseUpdate(cls, mutable.Set.empty) += field
-      this
-    }
-
-    def addMethodCalled(receiverTpe: Type, method: String): this.type = {
+    def addMethodCalled(receiverTpe: Type, method: MethodName): this.type = {
       receiverTpe match {
-        case ClassType(cls) => addMethodCalled(cls, method)
-        case AnyType        => addMethodCalled(ObjectClass, method)
-        case UndefType      => addMethodCalled(BoxedUnitClass, method)
-        case BooleanType    => addMethodCalled(BoxedBooleanClass, method)
-        case CharType       => addMethodCalled(BoxedCharacterClass, method)
-        case ByteType       => addMethodCalled(BoxedByteClass, method)
-        case ShortType      => addMethodCalled(BoxedShortClass, method)
-        case IntType        => addMethodCalled(BoxedIntegerClass, method)
-        case LongType       => addMethodCalled(BoxedLongClass, method)
-        case FloatType      => addMethodCalled(BoxedFloatClass, method)
-        case DoubleType     => addMethodCalled(BoxedDoubleClass, method)
-        case StringType     => addMethodCalled(BoxedStringClass, method)
+        case ClassType(cls, _, true) if !method.isReflectiveProxy =>
+          addMethodCalledStatically(cls,
+              NamespacedMethodName(MemberNamespace.Public, method))
 
-        case ArrayType(_) =>
+        case ClassType(cls, _, _)     => addMethodCalled(cls, method)
+        case AnyType | AnyNotNullType => addMethodCalled(ObjectClass, method)
+        case UndefType                => addMethodCalled(BoxedUnitClass, method)
+        case BooleanType              => addMethodCalled(BoxedBooleanClass, method)
+        case CharType                 => addMethodCalled(BoxedCharacterClass, method)
+        case ByteType                 => addMethodCalled(BoxedByteClass, method)
+        case ShortType                => addMethodCalled(BoxedShortClass, method)
+        case IntType                  => addMethodCalled(BoxedIntegerClass, method)
+        case LongType                 => addMethodCalled(BoxedLongClass, method)
+        case FloatType                => addMethodCalled(BoxedFloatClass, method)
+        case DoubleType               => addMethodCalled(BoxedDoubleClass, method)
+        case StringType               => addMethodCalled(BoxedStringClass, method)
+
+        case ArrayType(_, _, _) =>
           /* The pseudo Array class is not reified in our analyzer/analysis,
-           * so we need to cheat here.
-           * In the Array[T] class family, only clone__O is defined and
-           * overrides j.l.Object.clone__O. Since this method is implemented
-           * in CoreJSLib and always kept, we can ignore it.
-           * All other methods resolve to their definition in Object, so we
-           * can model their reachability by calling them statically in the
+           * so we need to cheat here. Since the Array[T] classes do not define
+           * any method themselves--they are all inherited from j.l.Object--,
+           * we can model their reachability by calling them statically in the
            * Object class.
            */
-          if (method != "clone__O") {
-            addMethodCalledStatically(ObjectClass,
-                NamespacedEncodedName(MemberNamespace.Public, method))
-          }
+          addMethodCalledStatically(ObjectClass,
+              NamespacedMethodName(MemberNamespace.Public, method))
 
         case NullType | NothingType =>
           // Nothing to do
 
-        case NoType | RecordType(_) =>
+        case VoidType | ClosureType(_, _, _) | RecordType(_) =>
           throw new IllegalArgumentException(
               s"Illegal receiver type: $receiverTpe")
       }
@@ -255,200 +259,381 @@ object Infos {
       this
     }
 
-    def addMethodCalled(cls: String, method: String): this.type = {
-      methodsCalled.getOrElseUpdate(cls, mutable.Set.empty) += method
+    def addMethodCalled(cls: ClassName, method: MethodName): this.type = {
+      forClass(cls).addMethodCalled(method)
       this
     }
 
-    def addMethodCalledStatically(cls: String,
-        method: NamespacedEncodedName): this.type = {
-      methodsCalledStatically.getOrElseUpdate(cls, mutable.Set.empty) += method
+    def addMethodCalledStatically(cls: ClassName,
+        method: NamespacedMethodName): this.type = {
+      forClass(cls).addMethodCalledStatically(method)
       this
     }
 
-    def addInstantiatedClass(cls: String): this.type = {
-      instantiatedClasses += cls
+    def addMethodCalledDynamicImport(cls: ClassName,
+        method: NamespacedMethodName): this.type = {
+      forClass(cls).addMethodCalledDynamicImport(method)
       this
     }
 
-    def addInstantiatedClass(cls: String, ctor: String): this.type = {
-      addInstantiatedClass(cls).addMethodCalledStatically(cls,
-          NamespacedEncodedName(MemberNamespace.Constructor, ctor))
-    }
-
-    def addAccessedModule(cls: String): this.type = {
-      accessedModules += cls
+    def addLambdaDescriptorUsed(descriptor: NewLambda.Descriptor): this.type = {
+      setFlag(ReachabilityInfo.FlagNeedsDesugaring)
+      lambdaDescriptorsUsed += descriptor
       this
     }
 
-    def addUsedInstanceTest(tpe: TypeRef): this.type =
-      addUsedInstanceTest(baseNameOf(tpe))
-
-    def addUsedInstanceTest(cls: String): this.type = {
-      usedInstanceTests += cls
+    def addJSNativeMemberUsed(cls: ClassName, member: MethodName): this.type = {
+      forClass(cls).addJSNativeMemberUsed(member)
       this
     }
 
-    def addAccessedClassData(tpe: TypeRef): this.type =
-      addAccessedClassData(baseNameOf(tpe))
-
-    def addAccessedClassData(cls: String): this.type = {
-      accessedClassData += cls
+    def addInstantiatedClass(cls: ClassName): this.type = {
+      forClass(cls).setInstantiated()
       this
     }
 
-    def addReferencedClass(tpe: TypeRef): this.type =
-      addReferencedClass(baseNameOf(tpe))
-
-    def addReferencedClass(cls: String): this.type = {
-      referencedClasses += cls
+    def addInstantiatedClass(cls: ClassName, ctor: MethodName): this.type = {
+      forClass(cls).setInstantiated().addMethodCalledStatically(
+          NamespacedMethodName(MemberNamespace.Constructor, ctor))
       this
     }
 
-    def maybeAddReferencedClass(tpe: Type): this.type = tpe match {
-      case ClassType(cls)     => addReferencedClass(cls)
-      case ArrayType(typeRef) => addReferencedClass(typeRef)
-      case _                  => this
+    def addAccessedModule(cls: ClassName): this.type = {
+      forClass(cls).setModuleAccessed()
+      this
     }
 
-    private def baseNameOf(tpe: TypeRef): String = tpe match {
-      case ClassRef(name)        => name
-      case ArrayTypeRef(base, _) => base
-    }
-
-    def result(): MethodInfo = {
-      def toMapOfLists[A](
-          m: mutable.Map[String, mutable.Set[A]]): Map[String, List[A]] = {
-        m.map(kv => kv._1 -> kv._2.toList).toMap
+    def maybeAddUsedInstanceTest(tpe: Type): this.type = {
+      tpe match {
+        case ClassType(className, _, _) =>
+          addUsedInstanceTest(className)
+        case ArrayType(ArrayTypeRef(ClassRef(baseClassName), _), _, _) =>
+          addUsedInstanceTest(baseClassName)
+        case _ =>
       }
-
-      MethodInfo(
-          encodedName = encodedName,
-          namespace = namespace,
-          isAbstract = isAbstract,
-          isExported = isExported,
-          staticFieldsRead = toMapOfLists(staticFieldsRead),
-          staticFieldsWritten = toMapOfLists(staticFieldsWritten),
-          methodsCalled = toMapOfLists(methodsCalled),
-          methodsCalledStatically = toMapOfLists(methodsCalledStatically),
-          instantiatedClasses = instantiatedClasses.toList,
-          accessedModules = accessedModules.toList,
-          usedInstanceTests = usedInstanceTests.toList,
-          accessedClassData = accessedClassData.toList,
-          referencedClasses = referencedClasses.toList
-      )
-    }
-  }
-
-  /** Generates the [[ClassInfo]] of a
-   *  [[org.scalajs.ir.Trees.ClassDef Trees.ClassDef]].
-   */
-  def generateClassInfo(classDef: ClassDef): ClassInfo = {
-    val builder = new ClassInfoBuilder()
-      .setEncodedName(classDef.name.name)
-      .setKind(classDef.kind)
-      .setSuperClass(classDef.superClass.map(_.name))
-      .addInterfaces(classDef.interfaces.map(_.name))
-
-    classDef.memberDefs foreach {
-      case fieldDef: FieldDef =>
-        builder.maybeAddReferencedFieldClass(fieldDef.ftpe)
-
-      case methodDef: MethodDef =>
-        builder.addMethod(generateMethodInfo(methodDef))
-
-      case propertyDef: PropertyDef =>
-        builder.addMethod(generatePropertyInfo(propertyDef))
+      this
     }
 
-    if (classDef.topLevelExportDefs.nonEmpty) {
-      builder.setIsExported(true)
-
-      val optInfo = generateTopLevelExportsInfo(classDef.name.name,
-          classDef.topLevelExportDefs)
-      optInfo.foreach(builder.addMethod(_))
-
-      val names = classDef.topLevelExportDefs.map(_.topLevelExportName)
-      builder.setTopLevelExportNames(names)
+    def addUsedInstanceTest(cls: ClassName): this.type = {
+      forClass(cls).setInstanceTestsUsed()
+      this
     }
 
-    builder.result()
-  }
-
-  /** Generates the [[MethodInfo]] of a
-   *  [[org.scalajs.ir.Trees.MethodDef Trees.MethodDef]].
-   */
-  def generateMethodInfo(methodDef: MethodDef): MethodInfo =
-    new GenInfoTraverser().generateMethodInfo(methodDef)
-
-  /** Generates the [[MethodInfo]] of a
-   *  [[org.scalajs.ir.Trees.PropertyDef Trees.PropertyDef]].
-   */
-  def generatePropertyInfo(propertyDef: PropertyDef): MethodInfo =
-    new GenInfoTraverser().generatePropertyInfo(propertyDef)
-
-  /** Generates the [[MethodInfo]] for the top-level exports. */
-  def generateTopLevelExportsInfo(enclosingClass: String,
-      topLevelExportDefs: List[TopLevelExportDef]): Option[MethodInfo] = {
-
-    var topLevelMethodExports: List[TopLevelMethodExportDef] = Nil
-    var topLevelFieldExports: List[TopLevelFieldExportDef] = Nil
-
-    topLevelExportDefs.foreach {
-      case _:TopLevelJSClassExportDef | _:TopLevelModuleExportDef =>
-      case topLevelMethodExport: TopLevelMethodExportDef =>
-        topLevelMethodExports ::= topLevelMethodExport
-      case topLevelFieldExport: TopLevelFieldExportDef =>
-        topLevelFieldExports ::= topLevelFieldExport
-    }
-
-    if (topLevelMethodExports.nonEmpty || topLevelFieldExports.nonEmpty) {
-      Some(new GenInfoTraverser().generateTopLevelExportsInfo(enclosingClass,
-          topLevelMethodExports, topLevelFieldExports))
-    } else {
-      None
-    }
-  }
-
-  private final class GenInfoTraverser extends Traverser {
-    private val builder = new MethodInfoBuilder
-
-    def generateMethodInfo(methodDef: MethodDef): MethodInfo = {
-      builder
-        .setEncodedName(methodDef.name.encodedName)
-        .setNamespace(methodDef.flags.namespace)
-        .setIsAbstract(methodDef.body.isEmpty)
-        .setIsExported(!methodDef.name.isInstanceOf[Ident])
-
-      methodDef.name match {
-        case ComputedName(tree, _) =>
-          traverse(tree)
-
-        case StringLiteral(_) =>
-
-        case Ident(name, _) =>
-          val (_, params, result) = decodeMethodName(name)
-          params.foreach(builder.addReferencedClass)
-          result.foreach(builder.addReferencedClass)
+    def maybeAddAccessedClassData(typeRef: TypeRef): this.type = {
+      typeRef match {
+        case ClassRef(cls) =>
+          addAccessedClassData(cls)
+        case ArrayTypeRef(ClassRef(cls), _) =>
+          addAccessedClassData(cls)
+        case _ =>
       }
+      this
+    }
 
-      methodDef.body.foreach(traverse)
+    def addAccessedClassData(cls: ClassName): this.type = {
+      forClass(cls).setClassDataAccessed()
+      this
+    }
+
+    def maybeAddReferencedClass(typeRef: TypeRef): this.type = {
+      typeRef match {
+        case ClassRef(cls) =>
+          addReferencedClass(cls)
+        case ArrayTypeRef(ClassRef(cls), _) =>
+          addReferencedClass(cls)
+        case _ =>
+      }
+      this
+    }
+
+    def addReferencedClass(cls: ClassName): this.type = {
+      /* We only need the class to appear in `byClass` so that the Analyzer
+       * knows to perform `lookupClass` for it. But then nothing further needs
+       * to happen.
+       */
+      forClass(cls)
+      this
+    }
+
+    def addStaticallyReferencedClass(cls: ClassName): this.type = {
+      forClass(cls).setStaticallyReferenced()
+      this
+    }
+
+    def maybeAddReferencedClass(tpe: Type): this.type = {
+      tpe match {
+        case ClassType(cls, _, _) =>
+          addReferencedClass(cls)
+        case ArrayType(ArrayTypeRef(ClassRef(cls), _), _, _) =>
+          addReferencedClass(cls)
+        case _ =>
+      }
+      this
+    }
+
+    private def setFlag(flag: ReachabilityInfo.Flags): this.type = {
+      flags |= flag
+      this
+    }
+
+    def addAccessedClassClass(): this.type =
+      setFlag(ReachabilityInfo.FlagAccessedClassClass)
+
+    def addAccessNewTarget(): this.type =
+      setFlag(ReachabilityInfo.FlagAccessedNewTarget)
+
+    def addAccessImportMeta(): this.type =
+      setFlag(ReachabilityInfo.FlagAccessedImportMeta)
+
+    def addUsedExponentOperator(): this.type =
+      setFlag(ReachabilityInfo.FlagUsedExponentOperator)
+
+    def addUsedAsync(): this.type =
+      setFlag(ReachabilityInfo.FlagUsedAsync)
+
+    def addUsedOrphanAwait(): this.type =
+      setFlag(ReachabilityInfo.FlagUsedOrphanAwait)
+
+    def addUsedIntLongDivModByMaybeZero(): this.type =
+      addInstantiatedClass(ArithmeticExceptionClass, StringArgConstructorName)
+
+    def addUsedClassNewArray(): this.type =
+      addInstantiatedClass(IllegalArgumentExceptionClass, NoArgConstructorName)
+
+    def addUsedClassSuperClass(): this.type =
+      setFlag(ReachabilityInfo.FlagUsedClassSuperClass)
+
+    def markNeedsDesugaring(): this.type =
+      setFlag(ReachabilityInfo.FlagNeedsDesugaring)
+
+    def addReferencedLinkTimeProperty(linkTimeProperty: LinkTimeProperty): this.type = {
+      markNeedsDesugaring()
+      linkTimeProperties.append((linkTimeProperty.name, linkTimeProperty.tpe))
+      this
+    }
+
+    def result(): ReachabilityInfo = {
+      val lambdaDescriptorsUsedArray =
+        if (lambdaDescriptorsUsed.isEmpty) emptyLambdaDescriptorArray
+        else lambdaDescriptorsUsed.toArray
+
+      val referencedLinkTimeProperties =
+        if (linkTimeProperties.isEmpty) emptyLinkTimePropertyArray
+        else linkTimeProperties.toArray
+
+      new ReachabilityInfo(version, byClass.valuesIterator.map(_.result()).toArray,
+          lambdaDescriptorsUsedArray, flags, referencedLinkTimeProperties)
+    }
+  }
+
+  object ReachabilityInfoBuilder {
+    private val emptyLinkTimePropertyArray = new Array[(String, Type)](0)
+    private val emptyLambdaDescriptorArray = new Array[NewLambda.Descriptor](0)
+  }
+
+  final class ReachabilityInfoInClassBuilder(val className: ClassName) {
+    private val fieldsUsed = mutable.Map.empty[FieldName, FieldReachable]
+    private val staticFieldsUsed = mutable.Map.empty[FieldName, StaticFieldReachable]
+    private val methodsCalled = mutable.Set.empty[MethodName]
+    private val methodsCalledStatically = mutable.Set.empty[NamespacedMethodName]
+    private val jsNativeMembersUsed = mutable.Set.empty[MethodName]
+    private var flags: ReachabilityInfoInClass.Flags = 0
+
+    def addFieldRead(field: FieldName): this.type = {
+      fieldsUsed(field) = fieldsUsed
+        .getOrElse(field, FieldReachable(field))
+        .copy(read = true)
+      this
+    }
+
+    def addFieldWritten(field: FieldName): this.type = {
+      fieldsUsed(field) = fieldsUsed
+        .getOrElse(field, FieldReachable(field))
+        .copy(written = true)
+      this
+    }
+
+    def addStaticFieldRead(field: FieldName): this.type = {
+      staticFieldsUsed(field) = staticFieldsUsed
+        .getOrElse(field, StaticFieldReachable(field))
+        .copy(read = true)
+      setStaticallyReferenced()
+      this
+    }
+
+    def addStaticFieldWritten(field: FieldName): this.type = {
+      staticFieldsUsed(field) = staticFieldsUsed
+        .getOrElse(field, StaticFieldReachable(field))
+        .copy(written = true)
+      setStaticallyReferenced()
+      this
+    }
+
+    def addMethodCalled(method: MethodName): this.type = {
+      methodsCalled += method
+      // Do not call setStaticallyReferenced: We call these methods on the object.
+      this
+    }
+
+    def addMethodCalledStatically(method: NamespacedMethodName): this.type = {
+      methodsCalledStatically += method
+      setStaticallyReferenced()
+      this
+    }
+
+    def addMethodCalledDynamicImport(method: NamespacedMethodName): this.type = {
+      // In terms of reachability, a dynamic import call is just a static call.
+      methodsCalledStatically += method
+      setFlag(ReachabilityInfoInClass.FlagDynamicallyReferenced)
+      this
+    }
+
+    def addJSNativeMemberUsed(member: MethodName): this.type = {
+      jsNativeMembersUsed += member
+      this
+    }
+
+    private def setFlag(flag: ReachabilityInfoInClass.Flags): this.type = {
+      flags |= flag
+      this
+    }
+
+    def setInstantiated(): this.type =
+      setFlag(ReachabilityInfoInClass.FlagInstantiated)
+
+    def setModuleAccessed(): this.type =
+      setFlag(ReachabilityInfoInClass.FlagModuleAccessed)
+
+    def setInstanceTestsUsed(): this.type =
+      setFlag(ReachabilityInfoInClass.FlagInstanceTestsUsed)
+
+    def setClassDataAccessed(): this.type =
+      setFlag(ReachabilityInfoInClass.FlagClassDataAccessed)
+
+    def setStaticallyReferenced(): this.type =
+      setFlag(ReachabilityInfoInClass.FlagStaticallyReferenced)
+
+    def result(): ReachabilityInfoInClass = {
+      val memberInfos: Array[MemberReachabilityInfo] = (
+        fieldsUsed.valuesIterator ++
+          staticFieldsUsed.valuesIterator ++
+          methodsCalled.iterator.map(MethodReachable(_)) ++
+          methodsCalledStatically.iterator.map(MethodStaticallyReachable(_)) ++
+          jsNativeMembersUsed.iterator.map(JSNativeMemberReachable(_))
+      ).toArray
+
+      val memberInfosOpt =
+        if (memberInfos.isEmpty) MemberReachabilityInfo.EmptyArray
+        else memberInfos
+
+      new ReachabilityInfoInClass(className, memberInfosOpt, flags)
+    }
+  }
+
+  final class InfoGenerator(linkTimeProperties: LinkTimeProperties) {
+    def genReferencedFieldClasses(fields: List[AnyFieldDef]): Map[FieldName, ClassName] = {
+      val builder = Map.newBuilder[FieldName, ClassName]
+
+      fields.foreach {
+        case FieldDef(flags, FieldIdent(name), _, ftpe) =>
+          if (!flags.namespace.isStatic) {
+            ftpe match {
+              case ClassType(cls, _, _) =>
+                builder += name -> cls
+              case ArrayType(ArrayTypeRef(ClassRef(cls), _), _, _) =>
+                builder += name -> cls
+              case _ =>
+            }
+          }
+        case _: JSFieldDef =>
+          // Nothing to do.
+      }
 
       builder.result()
     }
 
-    def generatePropertyInfo(propertyDef: PropertyDef): MethodInfo = {
-      builder
-        .setEncodedName(propertyDef.name.encodedName)
-        .setNamespace(propertyDef.flags.namespace)
-        .setIsExported(true)
+    /** Generates the [[MethodInfo]] of a
+     *  [[org.scalajs.ir.Trees.MethodDef Trees.MethodDef]].
+     */
+    def generateMethodInfo(methodDef: MethodDef): MethodInfo =
+      new GenInfoTraverser(methodDef.version, linkTimeProperties).generateMethodInfo(methodDef)
 
-      propertyDef.name match {
-        case ComputedName(tree, _) =>
-          traverse(tree)
-        case _ =>
-      }
+    /** Generates the [[ReachabilityInfo]] of a
+     *  [[org.scalajs.ir.Trees.JSConstructorDef Trees.JSConstructorDef]].
+     */
+    def generateJSConstructorInfo(ctorDef: JSConstructorDef): ReachabilityInfo =
+      new GenInfoTraverser(ctorDef.version, linkTimeProperties).generateJSConstructorInfo(ctorDef)
 
+    /** Generates the [[ReachabilityInfo]] of a
+     *  [[org.scalajs.ir.Trees.JSMethodDef Trees.JSMethodDef]].
+     */
+    def generateJSMethodInfo(methodDef: JSMethodDef): ReachabilityInfo =
+      new GenInfoTraverser(methodDef.version, linkTimeProperties).generateJSMethodInfo(methodDef)
+
+    /** Generates the [[ReachabilityInfo]] of a
+     *  [[org.scalajs.ir.Trees.JSPropertyDef Trees.JSPropertyDef]].
+     */
+    def generateJSPropertyInfo(propertyDef: JSPropertyDef): ReachabilityInfo = {
+      new GenInfoTraverser(propertyDef.version, linkTimeProperties).generateJSPropertyInfo(
+          propertyDef)
+    }
+
+    def generateJSMethodPropDefInfo(member: JSMethodPropDef): ReachabilityInfo = member match {
+      case methodDef: JSMethodDef     => generateJSMethodInfo(methodDef)
+      case propertyDef: JSPropertyDef => generateJSPropertyInfo(propertyDef)
+    }
+
+    /** Generates the [[MethodInfo]] for the top-level exports. */
+    def generateTopLevelExportInfo(enclosingClass: ClassName,
+        topLevelExportDef: TopLevelExportDef): TopLevelExportInfo = {
+      val info = new GenInfoTraverser(Version.Unversioned, linkTimeProperties)
+        .generateTopLevelExportInfo(enclosingClass, topLevelExportDef)
+      new TopLevelExportInfo(info,
+          ModuleID(topLevelExportDef.moduleID),
+          topLevelExportDef.topLevelExportName)
+    }
+  }
+
+  private final class GenInfoTraverser(version: Version,
+      linkTimeProperties: LinkTimeProperties)
+      extends Traverser {
+
+    private val builder = new ReachabilityInfoBuilder(version)
+
+    /** Whether we are currently in the body of an `async` closure.
+     *
+     *  If we encounter a `JSAwait` node while this is `false`, it is an
+     *  orphan await.
+     */
+    private var inAsync: Boolean = false
+
+    def generateMethodInfo(methodDef: MethodDef): MethodInfo = {
+      val methodName = methodDef.methodName
+      methodName.paramTypeRefs.foreach(builder.maybeAddReferencedClass)
+      builder.maybeAddReferencedClass(methodName.resultTypeRef)
+
+      methodDef.body.foreach(traverse)
+
+      val reachabilityInfo = builder.result()
+
+      MethodInfo(methodDef.body.isEmpty, reachabilityInfo)
+    }
+
+    def generateJSConstructorInfo(ctorDef: JSConstructorDef): ReachabilityInfo = {
+      ctorDef.body.allStats.foreach(traverse(_))
+
+      builder.result()
+    }
+
+    def generateJSMethodInfo(methodDef: JSMethodDef): ReachabilityInfo = {
+      traverse(methodDef.name)
+      traverse(methodDef.body)
+
+      builder.result()
+    }
+
+    def generateJSPropertyInfo(propertyDef: JSPropertyDef): ReachabilityInfo = {
+      traverse(propertyDef.name)
       propertyDef.getterBody.foreach(traverse)
       propertyDef.setterArgAndBody foreach { case (_, body) =>
         traverse(body)
@@ -457,20 +642,23 @@ object Infos {
       builder.result()
     }
 
-    def generateTopLevelExportsInfo(enclosingClass: String,
-        topLevelMethodExports: List[TopLevelMethodExportDef],
-        topLevelFieldExports: List[TopLevelFieldExportDef]): MethodInfo = {
-      builder
-        .setEncodedName(TopLevelExportsName)
-        .setIsExported(true)
+    def generateTopLevelExportInfo(enclosingClass: ClassName,
+        topLevelExportDef: TopLevelExportDef): ReachabilityInfo = {
+      topLevelExportDef match {
+        case _: TopLevelJSClassExportDef =>
+          builder.addInstantiatedClass(enclosingClass)
 
-      for (topLevelMethodExport <- topLevelMethodExports)
-        topLevelMethodExport.methodDef.body.foreach(traverse(_))
+        case _: TopLevelModuleExportDef =>
+          builder.addAccessedModule(enclosingClass)
 
-      for (topLevelFieldExport <- topLevelFieldExports) {
-        val field = topLevelFieldExport.field.name
-        builder.addStaticFieldRead(enclosingClass, field)
-        builder.addStaticFieldWritten(enclosingClass, field)
+        case topLevelMethodExport: TopLevelMethodExportDef =>
+          assert(topLevelMethodExport.methodDef.name.isInstanceOf[StringLiteral])
+          traverse(topLevelMethodExport.methodDef.body)
+
+        case topLevelFieldExport: TopLevelFieldExportDef =>
+          val field = topLevelFieldExport.field.name
+          builder.addStaticFieldRead(field)
+          builder.addStaticFieldWritten(field)
       }
 
       builder.result()
@@ -480,84 +668,208 @@ object Infos {
       builder.maybeAddReferencedClass(tree.tpe)
 
       tree match {
-        /* Do not call super.traverse() so that the field is not also marked as
+        /* Do not call super.traverse() so that fields are not also marked as
          * read.
          */
-        case Assign(SelectStatic(ClassRef(cls), Ident(field, _)), rhs) =>
-          builder.addStaticFieldWritten(cls, field)
+        case Assign(lhs, rhs) =>
+          lhs match {
+            case Select(qualifier, field) =>
+              builder.addFieldWritten(field.name)
+              traverse(qualifier)
+            case SelectStatic(field) =>
+              builder.addStaticFieldWritten(field.name)
+            case JSPrivateSelect(qualifier, field) =>
+              builder.addStaticallyReferencedClass(field.name.className) // for the private name of the field
+              builder.addFieldWritten(field.name)
+              traverse(qualifier)
+            case _ =>
+              traverse(lhs)
+          }
           traverse(rhs)
+
+        /* Closure may have to adjust the inAsync flag before and after
+         * traversing its body.
+         */
+        case Closure(flags, _, _, _, _, body, captureValues) =>
+          if (flags.async)
+            builder.addUsedAsync()
+
+          // No point in using a try..finally. Instances of this class are single-use.
+          val savedInAsync = inAsync
+          inAsync = flags.async
+          traverse(body)
+          inAsync = savedInAsync
+
+          // Capture values are in the enclosing scope; not the scope of the closure
+          captureValues.foreach(traverse(_))
+
+        // Do not call super.traverse(), as we must follow a single branch
+        case LinkTimeIf(cond, thenp, elsep) =>
+          builder.markNeedsDesugaring()
+          traverse(cond)
+          LinkTimeEvaluator.tryEvalLinkTimeBooleanExpr(linkTimeProperties, cond) match {
+            case Some(result) =>
+              if (result)
+                traverse(thenp)
+              else
+                traverse(elsep)
+            case None =>
+              /* Ignore. Recall that we *assume* here that the ClassDef is
+               * valid on its own, i.e., it would pass the ClassDefChecker
+               * (irrespective of whether we actually run that checker).
+               *
+               * Under that assumption, the only failure mode for evaluating
+               * the `cond` is that it refers to a  `LinkTimeProperty` that
+               * does not exist or has the wrong type. In that case, the
+               * analyzer will report a linking error at least for that
+               * `LinkTimeProperty` inside the `cond` (which we always
+               * traverse).
+               *
+               * If the assumption is broken and the evaluation failure was
+               * due to an ill-formed or ill-typed `cond`, then Desugar will
+               * eventually crash (with a message suggesting to enable checking
+               * the IR).
+               */
+              ()
+          }
 
         // In all other cases, we'll have to call super.traverse()
         case _ =>
           tree match {
-            case New(ClassRef(cls), ctor, _) =>
-              builder.addInstantiatedClass(cls, ctor.name)
+            case New(className, ctor, _) =>
+              builder.addInstantiatedClass(className, ctor.name)
 
-            case SelectStatic(ClassRef(cls), Ident(field, _)) =>
-              builder.addStaticFieldRead(cls, field)
+            case Select(_, field) =>
+              builder.addFieldRead(field.name)
+            case SelectStatic(field) =>
+              builder.addStaticFieldRead(field.name)
+            case SelectJSNativeMember(className, member) =>
+              builder.addJSNativeMemberUsed(className, member.name)
 
-            case Apply(flags, receiver, Ident(method, _), _) =>
-              builder.addMethodCalled(receiver.tpe, method)
-            case ApplyStatically(flags, _, ClassRef(cls), method, _) =>
+            case Apply(flags, receiver, method, _) =>
+              builder.addMethodCalled(receiver.tpe, method.name)
+            case ApplyStatically(flags, _, className, method, _) =>
               val namespace = MemberNamespace.forNonStaticCall(flags)
-              builder.addMethodCalledStatically(cls,
-                  NamespacedEncodedName(namespace, method.name))
-            case ApplyStatic(flags, ClassRef(cls), method, _) =>
+              builder.addMethodCalledStatically(className,
+                  NamespacedMethodName(namespace, method.name))
+            case ApplyStatic(flags, className, method, _) =>
               val namespace = MemberNamespace.forStaticCall(flags)
-              builder.addMethodCalledStatically(cls,
-                  NamespacedEncodedName(namespace, method.name))
+              builder.addMethodCalledStatically(className,
+                  NamespacedMethodName(namespace, method.name))
+            case ApplyDynamicImport(flags, className, method, _) =>
+              val namespace = MemberNamespace.forStaticCall(flags)
+              builder.addMethodCalledDynamicImport(className,
+                  NamespacedMethodName(namespace, method.name))
 
-            case LoadModule(ClassRef(cls)) =>
-              builder.addAccessedModule(cls)
+            case NewLambda(descriptor, _) =>
+              builder.addLambdaDescriptorUsed(descriptor)
 
-            case IsInstanceOf(_, tpe) =>
-              builder.addUsedInstanceTest(tpe)
+            case LoadModule(className) =>
+              builder.addAccessedModule(className)
+
+            case IsInstanceOf(_, testType) =>
+              builder.maybeAddUsedInstanceTest(testType)
+
             case AsInstanceOf(_, tpe) =>
-              builder.addUsedInstanceTest(tpe)
+              /* In theory, we'd need to reach ClassCastException
+               * here (conditional on the semantics) by IR spec.
+               * However, since the exact *constructor* is not specified, this
+               * makes little sense.
+               * Instead, the Emitter simply requests the exception in its
+               * symbol requirements.
+               */
+
+              builder.maybeAddUsedInstanceTest(tpe)
+
+            case UnaryOp(op, _) =>
+              import UnaryOp._
+
+              op match {
+                case Class_superClass =>
+                  builder.addUsedClassSuperClass()
+                case GetClass =>
+                  builder.addAccessedClassClass()
+                case WrapAsThrowable =>
+                  builder.addUsedInstanceTest(ThrowableClass)
+                  builder.addInstantiatedClass(JavaScriptExceptionClass, AnyArgConstructorName)
+                case UnwrapFromThrowable =>
+                  builder.addUsedInstanceTest(JavaScriptExceptionClass)
+                case _ =>
+                  // do nothing
+              }
 
             case BinaryOp(op, _, rhs) =>
               import BinaryOp._
 
-              def addArithmeticException(): Unit =
-                builder.addInstantiatedClass("jl_ArithmeticException", "init___T")
-
               op match {
-                case Int_/ | Int_% =>
+                case Int_/ | Int_% | Int_unsigned_/ | Int_unsigned_% =>
                   rhs match {
                     case IntLiteral(r) if r != 0 =>
-                    case _                       => addArithmeticException()
+                    case _                       => builder.addUsedIntLongDivModByMaybeZero()
                   }
-                case Long_/ | Long_% =>
+                case Long_/ | Long_% | Long_unsigned_/ | Long_unsigned_% =>
                   rhs match {
                     case LongLiteral(r) if r != 0L =>
-                    case _                         => addArithmeticException()
+                    case _                         => builder.addUsedIntLongDivModByMaybeZero()
                   }
+                case Class_newArray =>
+                  builder.addUsedClassNewArray()
                 case _ =>
                   // do nothing
               }
 
             case NewArray(typeRef, _) =>
-              builder.addAccessedClassData(typeRef)
+              builder.maybeAddAccessedClassData(typeRef)
+
             case ArrayValue(typeRef, _) =>
-              builder.addAccessedClassData(typeRef)
+              builder.maybeAddAccessedClassData(typeRef)
+
+            case ArraySelect(_, _) =>
+              /* In theory, we'd need to reach ArrayIndexOutOfBoundsException
+               * here (conditional on the semantics) by IR spec.
+               * However, since the exact *constructor* is not specified, this
+               * makes little sense.
+               * Instead, the Emitter simply requests the exception in its
+               * symbol requirements.
+               */
+
             case ClassOf(cls) =>
-              builder.addAccessedClassData(cls)
+              builder.maybeAddAccessedClassData(cls)
+              builder.addAccessedClassClass()
 
-            case LoadJSConstructor(cls) =>
-              builder.addInstantiatedClass(cls.className)
+            case JSPrivateSelect(_, field) =>
+              builder.addStaticallyReferencedClass(field.name.className) // for the private name of the field
+              builder.addFieldRead(field.name)
 
-            case LoadJSModule(ClassRef(cls)) =>
-              builder.addAccessedModule(cls)
+            case JSNewTarget() =>
+              builder.addAccessNewTarget()
 
-            case CreateJSClass(cls, _) =>
-              builder.addInstantiatedClass(cls.className)
+            case JSImportMeta() =>
+              builder.addAccessImportMeta()
 
-            case Transient(CallHelper(_, args)) =>
-              // This should only happen when called from the Refiner
-              args.foreach(traverse)
+            case JSBinaryOp(JSBinaryOp.**, _, _) =>
+              builder.addUsedExponentOperator()
 
-            case VarDef(_, vtpe, _, _) =>
+            case JSAwait(_) =>
+              if (!inAsync) {
+                builder.addUsedAsync()
+                builder.addUsedOrphanAwait()
+              }
+
+            case LoadJSConstructor(className) =>
+              builder.addInstantiatedClass(className)
+
+            case LoadJSModule(className) =>
+              builder.addAccessedModule(className)
+
+            case CreateJSClass(className, _) =>
+              builder.addInstantiatedClass(className)
+
+            case VarDef(_, _, vtpe, _, _) =>
               builder.maybeAddReferencedClass(vtpe)
+
+            case linkTimeProperty: LinkTimeProperty =>
+              builder.addReferencedLinkTimeProperty(linkTimeProperty)
 
             case _ =>
           }

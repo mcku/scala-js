@@ -18,8 +18,7 @@ import org.junit.Assert._
 import org.junit.Test
 
 import org.scalajs.testsuite.javalib.util.{ListFactory, ListTest}
-
-import scala.collection.JavaConverters._
+import org.scalajs.testsuite.javalib.util.TrivialImmutableCollection
 
 import scala.reflect.ClassTag
 
@@ -27,7 +26,7 @@ class CopyOnWriteArrayListTest extends ListTest {
 
   def factory: CopyOnWriteArrayListFactory = new CopyOnWriteArrayListFactory
 
-  @Test def should_implement_addIfAbsent(): Unit = {
+  @Test def addIfAbsent(): Unit = {
     val list = factory.empty[Int]
 
     assertTrue(list.addIfAbsent(0))
@@ -44,44 +43,44 @@ class CopyOnWriteArrayListTest extends ListTest {
     assertEquals(1, list.get(1))
   }
 
-  @Test def should_implement_addAllAbsent(): Unit = {
+  @Test def addAllAbsent(): Unit = {
     val list = factory.empty[Int]
 
-    assertEquals(3, list.addAllAbsent((0 until 3).asJava))
+    assertEquals(3, list.addAllAbsent(TrivialImmutableCollection((0 until 3): _*)))
     assertEquals(3, list.size)
     for (i <- 0 until 3)
       assertEquals(i, list.get(i))
 
-    assertEquals(0, list.addAllAbsent((0 until 2).asJava))
+    assertEquals(0, list.addAllAbsent(TrivialImmutableCollection((0 until 2): _*)))
     assertEquals(3, list.size)
     for (i <- 0 until 3)
       assertEquals(i, list.get(i))
 
-    assertEquals(3, list.addAllAbsent((3 until 6).asJava))
+    assertEquals(3, list.addAllAbsent(TrivialImmutableCollection((3 until 6): _*)))
     assertEquals(6, list.size)
     for (i <- 0 until 6)
       assertEquals(i, list.get(i))
 
-    assertEquals(4, list.addAllAbsent((0 until 10).asJava))
+    assertEquals(4, list.addAllAbsent(TrivialImmutableCollection((0 until 10): _*)))
     assertEquals(10, list.size)
     for (i <- 0 until 10)
       assertEquals(i, list.get(i))
 
-    assertEquals(1, list.addAllAbsent(Seq(42, 42, 42).asJava))
+    assertEquals(1, list.addAllAbsent(TrivialImmutableCollection(42, 42, 42)))
     assertEquals(11, list.size)
     for (i <- 0 until 10)
       assertEquals(i, list.get(i))
     assertEquals(42, list.get(10))
   }
 
-  @Test def should_implement_a_snapshot_iterator(): Unit = {
+  @Test def iteratorInt(): Unit = {
     val list = factory.empty[Int]
-    list.addAll((0 to 10).asJava)
+    list.addAll(TrivialImmutableCollection((0 to 10): _*))
 
     val iter = list.iterator()
     list.clear()
     val iter2 = list.iterator()
-    list.addAll((0 to 5).asJava)
+    list.addAll(TrivialImmutableCollection((0 to 5): _*))
 
     for (i <- 0 to 10) {
       assertTrue(iter.hasNext)
@@ -91,7 +90,7 @@ class CopyOnWriteArrayListTest extends ListTest {
     assertFalse(iter2.hasNext)
   }
 
-  @Test def `should_have_accessible_array_constructor_-_#2023`(): Unit = {
+  @Test def newFromArray_Issue2023(): Unit = {
     def test[T <: AnyRef](arr: Array[T]): Unit = {
       val cowal1 = factory.newFrom(arr)
       assertEquals(arr.length, cowal1.size)
@@ -117,8 +116,4 @@ class CopyOnWriteArrayListFactory extends ListFactory {
 
   def newFrom[E <: AnyRef](arr: Array[E]): ju.concurrent.CopyOnWriteArrayList[E] =
     new ju.concurrent.CopyOnWriteArrayList[E](arr)
-
-  // Sorting a CopyOnWriteArrayListFactory was not supported until JDK8.
-  // See CollectionsOnCopyOnWriteArrayListTestOnJDK8.
-  override def sortableUsingCollections: Boolean = false
 }

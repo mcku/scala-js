@@ -1,34 +1,39 @@
-addSbtPlugin("de.heikoseeberger" % "sbt-header" % "5.0.0")
+addSbtPlugin("de.heikoseeberger" % "sbt-header" % "5.9.0")
 
-addSbtPlugin("com.typesafe" % "sbt-mima-plugin" % "0.1.18")
+addSbtPlugin("com.typesafe" % "sbt-mima-plugin" % "0.8.1")
 
 addSbtPlugin("org.scalastyle" % "scalastyle-sbt-plugin" % "1.0.0")
 
-addSbtPlugin("org.portable-scala" % "sbt-platform-deps" % "1.0.0")
+addSbtPlugin("org.portable-scala" % "sbt-platform-deps" % "1.0.2")
 
-libraryDependencies += "com.google.javascript" % "closure-compiler" % "v20190513"
+addSbtPlugin("com.eed3si9n" % "sbt-buildinfo" % "0.11.0")
+
+addSbtPlugin("com.github.sbt" % "sbt-pgp" % "2.3.1")
 
 libraryDependencies += "com.google.jimfs" % "jimfs" % "1.1"
 
 libraryDependencies += "org.eclipse.jgit" % "org.eclipse.jgit.pgm" % "3.2.0.201312181205-r"
 
-unmanagedSourceDirectories in Compile ++= {
+libraryDependencies += "org.scala-js" %% "scalajs-js-envs" % "1.6.0"
+libraryDependencies += "org.scala-js" %% "scalajs-env-nodejs" % "1.6.0"
+
+Compile / unmanagedSourceDirectories ++= {
   val root = baseDirectory.value.getParentFile
   Seq(
-    root / "ir/src/main/scala",
-    root / "logging/shared/src/main/scala",
-    root / "logging/jvm/src/main/scala",
-    root / "linker/shared/src/main/scala",
-    root / "linker/jvm/src/main/scala",
-    root / "js-envs/src/main/scala",
-    root / "nodejs-env/src/main/scala",
+    root / "ir/shared/src/main/scala",
+    root / "ir/shared/src/main/scala-2",
+    root / "ir/jvm/src/main/scala",
+    root / "linker-interface/shared/src/main/scala",
+    root / "linker-interface/shared/src/main/scala-2",
+    root / "linker-interface/jvm/src/main/scala",
     root / "test-adapter/src/main/scala",
     root / "test-common/src/main/scala",
     root / "sbt-plugin/src/main/scala",
+    root / "sbt-plugin/src/main/scala-2.12",
   )
 }
 
-unmanagedResourceDirectories in Compile += {
+Compile / unmanagedResourceDirectories += {
   val root = baseDirectory.value.getParentFile
   root / "test-adapter/src/main/resources"
 }

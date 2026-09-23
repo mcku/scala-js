@@ -17,8 +17,6 @@ import java.util
 import org.junit.Test
 import org.junit.Assert._
 
-import scala.collection.JavaConverters._
-
 import java.{util => ju}
 
 import scala.reflect.ClassTag
@@ -27,7 +25,12 @@ class ArrayDequeTest extends AbstractCollectionTest with DequeTest {
 
   override def factory: ArrayDequeFactory = new ArrayDequeFactory
 
-  @Test def should_add_and_remove_head_and_last(): Unit = {
+  @Test def allowNegativeCapacity(): Unit = {
+    // specified to allocate *at least* the given capacity.
+    new ju.ArrayDeque(-2)
+  }
+
+  @Test def addRemovePeekFirstAndLastInt(): Unit = {
     val ad = factory.empty[Int]
 
     ad.addLast(1)
@@ -43,31 +46,29 @@ class ArrayDequeTest extends AbstractCollectionTest with DequeTest {
     assertEquals(ad.peekLast(), 2)
   }
 
-  @Test def could_be_instantiated_with_a_prepopulated_Collection(): Unit = {
-    val s = Seq(1, 5, 2, 3, 4)
-    val l = s.asJavaCollection
+  @Test def fromCollectionInt(): Unit = {
+    val l = TrivialImmutableCollection(1, 5, 2, 3, 4)
     val ad = factory.from[Int](l)
 
     assertEquals(ad.size(), 5)
 
-    for (i <- 0 until s.size)
-      assertEquals(ad.poll(), s(i))
+    for (i <- 0 until l.size())
+      assertEquals(ad.poll(), l(i))
 
     assertTrue(ad.isEmpty)
   }
 
-  @Test def should_add_multiple_element_in_one_operation(): Unit = {
-    val l = Set(1, 5, 2, 3, 4).asJavaCollection
+  @Test def addAllCollectionAndAddInt(): Unit = {
     val ad = factory.empty[Int]
 
     assertEquals(ad.size(), 0)
-    ad.addAll(l)
+    ad.addAll(TrivialImmutableCollection(1, 5, 2, 3, 4))
     assertEquals(ad.size(), 5)
     ad.add(6)
     assertEquals(ad.size(), 6)
   }
 
-  @Test def should_retrieve_last_element(): Unit = {
+  @Test def addAndPollLastString(): Unit = {
     val adInt = factory.empty[Int]
 
     assertTrue(adInt.add(1000))
@@ -87,7 +88,7 @@ class ArrayDequeTest extends AbstractCollectionTest with DequeTest {
     assertEquals(adDouble.pollLast(), -0.987, 0.0)
   }
 
-  @Test def should_perform_as_a_stack_with_push_and_pop(): Unit = {
+  @Test def pushAndPopString(): Unit = {
     val adInt = factory.empty[Int]
 
     adInt.push(1000)
@@ -113,7 +114,7 @@ class ArrayDequeTest extends AbstractCollectionTest with DequeTest {
     assertTrue(adString.isEmpty())
   }
 
-  @Test def should_poll_and_peek_elements(): Unit = {
+  @Test def peekAndPollFirstAndLastString(): Unit = {
     val pq = factory.empty[String]
 
     assertTrue(pq.add("one"))
@@ -136,43 +137,103 @@ class ArrayDequeTest extends AbstractCollectionTest with DequeTest {
     assertNull(pq.pollLast)
   }
 
-  @Test def should_remove_occurrences_of_provided_elements(): Unit = {
-    val l = Seq("one", "two", "three", "two", "one").asJavaCollection
-    val ad = factory.from[String](l)
+  @Test def removeFirstAndLastOccurrenceString(): Unit = {
+    val ad = factory.from[String](
+        TrivialImmutableCollection("one", "two", "three", "two", "one"))
 
     assertTrue(ad.removeFirstOccurrence("one"))
+    assertEquals("two", ad.peekFirst())
     assertTrue(ad.removeLastOccurrence("two"))
+    assertEquals("two", ad.peekFirst())
     assertTrue(ad.removeFirstOccurrence("one"))
+    assertEquals("three", ad.peekLast())
     assertTrue(ad.removeLastOccurrence("two"))
+    assertEquals("three", ad.peekFirst())
     assertTrue(ad.removeFirstOccurrence("three"))
     assertFalse(ad.removeLastOccurrence("three"))
     assertTrue(ad.isEmpty)
   }
 
-  @Test def should_iterate_over_elements_in_both_directions(): Unit = {
-    val s = Seq("one", "two", "three")
-    val l = s.asJavaCollection
+  @Test def iteratorDescendingIterator(): Unit = {
+    val l = TrivialImmutableCollection("one", "two", "three")
     val ad = factory.from[String](l)
 
     val iter = ad.iterator()
     for (i <- 0 until l.size()) {
       assertTrue(iter.hasNext())
-      assertEquals(iter.next(), s(i))
+      assertEquals(iter.next(), l(i))
     }
     assertFalse(iter.hasNext())
 
     val diter = ad.descendingIterator()
     for (i <- (0 until l.size()).reverse) {
       assertTrue(diter.hasNext())
-      assertEquals(diter.next(), s(i))
+      assertEquals(diter.next(), l(i))
     }
     assertFalse(diter.hasNext())
   }
-}
 
-object ArrayDequeFactory {
-  def allFactories: Iterator[ArrayDequeFactory] =
-    Iterator(new ArrayDequeFactory())
+  @Test def iteratorRemoveTowards(): Unit = {
+    /* Test case that triggers a condition where upon removal of an element
+     * during iteration, we must shift elements still pending iteration onto the
+     * current index (due to the state of the ringbuffer).
+     *
+     * If iterators do not handle this special case, the proper next element
+     * will be skipped.
+     */
+
+    val ad = factory.empty[Int]
+
+    // Shift the internal buffer position
+    for (i <- 0 to 10) {
+      ad.offerLast(i)
+      ad.pollFirst()
+    }
+
+    // Fill (over ringbuffer boundary, default capacity is 16)
+    for (i <- 0 to 10) {
+      ad.offerLast(i)
+    }
+
+    val iter = ad.iterator()
+    for (i <- 0 to 10) {
+      assertTrue(iter.hasNext())
+      assertEquals(i, iter.next())
+
+      // Skip some elements, so we remove non-trailing (or leading elements)
+      if (i > 3)
+        iter.remove()
+    }
+
+    assertFalse(iter.hasNext())
+  }
+
+  @Test def iteratorDescendingRemoveTowards(): Unit = {
+    val ad = factory.empty[Int]
+
+    // Shift the internal buffer position
+    for (i <- 0 to 10) {
+      ad.offerLast(i)
+      ad.pollFirst()
+    }
+
+    // Fill (over ringbuffer boundary, default capacity is 16)
+    for (i <- 0 to 10) {
+      ad.offerLast(i)
+    }
+
+    val iter = ad.descendingIterator()
+    for (i <- 10 to 0 by -1) {
+      assertTrue(iter.hasNext())
+      assertEquals(i, iter.next())
+
+      // Skip some elements, so we remove non-trailing (or leading elements)
+      if (i < 6)
+        iter.remove()
+    }
+
+    assertFalse(iter.hasNext())
+  }
 }
 
 class ArrayDequeFactory extends AbstractCollectionFactory with DequeFactory {
@@ -184,4 +245,6 @@ class ArrayDequeFactory extends AbstractCollectionFactory with DequeFactory {
 
   def from[E](coll: ju.Collection[E]): ju.ArrayDeque[E] =
     new ju.ArrayDeque[E](coll)
+
+  override def allowsNullElement: Boolean = false
 }

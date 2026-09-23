@@ -12,13 +12,10 @@
 
 package org.scalajs.testsuite.javalib.lang
 
-import language.implicitConversions
-
 import org.junit.{After, Test}
 import org.junit.Assert._
 import org.junit.Assume._
 
-import org.scalajs.testsuite.utils.AssertThrows._
 import org.scalajs.testsuite.utils.Platform._
 
 class SystemPropertiesTest {
@@ -27,9 +24,8 @@ class SystemPropertiesTest {
   private final val ExistingPropName = "org.scalajs.testsuite.existingprop"
   private final val TestPropName = "org.scalajs.testsuite.testprop"
 
-  @After def resetSystemPropertiesAfterEachTest(): Unit = {
+  @After def resetSystemPropertiesAfterEachTest(): Unit =
     System.setProperties(null)
-  }
 
   /** Tests scenarios where only `getProperty`, `setProperty` and
    *  `clearProperty` are used.

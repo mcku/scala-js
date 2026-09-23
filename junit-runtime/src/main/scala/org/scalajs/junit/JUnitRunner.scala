@@ -17,7 +17,8 @@ import sbt.testing._
 private[junit] final class JUnitRunner(
     val args: Array[String],
     val remoteArgs: Array[String],
-    runSettings: RunSettings) extends Runner {
+    runSettings: RunSettings)
+    extends Runner {
 
   def tasks(taskDefs: Array[TaskDef]): Array[Task] =
     taskDefs.map(new JUnitTask(_, runSettings))
@@ -25,7 +26,7 @@ private[junit] final class JUnitRunner(
   def done(): String = ""
 
   def serializeTask(task: Task, serializer: TaskDef => String): String =
-    serializer(task.taskDef)
+    serializer(task.taskDef())
 
   def deserializeTask(task: String, deserializer: String => TaskDef): Task =
     new JUnitTask(deserializer(task), runSettings)

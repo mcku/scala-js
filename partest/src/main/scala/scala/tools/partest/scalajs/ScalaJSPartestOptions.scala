@@ -13,30 +13,45 @@
 package scala.tools.partest.scalajs
 
 class ScalaJSPartestOptions private (
-  val testFilter: ScalaJSPartestOptions.TestFilter,
-  val optMode: ScalaJSPartestOptions.OptMode,
-  val showDiff: Boolean
-)
+    val testFilter: ScalaJSPartestOptions.TestFilter,
+    val useWasm: Boolean,
+    val optMode: ScalaJSPartestOptions.OptMode,
+    val showDiff: Boolean
+) {
+  def banner: String = {
+    import org.scalajs.ir.ScalaJSVersions.{current => currentVersion}
+
+    s"""
+    |Scala.js version is: $currentVersion
+    |Scala.js options are:
+    |Wasm:                ${useWasm}
+    |optimizer:           ${optMode.shortStr}
+    |testFilter:          ${testFilter.descr}
+    """.stripMargin
+  }
+
+  val targetSpecificCheckFileSuffix: String =
+    if (useWasm) "-wasm"
+    else "-js"
+}
 
 object ScalaJSPartestOptions {
 
   sealed abstract class TestFilter {
     def descr: String
   }
-  case object UnknownTests extends TestFilter {
-    override def descr: String = "Unknown"
-  }
+
   case object BlacklistedTests extends TestFilter {
     override def descr: String = "Blacklisted"
   }
+
   case object WhitelistedTests extends TestFilter {
     override def descr: String = "Whitelisted"
   }
-  case object BuglistedTests extends TestFilter {
-    override def descr: String = "Buglisted"
-  }
+
   case class SomeTests(names: List[String]) extends TestFilter {
     override def descr: String = "Custom " + this.toString
+
     override def toString() =
       names.map(x => s""""$x"""").mkString("[", ", ", "]")
   }
@@ -45,6 +60,7 @@ object ScalaJSPartestOptions {
     def shortStr: String
     def id: String
   }
+
   object OptMode {
     def fromId(id: String): OptMode = id match {
       case "none" => NoOpt
@@ -53,14 +69,17 @@ object ScalaJSPartestOptions {
       case _      => throw new IllegalArgumentException(s"Unknown optimization mode: $id")
     }
   }
+
   case object NoOpt extends OptMode {
     def shortStr: String = "None"
     def id: String = "none"
   }
+
   case object FastOpt extends OptMode {
     def shortStr: String = "Fast"
     def id: String = "fast"
   }
+
   case object FullOpt extends OptMode {
     def shortStr: String = "Full"
     def id: String = "full"
@@ -72,6 +91,7 @@ object ScalaJSPartestOptions {
     var failed = false
 
     var filter: Option[TestFilter] = None
+    var useWasm: Boolean = false
     var optMode: OptMode = NoOpt
     var showDiff: Boolean = false
 
@@ -85,12 +105,15 @@ object ScalaJSPartestOptions {
         // Merge test names
         filter = Some(SomeTests(oldNames ++ newNames))
       case (Some(fil), newFilter) =>
-        error(s"You cannot specify twice what tests to use (already specified: $fil, new: $newFilter)")
+        error(
+            s"You cannot specify twice what tests to use (already specified: $fil, new: $newFilter)")
       case (None, newFilter) =>
         filter = Some(newFilter)
     }
 
     for (arg <- args) arg match {
+      case "--wasm" =>
+        useWasm = true
       case "--fastOpt" =>
         optMode = FastOpt
       case "--noOpt" =>
@@ -99,12 +122,8 @@ object ScalaJSPartestOptions {
         optMode = FullOpt
       case "--blacklisted" =>
         setFilter(BlacklistedTests)
-      case "--buglisted" =>
-        setFilter(BuglistedTests)
       case "--whitelisted" =>
         setFilter(WhitelistedTests)
-      case "--unknown" =>
-        setFilter(UnknownTests)
       case "--showDiff" =>
         showDiff = true
       case _ =>
@@ -114,7 +133,7 @@ object ScalaJSPartestOptions {
     if (failed) None
     else Some {
       new ScalaJSPartestOptions(
-        filter.getOrElse(WhitelistedTests), optMode, showDiff)
+          filter.getOrElse(WhitelistedTests), useWasm, optMode, showDiff)
     }
   }
 

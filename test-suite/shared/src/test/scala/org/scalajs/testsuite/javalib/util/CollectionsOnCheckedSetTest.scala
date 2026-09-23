@@ -30,7 +30,7 @@ trait CollectionsOnCheckedSetTest extends CollectionsOnSetsTest {
             ct.runtimeClass.asInstanceOf[Class[E]])
       }
 
-      def allowsNullElement: Boolean =
+      override def allowsNullElement: Boolean =
         originalFactory.allowsNullElement
     }
   }
@@ -50,14 +50,13 @@ trait CollectionsOnCheckedSortedSetTest extends CollectionsOnSortedSetsTest {
             ct.runtimeClass.asInstanceOf[Class[E]])
       }
 
-      def allowsNullElement: Boolean =
+      override def allowsNullElement: Boolean =
         originalFactory.allowsNullElement
     }
   }
 }
 
-class CollectionsOnCheckedSetHashSetFactoryTest
-    extends CollectionsOnCheckedSetTest {
+class CollectionsOnCheckedSetHashSetFactoryTest extends CollectionsOnCheckedSetTest {
   def originalFactory: SetFactory = new HashSetFactory
 }
 

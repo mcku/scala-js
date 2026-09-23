@@ -12,13 +12,15 @@
 
 package java.io
 
-abstract class Writer private[this] (_lock: Option[Object]) extends
-    Appendable with Closeable with Flushable {
+import java.util.Objects.requireNonNull
 
-  protected val lock = _lock.getOrElse(this)
+abstract class Writer() extends Appendable with Closeable with Flushable {
+  protected var lock: Object = this
 
-  protected def this(lock: Object) = this(Some(lock))
-  protected def this() = this(None)
+  protected def this(lock: Object) = {
+    this()
+    this.lock = requireNonNull(lock)
+  }
 
   def write(c: Int): Unit =
     write(Array(c.toChar))

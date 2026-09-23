@@ -13,10 +13,11 @@
 package java.util.concurrent.atomic
 
 class AtomicReferenceArray[E <: AnyRef](
-    length: Int) extends Serializable {
+    length: Int)
+    extends Serializable {
 
   def this(array: Array[E]) = {
-    this(array.size)
+    this(array.length)
     System.arraycopy(array, 0, inner, 0, length)
   }
 
@@ -41,7 +42,8 @@ class AtomicReferenceArray[E <: AnyRef](
   }
 
   final def compareAndSet(i: Int, expect: E, update: E): Boolean = {
-    if (get(i) ne expect) false else {
+    if (get(i) ne expect) false
+    else {
       set(i, update)
       true
     }
@@ -51,5 +53,5 @@ class AtomicReferenceArray[E <: AnyRef](
     compareAndSet(i, expect, update)
 
   override def toString(): String =
-    inner.mkString("[", ", ", "]")
+    java.util.Arrays.toString(inner)
 }

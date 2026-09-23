@@ -13,6 +13,7 @@
 package org.scalajs.testsuite.utils
 
 import scala.scalajs.js
+import scala.scalajs.LinkingInfo.ESVersion
 
 object Platform {
 
@@ -23,11 +24,11 @@ object Platform {
    */
   final val executingInJVM = false
 
-  final val executingInJVMOnJDK6 = false
+  def executingInJVMOnLowerThanJDK(version: Int): Boolean = false
 
-  final val executingInJVMOnJDK7OrLower = false
+  def executingInJVMWithJDKIn(range: Range): Boolean = false
 
-  final val executingInJVMOnJDK8OrLower = false
+  def executingInWebAssembly: Boolean = BuildInfo.isWebAssembly
 
   def executingInNodeJS: Boolean = {
     js.typeOf(js.Dynamic.global.process) != "undefined" &&
@@ -35,17 +36,36 @@ object Platform {
     (js.Dynamic.global.process.release.name: Any) == "node"
   }
 
+  /** The assumed ECMAScript version. */
+  def assumedESVersion: Int = BuildInfo.esVersion
+
+  /** Convenience for `assumedESVersion >= ESVersion.ES2015`. */
+  def assumeES2015: Boolean = assumedESVersion >= ESVersion.ES2015
+
+  /** Whether Scala.js language features use ECMAScript 2015 semantics. */
+  def useECMAScript2015Semantics: Boolean = BuildInfo.useECMAScript2015Semantics
+
   def jsSymbols: Boolean =
     assumeES2015 || js.typeOf(js.Dynamic.global.Symbol) != "undefined"
 
   def typedArrays: Boolean =
     assumeES2015 || js.typeOf(js.Dynamic.global.Int32Array) != "undefined"
 
+  def jsMaps: Boolean =
+    assumeES2015 || js.typeOf(js.Dynamic.global.Map) != "undefined"
+
+  def jsBigInts: Boolean =
+    assumedESVersion >= ESVersion.ES2020 || js.typeOf(js.Dynamic.global.BigInt) != "undefined"
+
+  lazy val jsRegExps2018: Boolean =
+    assumedESVersion >= ESVersion.ES2018 || regexFeatureTest("(?<=a)(?<!b)\\p{L}\\P{L}", "us")
+
   def sourceMaps: Boolean = BuildInfo.hasSourceMaps && executingInNodeJS
 
-  def assumeES2015: Boolean = BuildInfo.es2015
+  def usesClosureCompiler: Boolean = BuildInfo.usesClosureCompiler
 
-  def isInFullOpt: Boolean = BuildInfo.isFullOpt
+  def hasMinifiedNames: Boolean = BuildInfo.hasMinifiedNames
+
   def isInProductionMode: Boolean = BuildInfo.productionMode
 
   def hasCompliantAsInstanceOfs: Boolean = BuildInfo.compliantAsInstanceOfs
@@ -53,12 +73,41 @@ object Platform {
   def hasCompliantArrayIndexOutOfBounds: Boolean =
     BuildInfo.compliantArrayIndexOutOfBounds
 
+  def hasCompliantArrayStores: Boolean =
+    BuildInfo.compliantArrayStores
+
+  def hasCompliantNegativeArraySizes: Boolean =
+    BuildInfo.compliantNegativeArraySizes
+
+  def hasCompliantNullPointers: Boolean = BuildInfo.compliantNullPointers
+
+  def hasCompliantStringIndexOutOfBounds: Boolean =
+    BuildInfo.compliantStringIndexOutOfBounds
+
   def hasCompliantModuleInit: Boolean = BuildInfo.compliantModuleInit
-  def hasStrictFloats: Boolean = BuildInfo.strictFloats
+
+  def regexSupportsUnicodeCase: Boolean =
+    assumedESVersion >= ESVersion.ES2015
+
+  def regexSupportsUnicodeCharacterClasses: Boolean =
+    assumedESVersion >= ESVersion.ES2018
+
+  def regexSupportsLookBehinds: Boolean =
+    assumedESVersion >= ESVersion.ES2018
 
   def isNoModule: Boolean = BuildInfo.isNoModule
   def isESModule: Boolean = BuildInfo.isESModule
   def isCommonJSModule: Boolean = BuildInfo.isCommonJSModule
+
+  def hasWasmCustomDescriptors: Boolean = BuildInfo.hasWasmCustomDescriptors
+
+  /** Does the target support `@JSExport` and the setup of JS prototype chains
+   *  on Scala classes?
+   *
+   *  This is true on JS, or on Wasm with the Custom Descriptors proposal.
+   */
+  def hasJSExportsAndJSPrototypes: Boolean =
+    !executingInWebAssembly || hasWasmCustomDescriptors
 
   /** Runs the specified piece of code in the global context.
    *
@@ -72,5 +121,14 @@ object Platform {
     val vm = js.Dynamic.global.require("vm")
     val script = js.Dynamic.newInstance(vm.Script)(code)
     script.runInThisContext()
+  }
+
+  private def regexFeatureTest(pattern: String, flags: String): Boolean = {
+    try {
+      new js.RegExp(pattern, flags)
+      true
+    } catch {
+      case _: js.JavaScriptException => false
+    }
   }
 }

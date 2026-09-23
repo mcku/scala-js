@@ -18,28 +18,30 @@ import ScalaOps._
 
 import java.lang.{reflect => jlr}
 
+import java.util.function.Predicate
+
 abstract class AbstractCollection[E] protected () extends Collection[E] {
   def iterator(): Iterator[E]
   def size(): Int
 
-  def isEmpty(): Boolean = size == 0
+  def isEmpty(): Boolean = size() == 0
 
   def contains(o: Any): Boolean =
-    this.scalaOps.exists(o === _)
+    this.scalaOps.exists(Objects.equals(o, _))
 
   def toArray(): Array[AnyRef] =
-    toArray(new Array[AnyRef](size))
+    toArray(new Array[AnyRef](size()))
 
   def toArray[T <: AnyRef](a: Array[T]): Array[T] = {
     val toFill: Array[T] =
-      if (a.size >= size) a
-      else jlr.Array.newInstance(a.getClass.getComponentType, size).asInstanceOf[Array[T]]
+      if (a.length >= size()) a
+      else jlr.Array.newInstance(a.getClass().getComponentType(), size()).asInstanceOf[Array[T]]
 
-    val iter = iterator
-    for (i <- 0 until size)
+    val iter = iterator()
+    for (i <- 0 until size())
       toFill(i) = iter.next().asInstanceOf[T]
-    if (toFill.size > size)
-      toFill(size) = null.asInstanceOf[T]
+    if (toFill.length > size())
+      toFill(size()) = null.asInstanceOf[T]
     toFill
   }
 
@@ -49,14 +51,16 @@ abstract class AbstractCollection[E] protected () extends Collection[E] {
   def remove(o: Any): Boolean = {
     @tailrec
     def findAndRemove(iter: Iterator[E]): Boolean = {
-      if (iter.hasNext) {
-        if (iter.next() === o) {
+      if (iter.hasNext()) {
+        if (Objects.equals(iter.next(), o)) {
           iter.remove()
           true
-        } else
+        } else {
           findAndRemove(iter)
-      } else
+        }
+      } else {
         false
+      }
     }
     findAndRemove(iterator())
   }
@@ -76,11 +80,11 @@ abstract class AbstractCollection[E] protected () extends Collection[E] {
   def clear(): Unit =
     removeWhere(_ => true)
 
-  private def removeWhere(p: Any => Boolean): Boolean = {
+  private def removeWhere(p: Predicate[Any]): Boolean = {
     val iter = iterator()
     var changed = false
-    while (iter.hasNext) {
-      if (p(iter.next())) {
+    while (iter.hasNext()) {
+      if (p.test(iter.next())) {
         iter.remove()
         changed = true
       }
@@ -89,5 +93,5 @@ abstract class AbstractCollection[E] protected () extends Collection[E] {
   }
 
   override def toString(): String =
-    this.scalaOps.mkString("[", ",", "]")
+    this.scalaOps.mkString("[", ", ", "]")
 }

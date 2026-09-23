@@ -18,20 +18,41 @@ import java.io._
 import java.nio.charset.StandardCharsets
 import java.nio.ByteBuffer
 
+import ScalaOps._
+
 object Base64 {
 
-  private val chars = ('A' to 'Z') ++ ('a' to 'z') ++ ('0' to '9')
+  private val basicEncodeTable: Array[Byte] = {
+    val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    val table = new Array[Byte](64)
+    var i = 0
+    while (i != 64) {
+      table(i) = chars.charAt(i).toByte
+      i += 1
+    }
+    table
+  }
 
-  private val basicEncodeTable: Array[Byte] =
-    (chars ++ Seq('+', '/')).map(_.toByte).toArray
-
-  private val urlSafeEncodeTable: Array[Byte] =
-    (chars ++ Seq('-', '_')).map(_.toByte).toArray
+  private val urlSafeEncodeTable: Array[Byte] = {
+    val table = basicEncodeTable.clone()
+    table(62) = '-'.toByte
+    table(63) = '_'.toByte
+    table
+  }
 
   private def decodeTable(encode: Array[Byte]): Array[Int] = {
-    val decode = Array.fill[Int](256)(-1)
-    for ((b, i) <- encode.zipWithIndex)
-      decode(b) = i
+    val decode = new Array[Int](256)
+    var i = 0
+    while (i != 256) {
+      decode(i) = -1
+      i += 1
+    }
+    val len = encode.length
+    var j = 0
+    while (j != len) {
+      decode(encode(j)) = j
+      j += 1
+    }
     decode('=') = -2
     decode
   }
@@ -39,7 +60,7 @@ object Base64 {
   private val basicDecodeTable = decodeTable(basicEncodeTable)
   private val urlSafeDecodeTable = decodeTable(urlSafeEncodeTable)
 
-  private val mimeLineSeparators = Array[Byte]('\r', '\n')
+  private val mimeLineSeparators = Array('\r'.toByte, '\n'.toByte)
   private final val mimeLineLength = 76
 
   private val basicEncoder =
@@ -69,10 +90,11 @@ object Base64 {
   def getMimeEncoder(): Encoder = mimeEncoder
 
   def getMimeEncoder(lineLength: Int, lineSeparator: Array[Byte]): Encoder = {
-    for (b <- lineSeparator) {
-      if (basicDecodeTable(b & 0xff) != -1) {
+    for (i <- 0 until lineSeparator.length) {
+      val b = lineSeparator(i) & 0xff
+      if (basicDecodeTable(b) != -1) {
         throw new IllegalArgumentException(
-            "Illegal base64 line separator character 0x" + (b & 0xff).toHexString)
+            "Illegal base64 line separator character 0x" + Integer.toHexString(b))
       }
     }
     new Encoder(basicEncodeTable, lineLength / 4 * 4, lineSeparator)
@@ -99,7 +121,7 @@ object Base64 {
 
     def decode(src: Array[Byte], dst: Array[Byte]): Int = {
       if (dst.length < dstMaxLength(src.length) && // dst is possibly too small
-          dst.length < dstRequiredLength(src)) {   // dst is actually too small
+          dst.length < dstRequiredLength(src)) { // dst is actually too small
         throw new IllegalArgumentException(
             "Output byte array is too small for decoding all input bytes")
       }
@@ -167,7 +189,7 @@ object Base64 {
               case -1 =>
                 if (!ignoreInvalid) {
                   throw new IllegalArgumentException(
-                      "Illegal base64 character " + int.toHexString)
+                      "Illegal base64 character " + Integer.toHexString(int))
                 }
                 iterate()
 
@@ -203,7 +225,7 @@ object Base64 {
       var validBytes = 0
 
       if (ignoreInvalid) {
-        for (i <- src.indices) {
+        for (i <- 0 until src.length) {
           if (table(src(i) & 0xff) >= 0)
             validBytes += 1
         }
@@ -216,7 +238,7 @@ object Base64 {
          * thrown."
          */
         validBytes = src.length
-        if (src.length >= 1 && src.last == '=') {
+        if (src.length >= 1 && src(src.length - 1) == '=') {
           validBytes -= 1
           if (src.length >= 2 && src(src.length - 2) == '=')
             validBytes -= 1
@@ -278,7 +300,7 @@ object Base64 {
             case -1 =>
               if (!ignoreInvalid) {
                 throw new IOException(
-                    "Illegal base64 character " + i.toHexString)
+                    "Illegal base64 character " + Integer.toHexString(i))
               }
               0
 
@@ -334,7 +356,7 @@ object Base64 {
         val s = shift
         if (s == DecodeState18 || s == DecodeState12 ||
             (s == DecodeState14 && in.read() != '=' && !ignoreInvalid)) {
-          throw new IOException ("Illegal base64 ending sequence")
+          throw new IOException("Illegal base64 ending sequence")
         }
         writeValue(Int.MaxValue)
       }
@@ -360,14 +382,14 @@ object Base64 {
       if (closed)
         throw new IOException("Stream is closed")
 
-      if (off < 0 || len < 0 || len > b.length - off)
-        throw new IndexOutOfBoundsException()
+      BoundsChecks.checkOffsetCount(off, len, b.length)
 
       if (eof) {
         -1
       } else {
         iterate()
-        written
+        if (written == 0 && eof) -1
+        else written
       }
     }
 
@@ -380,7 +402,7 @@ object Base64 {
   // --------------------------------------------------------------------------
 
   class Encoder private[Base64] (table: Array[Byte], lineLength: Int = 0,
-      lineSeparator: Array[Byte] = Array.empty, withPadding: Boolean = true) {
+      lineSeparator: Array[Byte] = new Array[Byte](0), withPadding: Boolean = true) {
 
     def encode(src: Array[Byte]): Array[Byte] = {
       val dst = new Array[Byte](dstLength(src.length))
@@ -442,7 +464,8 @@ object Base64 {
         currentLine += 4
         if (lineSeparator.length > 0 && lineLength > 0 &&
             currentLine == lineLength && dst.hasRemaining) {
-          lineSeparator.foreach(dst.put(_))
+          for (i <- 0 until lineSeparator.length)
+            dst.put(lineSeparator(i))
           currentLine = 0
         }
       }
@@ -523,16 +546,16 @@ object Base64 {
     override def write(bytes: Array[Byte], off: Int, len: Int): Unit = {
       if (closed)
         throw new IOException("Stream is closed")
-      if (off < 0 || len < 0 || len > bytes.length - off)
-        throw new IndexOutOfBoundsException()
+
+      val endOffset = BoundsChecks.checkOffsetCount(off, len, bytes.length)
 
       if (len != 0) {
         addLineSeparators()
-        for (i <- off until (off + len)) {
+        for (i <- off until endOffset) {
           inputBuf.put(bytes(i))
           if (!inputBuf.hasRemaining) {
             writeBuffer(4)
-            if (i < (off + len - 1))
+            if (i < (endOffset - 1))
               addLineSeparators()
           }
         }
@@ -583,7 +606,7 @@ object Base64 {
 
     def get(): Byte = {
       position += 1
-      array(position-1)
+      array(position - 1)
     }
 
     def clear(): Unit = {

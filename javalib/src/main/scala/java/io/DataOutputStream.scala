@@ -12,8 +12,9 @@
 
 package java.io
 
-class DataOutputStream(out: OutputStream)
-    extends FilterOutputStream(out) with DataOutput {
+import java.util.ScalaOps._
+
+class DataOutputStream(out: OutputStream) extends FilterOutputStream(out) with DataOutput {
 
   protected var written: Int = 0
 
@@ -60,26 +61,27 @@ class DataOutputStream(out: OutputStream)
   }
 
   final def writeFloat(v: Float): Unit =
-    writeInt(java.lang.Float.floatToIntBits(v))
+    writeInt(java.lang.Float.floatToIntBits(v)) // must canonicalize NaNs
 
   final def writeDouble(v: Double): Unit =
-    writeLong(java.lang.Double.doubleToLongBits(v))
+    writeLong(java.lang.Double.doubleToLongBits(v)) // must canonicalize NaNs
 
   final def writeBytes(s: String): Unit = {
-    for (c <- s)
-      write(c.toInt)
+    for (i <- 0 until s.length())
+      write(s.charAt(i).toInt)
   }
 
   final def writeChars(s: String): Unit = {
-    for (c <- s)
-      writeChar(c)
+    for (i <- 0 until s.length())
+      writeChar(s.charAt(i))
   }
 
   final def writeUTF(s: String): Unit = {
-    val buffer = new Array[Byte](2 + 3*s.length)
+    val buffer = new Array[Byte](2 + 3 * s.length)
 
     var idx = 2
-    for (c <- s) {
+    for (i <- 0 until s.length()) {
+      val c = s.charAt(i)
       if (c <= 0x7f && c >= 0x01) {
         buffer(idx) = c.toByte
         idx += 1

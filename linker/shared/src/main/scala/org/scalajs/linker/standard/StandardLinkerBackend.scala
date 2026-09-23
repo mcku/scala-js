@@ -12,17 +12,21 @@
 
 package org.scalajs.linker.standard
 
-import org.scalajs.linker._
+import org.scalajs.linker.interface.StandardConfig
 import org.scalajs.linker.backend.LinkerBackendImpl
 
 object StandardLinkerBackend {
-  def apply(config: StandardLinker.Config): LinkerBackend = {
+  def apply(config: StandardConfig): LinkerBackend = {
     val backendConfig = LinkerBackendImpl.Config()
-      .withCommonConfig(config.commonPhaseConfig)
+      .withCommonConfig(CommonPhaseConfig.fromStandardConfig(config))
+      .withJSHeader(config.jsHeader)
       .withSourceMap(config.sourceMap)
+      .withOutputPatterns(config.outputPatterns)
       .withRelativizeSourceMapBase(config.relativizeSourceMapBase)
-      .withClosureCompilerIfAvailable(config.closureCompilerIfAvailable)
+      .withMinify(config.minify)
+      .withClosureCompilerIfAvailableInternal(config.closureCompilerIfAvailable)
       .withPrettyPrint(config.prettyPrint)
+      .withMaxConcurrentWrites(config.maxConcurrentWrites)
 
     LinkerBackendImpl(backendConfig)
   }

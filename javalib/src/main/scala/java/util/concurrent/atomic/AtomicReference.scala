@@ -12,8 +12,12 @@
 
 package java.util.concurrent.atomic
 
+import java.util.function.BinaryOperator
+import java.util.function.UnaryOperator
+
 class AtomicReference[T <: AnyRef](
-    private[this] var value: T) extends Serializable {
+    private[this] var value: T)
+    extends Serializable {
 
   def this() = this(null.asInstanceOf[T])
 
@@ -26,7 +30,8 @@ class AtomicReference[T <: AnyRef](
     set(newValue)
 
   final def compareAndSet(expect: T, update: T): Boolean = {
-    if (expect ne value) false else {
+    if (expect ne value) false
+    else {
       value = update
       true
     }
@@ -39,6 +44,30 @@ class AtomicReference[T <: AnyRef](
     val old = value
     value = newValue
     old
+  }
+
+  final def getAndUpdate(updateFunction: UnaryOperator[T]): T = {
+    val old = value
+    value = updateFunction.apply(old)
+    old
+  }
+
+  final def updateAndGet(updateFunction: UnaryOperator[T]): T = {
+    val old = value
+    value = updateFunction.apply(old)
+    value
+  }
+
+  final def getAndAccumulate(x: T, accumulatorFunction: BinaryOperator[T]): T = {
+    val old = value
+    value = accumulatorFunction.apply(old, x)
+    old
+  }
+
+  final def accumulateAndGet(x: T, accumulatorFunction: BinaryOperator[T]): T = {
+    val old = value
+    value = accumulatorFunction.apply(old, x)
+    value
   }
 
   override def toString(): String =

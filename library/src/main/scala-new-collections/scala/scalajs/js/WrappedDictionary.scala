@@ -16,12 +16,14 @@ import scala.collection.mutable
 import scala.collection.mutable.Builder
 import scala.collection.View
 
+import scala.language.implicitConversions
+
 import scala.scalajs.js
 import scala.scalajs.js.annotation._
 
 /** Wrapper to use a js.Dictionary as a scala.mutable.Map */
 @inline
-class WrappedDictionary[A](val dict: js.Dictionary[A])
+final class WrappedDictionary[A](private val dict: js.Dictionary[A])
     extends mutable.AbstractMap[String, A]
     with mutable.MapOps[String, A, mutable.Map, js.WrappedDictionary[A]] {
 
@@ -52,6 +54,23 @@ class WrappedDictionary[A](val dict: js.Dictionary[A])
       throw new NoSuchElementException("key not found: " + key)
   }
 
+  override def getOrElse[V1 >: A](key: String, default: => V1): V1 = {
+    if (contains(key))
+      rawApply(key)
+    else
+      default
+  }
+
+  override def getOrElseUpdate(key: String, op: => A): A = {
+    if (contains(key)) {
+      rawApply(key)
+    } else {
+      val v = op
+      update(key, v)
+      v
+    }
+  }
+
   @inline
   private def rawApply(key: String): A =
     dict.asInstanceOf[DictionaryRawApply[A]].rawApply(key)
@@ -80,6 +99,10 @@ class WrappedDictionary[A](val dict: js.Dictionary[A])
   def iterator: scala.collection.Iterator[(String, A)] =
     new DictionaryIterator(dict)
 
+  /* Warning silenced in build for 2.13.13+:
+   * overriding method keys in trait MapOps is deprecated (since 2.13.13):
+   * This method should be an alias for keySet
+   */
   @inline
   override def keys: scala.collection.Iterable[String] =
     js.Object.keys(dict.asInstanceOf[js.Object])
@@ -136,6 +159,7 @@ object WrappedDictionary {
 
   @js.native
   private trait DictionaryRawApply[A] extends js.Object {
+
     /** Reads a field of this object by its name.
      *
      *  This must not be called if the dictionary does not contain the key.
@@ -154,7 +178,7 @@ object WrappedDictionary {
     private[this] val keys = js.Object.keys(dict.asInstanceOf[js.Object])
     private[this] var index: Int = 0
 
-    def hasNext(): Boolean = index < keys.length
+    def hasNext: Boolean = index < keys.length
 
     def next(): (String, A) = {
       val key = keys(index)
@@ -182,5 +206,8 @@ object WrappedDictionary {
     def result(): js.WrappedDictionary[A] =
       new js.WrappedDictionary(dict)
   }
+
+  implicit def toJSDictionary[A](wrappedDict: js.WrappedDictionary[A]): js.Dictionary[A] =
+    wrappedDict.dict
 
 }

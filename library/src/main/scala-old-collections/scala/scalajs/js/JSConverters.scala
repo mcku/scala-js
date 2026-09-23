@@ -58,10 +58,16 @@ object JSConverters extends js.JSConvertersLowPrioImplicits {
        * instead, but that would prevent `toJSArray` to be inlined even when
        * `col` is stack-allocated (and we do want that to happen as in that
        * case the entire match disappears and `col` can stay stack-allocated).
+       *
+       * Note that avoiding a copy is consistent with Scala behavior for Arrays.
        */
       col match {
-        case col: js.ArrayOps[T]     => col.repr
-        case col: js.WrappedArray[T] => col.array
+        case col: js.ArrayOps[T] =>
+          col.repr
+
+        case col: js.WrappedArray[T] =>
+          WrappedArray.toJSArray(col)
+
         case _ =>
           val result = new js.Array[T]
           col.foreach(x => result.push(x))
@@ -90,7 +96,8 @@ object JSConverters extends js.JSConvertersLowPrioImplicits {
   }
 
   private class IteratorAdapter[+T](
-      it: scala.collection.Iterator[T]) extends js.Iterator[T] {
+      it: scala.collection.Iterator[T])
+      extends js.Iterator[T] {
     final def next(): js.Iterator.Entry[T] = {
       if (it.hasNext) {
         new js.Iterator.Entry[T] {
@@ -119,10 +126,33 @@ object JSConverters extends js.JSConvertersLowPrioImplicits {
     }
   }
 
+  implicit final class JSRichMapKV[K, V](
+      private val self: GenMap[K, V])
+      extends AnyVal {
+
+    @inline final def toJSMap: js.Map[K, V] = {
+      val result = js.Map.empty[K, V].asInstanceOf[js.Map.Raw[K, V]]
+      self.foreach { case (key, value) => result.set(key, value) }
+      result.asInstanceOf[js.Map[K, V]]
+    }
+  }
+
+  implicit final class JSRichSet[T](
+      private val self: GenSet[T])
+      extends AnyVal {
+
+    @inline final def toJSSet: js.Set[T] = {
+      val result = js.Set.empty[T]
+      self.foreach(value => result.add(value))
+      result
+    }
+  }
+
   @inline
   implicit def genTravConvertible2JSRichGenTrav[T, C](coll: C)(
-      implicit ev: C => GenTraversableOnce[T]): JSRichGenTraversableOnce[T] =
+      implicit ev: C => GenTraversableOnce[T]): JSRichGenTraversableOnce[T] = {
     new JSRichGenTraversableOnce(coll)
+  }
 
   @inline
   implicit def JSRichFutureThenable[A](f: Future[js.Thenable[A]]): JSRichFuture[A] =
@@ -156,10 +186,7 @@ object JSConverters extends js.JSConvertersLowPrioImplicits {
               resolve(value)
 
             case scala.util.Failure(th) =>
-              reject(th match {
-                case js.JavaScriptException(e) => e
-                case _                         => th
-              })
+              reject(js.special.unwrapFromThrowable(th))
           }
       })
     }

@@ -28,7 +28,7 @@ trait CollectionsOnSetFromMapTest extends SetTest {
       def empty[E: ClassTag]: ju.Set[E] =
         ju.Collections.newSetFromMap[E](mapFactory.empty[E, jl.Boolean])
 
-      def allowsNullElement: Boolean =
+      override def allowsNullElement: Boolean =
         mapFactory.allowsNullKeys
     }
   }
@@ -42,7 +42,8 @@ class CollectionsOnSetFromMapOnLinkedHashMapInsertionOrderTest extends Collectio
   def mapFactory: MapFactory = new LinkedHashMapFactory(false, None)
 }
 
-class CollectionsOnSetFromMapOnLinkedHashMapInsertionOrderWithLimitTest extends CollectionsOnSetFromMapTest {
+class CollectionsOnSetFromMapOnLinkedHashMapInsertionOrderWithLimitTest
+    extends CollectionsOnSetFromMapTest {
   def mapFactory: MapFactory = new LinkedHashMapFactory(false, Some(50))
 }
 
@@ -50,6 +51,7 @@ class CollectionsOnSetFromMapOnLinkedHashMapAccessOrderTest extends CollectionsO
   def mapFactory: MapFactory = new LinkedHashMapFactory(true, None)
 }
 
-class CollectionsOnSetFromMapOnLinkedHashMapAccessOrderWithLimitTest extends CollectionsOnSetFromMapTest {
+class CollectionsOnSetFromMapOnLinkedHashMapAccessOrderWithLimitTest
+    extends CollectionsOnSetFromMapTest {
   def mapFactory: MapFactory = new LinkedHashMapFactory(true, Some(50))
 }

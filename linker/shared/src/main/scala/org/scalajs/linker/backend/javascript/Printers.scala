@@ -12,19 +12,16 @@
 
 package org.scalajs.linker.backend.javascript
 
+import java.nio.charset.StandardCharsets
+
 import scala.annotation.switch
 
 // Unimport default print and println to avoid invoking them by mistake
 import scala.Predef.{print => _, println => _, _}
 
-import scala.util.control.Breaks
-
-import java.io.Writer
-
 import org.scalajs.ir
 import ir.Position
 import ir.Position.NoPosition
-import ir.Printers.IndentationManager
 
 import Trees._
 
@@ -34,33 +31,41 @@ import Trees._
  * hotspots in this object.
  */
 object Printers {
+  private val ReusableIndentArray = Array.fill(128)(' '.toByte)
 
-  class JSTreePrinter(protected val out: Writer) extends IndentationManager {
+  class JSTreePrinter(protected val out: ByteArrayWriter, initIndent: Int = 0) {
+    private final val IndentStep = 2
 
-    def printTopLevelTree(tree: Tree): Unit = {
-      tree match {
-        case Skip() =>
-          // do not print anything
-        case tree: Block =>
-          var rest = tree.stats
-          while (rest.nonEmpty) {
-            printTopLevelTree(rest.head)
-            rest = rest.tail
-          }
-        case _ =>
-          printStat(tree)
-          if (shouldPrintSepAfterTree(tree))
-            print(';')
-          println()
-      }
+    private var indentMargin = initIndent * IndentStep
+    private var indentArray = ReusableIndentArray
+
+    private def indent(): Unit = indentMargin += IndentStep
+    private def undent(): Unit = indentMargin -= IndentStep
+
+    protected final def getIndentMargin(): Int = indentMargin
+
+    protected def println(): Unit =
+      out.write('\n')
+
+    protected def printIndent(): Unit = {
+      val indentArray = this.indentArray
+      val indentMargin = this.indentMargin
+      val bigEnoughIndentArray =
+        if (indentMargin <= indentArray.length) indentArray
+        else growIndentArray()
+      out.write(bigEnoughIndentArray, 0, indentMargin)
     }
 
-    protected def shouldPrintSepAfterTree(tree: Tree): Boolean = tree match {
-      case _:DocComment | _:FunctionDef | _:ClassDef => false
-      case _                                         => true
+    private def growIndentArray(): Array[Byte] = {
+      val oldIndentArray = indentArray
+      val oldLen = oldIndentArray.length
+      val newIndentArray = java.util.Arrays.copyOf(oldIndentArray, oldLen * 2)
+      System.arraycopy(oldIndentArray, 0, newIndentArray, oldLen, oldLen)
+      indentArray = newIndentArray
+      newIndentArray
     }
 
-    protected def printRow(ts: List[Tree], start: Char, end: Char): Unit = {
+    private def printRow(ts: List[Tree], start: Char, end: Char): Unit = {
       print(start)
       var rest = ts
       while (rest.nonEmpty) {
@@ -72,65 +77,79 @@ object Printers {
       print(end)
     }
 
-    protected def printBlock(tree: Tree): Unit = {
+    private def printBlock(tree: Tree): Unit = {
       print('{'); indent(); println()
       tree match {
+        case Skip() =>
+          // do not print anything
+
         case tree: Block =>
           var rest = tree.stats
           while (rest.nonEmpty) {
-            val x = rest.head
+            printStat(rest.head)
             rest = rest.tail
-            printStat(x)
-            if (rest.nonEmpty) {
-              if (shouldPrintSepAfterTree(x))
-                print(';')
-              println()
-            }
           }
 
         case _ =>
           printStat(tree)
       }
-      undent(); println(); print('}')
+      undent(); printIndent(); print('}')
     }
 
-    protected def printSig(args: List[ParamDef]): Unit = {
-      printRow(args, '(', ')')
-      print(' ')
+    private def printSig(args: List[ParamDef], restParam: Option[ParamDef]): Unit = {
+      print("(")
+      var rem = args
+      while (rem.nonEmpty) {
+        print(rem.head)
+        rem = rem.tail
+        if (rem.nonEmpty || restParam.nonEmpty)
+          print(", ")
+      }
+
+      restParam.foreach { p =>
+        print("...")
+        print(p)
+      }
+
+      print(") ")
     }
 
-    protected def printArgs(args: List[Tree]): Unit =
+    private def printArgs(args: List[Tree]): Unit =
       printRow(args, '(', ')')
 
-    def printStat(tree: Tree): Unit =
-      printTree(tree, isStat = true)
+    /** Prints a stat including leading indent and trailing newline. */
+    final def printStat(tree: Tree): Unit = tree match {
+      case tree: PrintedTree =>
+        // PrintedTree already contains indent and trailing newline.
+        print(tree)
 
-    protected def print(tree: Tree): Unit =
+      case _ =>
+        printIndent()
+        printTree(tree, isStat = true)
+        println()
+    }
+
+    private def print(tree: Tree): Unit =
       printTree(tree, isStat = false)
 
-    def printTree(tree: Tree, isStat: Boolean): Unit = {
-      tree match {
-        // Comments
+    /** Print the "meat" of a tree.
+     *
+     *  Even if it is a stat:
+     *  - No leading indent.
+     *  - No trailing newline.
+     */
+    protected def printTree(tree: Tree, isStat: Boolean): Unit = {
+      def printSeparatorIfStat() = {
+        if (isStat)
+          print(';')
+      }
 
-        case DocComment(text) =>
-          val lines = text.split("\n").toList
-          if (lines.tail.isEmpty) {
-            print("/** ")
-            print(lines.head)
-            print(" */")
-          } else {
-            print("/** ")
-            print(lines.head)
-            println()
-            var rest = lines.tail
-            while (rest.nonEmpty) {
-              print(" *  ")
-              print(rest.head)
-              println()
-              rest = rest.tail
-            }
-            print(" */")
-          }
+      tree match {
+        case JSDocConstructor(tree) =>
+          print("/** @constructor */")
+          println(); printIndent()
+          // not printStat: we must not print the trailing newline.
+          printTree(tree, isStat = true)
 
         // Definitions
 
@@ -141,6 +160,8 @@ object Printers {
             print(" = ")
             print(rhs)
           }
+          // VarDef is an "expr" in a "For" / "ForIn" tree
+          printSeparatorIfStat()
 
         case Let(ident, mutable, optRhs) =>
           print(if (mutable) "let " else "const ")
@@ -149,10 +170,10 @@ object Printers {
             print(" = ")
             print(rhs)
           }
+          // Let is an "expr" in a "For" / "ForIn" tree
+          printSeparatorIfStat()
 
-        case ParamDef(ident, rest) =>
-          if (rest)
-            print("...")
+        case ParamDef(ident) =>
           print(ident)
 
         // Control flow constructs
@@ -175,10 +196,12 @@ object Printers {
           print(lhs)
           print(" = ")
           print(rhs)
+          printSeparatorIfStat()
 
         case Return(expr) =>
           print("return ")
           print(expr)
+          print(';')
 
         case If(cond, thenp, elsep) =>
           if (isStat) {
@@ -188,7 +211,7 @@ object Printers {
             printBlock(thenp)
             elsep match {
               case Skip() => ()
-              case _: If =>
+              case _: If  =>
                 print(" else ")
                 printTree(elsep, isStat)
               case _ =>
@@ -271,19 +294,22 @@ object Printers {
         case Throw(expr) =>
           print("throw ")
           print(expr)
+          print(';')
 
         case Break(label) =>
-          if (label.isEmpty) print("break")
+          if (label.isEmpty) print("break;")
           else {
             print("break ")
             print(label.get)
+            print(';')
           }
 
         case Continue(label) =>
-          if (label.isEmpty) print("continue")
+          if (label.isEmpty) print("continue;")
           else {
             print("continue ")
             print(label.get)
+            print(';')
           }
 
         case Switch(selector, cases, default) =>
@@ -296,7 +322,7 @@ object Printers {
           while (rest.nonEmpty) {
             val next = rest.head
             rest = rest.tail
-            println()
+            println(); printIndent()
             print("case ")
             print(next._1)
             print(':')
@@ -308,18 +334,18 @@ object Printers {
 
           default match {
             case Skip() =>
-            case _ =>
-              println()
+            case _      =>
+              println(); printIndent()
               print("default: ")
               printBlock(default)
           }
 
           undent()
-          println()
+          println(); printIndent()
           print('}')
 
         case Debugger() =>
-          print("debugger")
+          print("debugger;")
 
         // Expressions
 
@@ -340,10 +366,11 @@ object Printers {
             print(')')
           }
           printArgs(args)
+          printSeparatorIfStat()
 
         case DotSelect(qualifier, item) =>
           qualifier match {
-            case _:IntLiteral | _:DoubleLiteral =>
+            case _:IntLiteral | _:UintLiteral | _:DoubleLiteral =>
               print("(")
               print(qualifier)
               print(")")
@@ -352,21 +379,33 @@ object Printers {
           }
           print(".")
           print(item)
+          printSeparatorIfStat()
 
         case BracketSelect(qualifier, item) =>
           print(qualifier)
           print('[')
           print(item)
           print(']')
+          printSeparatorIfStat()
 
         case Apply(fun, args) =>
           print(fun)
           printArgs(args)
+          printSeparatorIfStat()
 
         case ImportCall(arg) =>
           print("import(")
           print(arg)
           print(')')
+          printSeparatorIfStat()
+
+        case NewTarget() =>
+          print("new.target")
+          printSeparatorIfStat()
+
+        case ImportMeta() =>
+          print("import.meta")
+          printSeparatorIfStat()
 
         case Spread(items) =>
           print("...")
@@ -375,6 +414,7 @@ object Printers {
         case Delete(prop) =>
           print("delete ")
           print(prop)
+          printSeparatorIfStat()
 
         case UnaryOp(op, lhs) =>
           import ir.Trees.JSUnaryOp._
@@ -383,15 +423,22 @@ object Printers {
             print("typeof ")
           } else {
             (op: @switch) match {
-              case + => print('+')
-              case - => print('-')
-              case ~ => print('~')
-              case ! => print('!')
+              case +        => print('+')
+              case -        => print('-')
+              case ~        => print('~')
+              case !        => print('!')
               case `typeof` => print("typeof ")
             }
           }
           print(lhs)
           print(')')
+          printSeparatorIfStat()
+
+        case Await(expr) =>
+          print("(await ")
+          print(expr)
+          print(')')
+          printSeparatorIfStat()
 
         case IncDec(prefix, inc, arg) =>
           val op = if (inc) "++" else "--"
@@ -402,6 +449,7 @@ object Printers {
           if (!prefix)
             print(op)
           print(')')
+          printSeparatorIfStat()
 
         case BinaryOp(op, lhs, rhs) =>
           import ir.Trees.JSBinaryOp._
@@ -435,54 +483,63 @@ object Printers {
 
             case `in`         => "in"
             case `instanceof` => "instanceof"
+
+            case ** => "**"
           })
           print(' ')
           print(rhs)
           print(')')
+          printSeparatorIfStat()
 
         case ArrayConstr(items) =>
           printRow(items, '[', ']')
+          printSeparatorIfStat()
 
         case ObjectConstr(Nil) =>
-          if (isStat)
-            print("({})") // force expression position for the object literal
-          else
-            print("{}")
+          /* #4949 Always wrap object literals with () in case they end up at
+           * the start of an `ExpressionStatement`.
+           */
+          print("({})")
+          printSeparatorIfStat()
 
         case ObjectConstr(fields) =>
-          if (isStat)
-            print('(') // force expression position for the object literal
-          print('{')
+          /* #4949 Always wrap object literals with () in case they end up at
+           * the start of an `ExpressionStatement`.
+           */
+          print("({")
           indent()
           println()
           var rest = fields
           while (rest.nonEmpty) {
             val x = rest.head
             rest = rest.tail
+            printIndent()
             print(x._1)
             print(": ")
             print(x._2)
             if (rest.nonEmpty) {
               print(',')
-              println()
             }
+            println()
           }
           undent()
-          println()
-          print('}')
-          if (isStat)
-            print(')')
+          printIndent()
+          print("})")
+          printSeparatorIfStat()
 
         // Literals
 
         case Undefined() =>
           print("(void 0)")
+          printSeparatorIfStat()
 
         case Null() =>
           print("null")
+          printSeparatorIfStat()
 
         case BooleanLiteral(value) =>
           print(if (value) "true" else "false")
+          printSeparatorIfStat()
 
         case IntLiteral(value) =>
           if (value >= 0) {
@@ -492,6 +549,11 @@ object Printers {
             print(value.toString)
             print(')')
           }
+          printSeparatorIfStat()
+
+        case UintLiteral(value) =>
+          print(Integer.toUnsignedString(value))
+          printSeparatorIfStat()
 
         case DoubleLiteral(value) =>
           if (value == 0 && 1 / value < 0) {
@@ -503,11 +565,13 @@ object Printers {
             print(value.toString)
             print(')')
           }
+          printSeparatorIfStat()
 
         case StringLiteral(value) =>
           print('\"')
           printEscapeJS(value)
           print('\"')
+          printSeparatorIfStat()
 
         case BigIntLiteral(value) =>
           if (value >= 0) {
@@ -518,21 +582,33 @@ object Printers {
             print(value.toString)
             print("n)")
           }
+          printSeparatorIfStat()
 
         // Atomic expressions
 
         case VarRef(ident) =>
           print(ident)
+          printSeparatorIfStat()
 
         case This() =>
           print("this")
+          printSeparatorIfStat()
 
-        case Function(arrow, args, body) =>
-          if (arrow) {
+        case Function(flags, args, restParam, body) =>
+          if (flags.arrow) {
             print('(')
-            printSig(args)
+            if (flags.async)
+              print("async ")
+            printSig(args, restParam)
             print("=> ")
             body match {
+              case Return(expr: ObjectConstr) =>
+                /* #3926 An ObjectConstr needs to be wrapped in () not to be
+                 * parsed as a block.
+                 */
+                print('(')
+                print(expr)
+                print(')')
               case Return(expr) =>
                 print(expr)
               case _ =>
@@ -540,20 +616,24 @@ object Printers {
             }
             print(')')
           } else {
-            print("(function")
-            printSig(args)
+            if (flags.async)
+              print("(async function")
+            else
+              print("(function")
+            printSig(args, restParam)
             printBlock(body)
             print(')')
           }
+          printSeparatorIfStat()
 
         // Named function definition
 
-        case FunctionDef(name, args, body) =>
+        case FunctionDef(name, args, restParam, body) =>
           if (!isStat)
             print('(')
           print("function ")
           print(name)
-          printSig(args)
+          printSig(args, restParam)
           printBlock(body)
           if (!isStat)
             print(')')
@@ -570,21 +650,19 @@ object Printers {
             print(" extends ")
             print(optParentClass.get)
           }
-          print(" {"); indent()
+          print(" {"); indent(); println()
           var rest = members
           while (rest.nonEmpty) {
-            println()
-            print(rest.head)
-            print(';')
+            printStat(rest.head)
             rest = rest.tail
           }
-          undent(); println(); print('}')
+          undent(); printIndent(); print('}')
 
-        case MethodDef(static, name, params, body) =>
+        case MethodDef(static, name, params, restParam, body) =>
           if (static)
             print("static ")
           print(name)
-          printSig(params)
+          printSig(params, restParam)
           printBlock(body)
 
         case GetterDef(static, name, body) =>
@@ -592,7 +670,7 @@ object Printers {
             print("static ")
           print("get ")
           print(name)
-          printSig(Nil)
+          print("() ")
           printBlock(body)
 
         case SetterDef(static, name, param, body) =>
@@ -627,12 +705,14 @@ object Printers {
           }
           print(" } from ")
           print(from: Tree)
+          print(';')
 
         case ImportNamespace(binding, from) =>
           print("import * as ")
           print(binding)
           print(" from ")
           print(from: Tree)
+          print(';')
 
         case Export(bindings) =>
           print("export { ")
@@ -649,7 +729,26 @@ object Printers {
             print(binding._2)
             rest = rest.tail
           }
-          print(" }")
+          print(" };")
+
+        case ExportImport(bindings, from) =>
+          print("export { ")
+          var first = true
+          var rest = bindings
+          while (rest.nonEmpty) {
+            val binding = rest.head
+            if (first)
+              first = false
+            else
+              print(", ")
+            print(binding._1)
+            print(" as ")
+            print(binding._2)
+            rest = rest.tail
+          }
+          print(" } from ")
+          print(from: Tree)
+          print(';')
 
         case _ =>
           throw new IllegalArgumentException(
@@ -658,14 +757,14 @@ object Printers {
     }
 
     protected def printEscapeJS(s: String): Unit =
-      Utils.printEscapeJS(s, out)
+      out.writeASCIIEscapedJSString(s)
 
-    protected def print(ident: Ident): Unit =
-      printEscapeJS(ident.name)
+    protected def print(ident: MaybeDelayedIdent): Unit =
+      printEscapeJS(ident.resolveName())
 
     private final def print(propName: PropertyName): Unit = propName match {
-      case lit: StringLiteral => print(lit: Tree)
-      case ident: Ident       => print(ident)
+      case lit: StringLiteral       => print(lit: Tree)
+      case ident: MaybeDelayedIdent => print(ident)
 
       case ComputedName(tree) =>
         print("[")
@@ -673,27 +772,27 @@ object Printers {
         print("]")
     }
 
-    protected def print(exportName: ExportName): Unit =
+    protected def print(printedTree: PrintedTree): Unit =
+      out.write(printedTree.jsCode)
+
+    private def print(exportName: ExportName): Unit =
       printEscapeJS(exportName.name)
 
+    /** Prints an ASCII string -- use for syntax strings, not for user strings. */
     protected def print(s: String): Unit =
-      out.write(s)
+      out.writeASCIIString(s)
 
     protected def print(c: Int): Unit =
       out.write(c)
-
-    // Make it public
-    override def println(): Unit = super.println()
-
-    def complete(): Unit = ()
   }
 
-  class JSTreePrinterWithSourceMap(_out: Writer,
-      sourceMap: SourceMapWriter) extends JSTreePrinter(_out) {
+  class JSTreePrinterWithSourceMap(_out: ByteArrayWriter,
+      sourceMap: SourceMapWriter.Builder, initIndent: Int)
+      extends JSTreePrinter(_out, initIndent) {
 
     private var column = 0
 
-    override def printTree(tree: Tree, isStat: Boolean): Unit = {
+    override protected def printTree(tree: Tree, isStat: Boolean): Unit = {
       val pos = tree.pos
       if (pos.isDefined)
         sourceMap.startNode(column, pos)
@@ -705,19 +804,31 @@ object Printers {
     }
 
     override protected def printEscapeJS(s: String): Unit =
-      column += Utils.printEscapeJS(s, out)
+      column += out.writeASCIIEscapedJSString(s)
 
-    override protected def print(ident: Ident): Unit = {
+    override protected def print(ident: MaybeDelayedIdent): Unit = {
       if (ident.pos.isDefined)
-        sourceMap.startNode(column, ident.pos, ident.originalName)
-      super.print(ident)
+        sourceMap.startIdentNode(column, ident.pos, ident.originalName)
+      printEscapeJS(ident.resolveName())
       if (ident.pos.isDefined)
         sourceMap.endNode(column)
     }
 
-    override def println(): Unit = {
+    override protected def print(printedTree: PrintedTree): Unit = {
+      super.print(printedTree)
+      sourceMap.insertFragment(printedTree.sourceMapFragment)
+    }
+
+    override protected def println(): Unit = {
       super.println()
       sourceMap.nextLine()
+      column = 0
+    }
+
+    override protected def printIndent(): Unit = {
+      assert(column == 0)
+
+      super.printIndent()
       column = this.getIndentMargin()
     }
 
@@ -732,11 +843,31 @@ object Printers {
       super.print(c)
       column += 1
     }
-
-    override def complete(): Unit = {
-      sourceMap.complete()
-      super.complete()
-    }
   }
 
+  /** Shows a `Tree` for debugging purposes, not for pretty-printing. */
+  private[javascript] def showTree(tree: Tree): String = {
+    val writer = new ByteArrayWriter()
+    val printer = new Printers.JSTreeShowPrinter(writer)
+    printer.printTreeForShow(tree)
+    new String(writer.toByteArray(), StandardCharsets.US_ASCII)
+  }
+
+  /** A printer that shows `Tree`s for debugging, not for pretty-printing. */
+  private class JSTreeShowPrinter(_out: ByteArrayWriter, initIndent: Int = 0)
+      extends JSTreePrinter(_out, initIndent) {
+    def printTreeForShow(tree: Tree): Unit =
+      printTree(tree, isStat = true)
+
+    override protected def print(ident: MaybeDelayedIdent): Unit = {
+      ident match {
+        case ident: Ident =>
+          super.print(ident)
+        case ident: DelayedIdent =>
+          print("<delayed:")
+          print(ident.resolver.debugString)
+          print(">")
+      }
+    }
+  }
 }

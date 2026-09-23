@@ -15,6 +15,8 @@ package org.scalajs.sbtplugin
 import sbt._
 import sbt.Keys._
 
+import PluginCompat.DefOps
+
 object ScalaJSJUnitPlugin extends AutoPlugin {
   override def requires: Plugins = ScalaJSPlugin
 
@@ -31,11 +33,25 @@ object ScalaJSJUnitPlugin extends AutoPlugin {
      * it to both `compile` and `test`.
      */
     ivyConfigurations += ScalaJSTestPlugin,
-    libraryDependencies ++= Seq(
-        "org.scala-js" % "scalajs-junit-test-plugin" % scalaJSVersion %
-        "scala-js-test-plugin" cross CrossVersion.full,
-        "org.scala-js" %% "scalajs-junit-test-runtime" % scalaJSVersion  % "test"),
-    scalacOptions in Test ++= {
+
+    libraryDependencies ++= {
+      val scalaV = scalaVersion.value
+      if (scalaV.startsWith("3.")) {
+        Seq(
+          "org.scala-js" % "scalajs-junit-test-runtime_2.13" % scalaJSVersion % "test"
+        )
+      } else {
+        val scalaBinV = scalaBinaryVersion.value
+        Seq(
+          PluginCompat.scalaJSFullCrossVersionLib("org.scala-js", "scalajs-junit-test-plugin",
+              scalaJSVersion, scalaV) % "scala-js-test-plugin",
+          PluginCompat.scalaJSCoreLib("org.scala-js", "scalajs-junit-test-runtime",
+              scalaJSVersion, scalaBinV) % "test"
+        )
+      }
+    },
+
+    Test / scalacOptions ++= Def.uncached {
       val report = update.value
       val jars = report.select(configurationFilter("scala-js-test-plugin"))
       for {

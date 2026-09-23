@@ -16,17 +16,23 @@ import java.lang.{Boolean => JBoolean}
 
 import org.junit.Test
 import org.junit.Assert._
+import org.junit.Assume._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.Platform._
 
-/** Tests the implementation of the java standard library Boolean
- */
+/** Tests the implementation of the java standard library Boolean */
 class BooleanTest {
 
   @Test def booleanValue(): Unit = {
     assertEquals(true, JBoolean.TRUE.booleanValue())
     assertEquals(false, JBoolean.FALSE.booleanValue())
-    expectThrows(classOf[Exception], (null: JBoolean).booleanValue())
+  }
+
+  @Test def booleanValueNull(): Unit = {
+    assumeTrue("assuming compliant null pointer checks", hasCompliantNullPointers)
+
+    assertThrows(classOf[NullPointerException], (null: JBoolean).booleanValue())
   }
 
   @Test def compareTo(): Unit = {
@@ -39,7 +45,7 @@ class BooleanTest {
     assertEquals(0, compare(true, true))
   }
 
-  @Test def should_be_a_Comparable(): Unit = {
+  @Test def compareToAnyAny(): Unit = {
     def compare(x: Any, y: Any): Int =
       x.asInstanceOf[Comparable[Any]].compareTo(y)
 
@@ -49,7 +55,7 @@ class BooleanTest {
     assertEquals(0, compare(true, true))
   }
 
-  @Test def should_parse_strings(): Unit = {
+  @Test def parseStringMethods(): Unit = {
     def test(s: String, v: Boolean): Unit = {
       assertEquals(v, JBoolean.parseBoolean(s))
       assertEquals(v, JBoolean.valueOf(s).booleanValue())

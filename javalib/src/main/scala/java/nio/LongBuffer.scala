@@ -15,8 +15,10 @@ package java.nio
 object LongBuffer {
   private final val HashSeed = -1709696158 // "java.nio.LongBuffer".##
 
-  def allocate(capacity: Int): LongBuffer =
+  def allocate(capacity: Int): LongBuffer = {
+    BoundsChecks.checkCapacity(capacity)
     wrap(new Array[Long](capacity))
+  }
 
   def wrap(array: Array[Long], offset: Int, length: Int): LongBuffer =
     HeapLongBuffer.wrap(array, 0, array.length, offset, length, false)
@@ -129,7 +131,7 @@ abstract class LongBuffer private[nio] (
 
   @noinline
   def compareTo(that: LongBuffer): Int =
-    GenBuffer(this).generic_compareTo(that)(_.compareTo(_))
+    GenBuffer(this).generic_compareTo(that)(java.lang.Long.compare(_, _))
 
   def order(): ByteOrder
 
@@ -141,11 +143,13 @@ abstract class LongBuffer private[nio] (
 
   @inline
   private[nio] def load(startIndex: Int,
-      dst: Array[Long], offset: Int, length: Int): Unit =
+      dst: Array[Long], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   private[nio] def store(startIndex: Int,
-      src: Array[Long], offset: Int, length: Int): Unit =
+      src: Array[Long], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }

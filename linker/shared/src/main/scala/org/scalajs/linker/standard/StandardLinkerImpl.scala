@@ -18,12 +18,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 import org.scalajs.logging.Logger
 
-import org.scalajs.linker._
+import org.scalajs.linker.interface._
+import org.scalajs.linker.interface.unstable._
 
 /** Standard implementation of a Scala.js linker. */
 private final class StandardLinkerImpl private (
     frontend: LinkerFrontend, backend: LinkerBackend)
-    extends Linker {
+    extends LinkerImpl {
+
+  import StandardLinkerImpl._
 
   require(frontend.coreSpec == backend.coreSpec,
       "Frontend and backend must implement the same core specification")
@@ -33,15 +36,18 @@ private final class StandardLinkerImpl private (
 
   def link(irFiles: Seq[IRFile],
       moduleInitializers: Seq[ModuleInitializer],
-      output: LinkerOutput, logger: Logger)(
-      implicit ec: ExecutionContext): Future[Unit] = {
+      output: OutputDirectory, logger: Logger)(
+      implicit ec: ExecutionContext): Future[Report] = {
     if (!_linking.compareAndSet(false, true)) {
       throw new IllegalStateException("Linker used concurrently")
     }
 
     checkValid()
-      .flatMap(_ => frontend.link(
-          irFiles, moduleInitializers, backend.symbolRequirements, logger))
+      .flatMap { _ =>
+        frontend.link(
+            irFiles ++ backend.injectedIRFiles, moduleInitializers,
+            backend.symbolRequirements, logger)
+      }
       .flatMap(linkingUnit => backend.emit(linkingUnit, output, logger))
       .andThen { case t if t.isFailure => _valid = false }
       .andThen { case t => _linking.set(false) }
@@ -60,4 +66,18 @@ private final class StandardLinkerImpl private (
 object StandardLinkerImpl {
   def apply(frontend: LinkerFrontend, backend: LinkerBackend): Linker =
     new StandardLinkerImpl(frontend, backend)
+
+  private lazy val deprecatedJDKVersion: Option[Int] = {
+    if (1.0.toString() == "1") {
+      // We're running on JS
+      None
+    } else {
+      val fullVersion = System.getProperty("java.version")
+      val v = fullVersion.stripPrefix("1.").takeWhile(_.isDigit).toInt
+      if (v < 17)
+        Some(v)
+      else
+        None
+    }
+  }
 }

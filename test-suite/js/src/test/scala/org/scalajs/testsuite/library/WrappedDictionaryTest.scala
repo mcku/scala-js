@@ -34,7 +34,7 @@ class WrappedDictionaryTest {
     assertTrue(map.get("f") == None)
   }
 
-  @Test def `+=_and_-=`(): Unit = {
+  @Test def plusEqualAndMinusEqual(): Unit = {
     val dict = js.Dictionary[String]()
     val map: mutable.Map[String, String] = dict
 
@@ -68,7 +68,7 @@ class WrappedDictionaryTest {
 
     val dict = js.Dictionary[Int]("one" -> 1, "two" -> 2, "three" -> 3)
 
-    val mapChr = dict.map { case (k, v) => k(0)          -> v * 2 }
+    val mapChr = dict.map { case (k, v) => k(0) -> v * 2 }
     val mapStr = dict.map { case (k, v) => k(0).toString -> v * 2 }
 
     assertNotSame(classOf[js.WrappedDictionary[_]], ct(mapChr).runtimeClass)

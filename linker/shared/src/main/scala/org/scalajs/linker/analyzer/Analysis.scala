@@ -18,10 +18,14 @@ import scala.collection.mutable
 
 import org.scalajs.logging._
 
-import org.scalajs.ir
-import ir.ClassKind
-import ir.Definitions.{decodeClassName, decodeMethodName}
-import ir.Trees.MemberNamespace
+import org.scalajs.linker.standard.ModuleSet.ModuleID
+
+import org.scalajs.ir.ClassKind
+import org.scalajs.ir.Names._
+import org.scalajs.ir.Trees.MemberNamespace
+import org.scalajs.ir.Types._
+
+import org.scalajs.linker.frontend.SyntheticClassKind
 
 /** Reachability graph produced by the [[Analyzer]].
  *
@@ -32,25 +36,15 @@ import ir.Trees.MemberNamespace
 trait Analysis {
   import Analysis._
 
-  def classInfos: scala.collection.Map[String, ClassInfo]
+  def classInfos: scala.collection.Map[ClassName, ClassInfo]
+  def topLevelExportInfos: scala.collection.Map[(ModuleID, String), TopLevelExportInfo]
+
+  def isClassSuperClassUsed: Boolean
+
   def errors: scala.collection.Seq[Error]
 }
 
 object Analysis {
-
-  private val PrimitiveClassesDisplayNames: Map[String, String] = Map(
-      "V" -> "void",
-      "Z" -> "boolean",
-      "C" -> "char",
-      "B" -> "byte",
-      "S" -> "short",
-      "I" -> "int",
-      "J" -> "long",
-      "F" -> "float",
-      "D" -> "double",
-      "N" -> "null",
-      "E" -> "nothing"
-  )
 
   /** Class node in a reachability graph produced by the [[Analyzer]].
    *
@@ -59,27 +53,45 @@ object Analysis {
    *  versions, possibly causing `LinkageError`s if you extend it.
    */
   trait ClassInfo {
-    def encodedName: String
+    def className: ClassName
     def kind: ClassKind
     def superClass: Option[ClassInfo]
     def interfaces: scala.collection.Seq[ClassInfo]
     def ancestors: scala.collection.Seq[ClassInfo]
+    def syntheticKind: Option[SyntheticClassKind]
     def nonExistent: Boolean
+
     /** For a Scala class, it is instantiated with a `New`; for a JS class,
      *  its constructor is accessed with a `JSLoadConstructor` or because it
-     *  is needed for a subclass.
+     *  is needed for a subclass. For modules (Scala or JS), the module is
+     *  accessed.
      */
     def isInstantiated: Boolean
     def isAnySubclassInstantiated: Boolean
-    def isModuleAccessed: Boolean
     def areInstanceTestsUsed: Boolean
     def isDataAccessed: Boolean
+
+    def fieldsRead: scala.collection.Set[FieldName]
+    def fieldsWritten: scala.collection.Set[FieldName]
+    def staticFieldsRead: scala.collection.Set[FieldName]
+    def staticFieldsWritten: scala.collection.Set[FieldName]
+
+    def jsNativeMembersUsed: scala.collection.Set[MethodName]
+
+    def staticDependencies: scala.collection.Set[ClassName]
+    def externalDependencies: scala.collection.Set[String]
+    def dynamicDependencies: scala.collection.Set[ClassName]
+
     def linkedFrom: scala.collection.Seq[From]
     def instantiatedFrom: scala.collection.Seq[From]
-    def methodInfos(
-        namespace: MemberNamespace): scala.collection.Map[String, MethodInfo]
+    def dispatchCalledFrom(methodName: MethodName): Option[scala.collection.Seq[From]]
 
-    def displayName: String = decodeClassName(encodedName)
+    def methodInfos(
+        namespace: MemberNamespace): scala.collection.Map[MethodName, MethodInfo]
+
+    def anyJSMemberNeedsDesugaring: Boolean
+
+    def displayName: String = className.nameString
   }
 
   /** Method node in a reachability graph produced by the [[Analyzer]].
@@ -90,38 +102,17 @@ object Analysis {
    */
   trait MethodInfo {
     def owner: ClassInfo
-    def encodedName: String
+    def methodName: MethodName
     def namespace: MemberNamespace
-    def isAbstract: Boolean
-    def isExported: Boolean
-    def isReflProxy: Boolean
+    def isAbstractReachable: Boolean
     def isReachable: Boolean
     def calledFrom: scala.collection.Seq[From]
     def instantiatedSubclasses: scala.collection.Seq[ClassInfo]
     def nonExistent: Boolean
     def syntheticKind: MethodSyntheticKind
+    def needsDesugaring: Boolean
 
-    def displayName: String = {
-      if (isExported) {
-        encodedName
-      } else {
-        import ir.Types._
-
-        def classDisplayName(cls: String): String =
-          PrimitiveClassesDisplayNames.getOrElse(cls, decodeClassName(cls))
-
-        def typeDisplayName(tpe: TypeRef): String = tpe match {
-          case ClassRef(encodedName)          => classDisplayName(encodedName)
-          case ArrayTypeRef(base, dimensions) => "[" * dimensions + classDisplayName(base)
-        }
-
-        val (simpleName, paramTypes, resultType) =
-          ir.Definitions.decodeMethodName(encodedName)
-
-        simpleName + "(" + paramTypes.map(typeDisplayName).mkString(",") + ")" +
-        resultType.fold("")(typeDisplayName)
-      }
-    }
+    def displayName: String = methodName.displayName
 
     def fullDisplayName: String =
       this.namespace.prefixString + owner.displayName + "." + displayName
@@ -130,8 +121,9 @@ object Analysis {
   sealed trait MethodSyntheticKind
 
   object MethodSyntheticKind {
+
     /** Not a synthetic method. */
-    final case object None extends MethodSyntheticKind
+    case object None extends MethodSyntheticKind
 
     /** A reflective proxy bridge to the appropriate target method.
      *
@@ -151,7 +143,7 @@ object Analysis {
      *  }
      *  }}}
      */
-    final case class ReflectiveProxy(target: String) extends MethodSyntheticKind
+    final case class ReflectiveProxy(target: MethodName) extends MethodSyntheticKind
 
     /** Bridge to a default method.
      *
@@ -167,20 +159,26 @@ object Analysis {
      *  }
      *  }}}
      */
-    final case class DefaultBridge(targetInterface: String) extends MethodSyntheticKind
+    final case class DefaultBridge(targetInterface: ClassName) extends MethodSyntheticKind
+  }
+
+  trait TopLevelExportInfo {
+    def moduleID: ModuleID
+    def exportName: String
+    def owningClass: ClassName
+    def staticDependencies: scala.collection.Set[ClassName]
+    def externalDependencies: scala.collection.Set[String]
+    def needsDesugaring: Boolean
   }
 
   sealed trait Error {
     def from: From
   }
 
-  final case class MissingJavaLangObjectClass(from: From) extends Error
-  final case class InvalidJavaLangObjectClass(from: From) extends Error
-  final case class CycleInInheritanceChain(encodedClassNames: List[String], from: From) extends Error
-  final case class MissingClass(info: ClassInfo, from: From) extends Error
-
-  final case class MissingSuperClass(subClassInfo: ClassInfo, from: From)
+  final case class CycleInInheritanceChain(encodedClassNames: List[ClassName], from: From)
       extends Error
+
+  final case class MissingClass(info: ClassInfo, from: From) extends Error
 
   final case class InvalidSuperClass(superClassInfo: ClassInfo,
       subClassInfo: ClassInfo, from: From)
@@ -192,32 +190,66 @@ object Analysis {
 
   final case class NotAModule(info: ClassInfo, from: From) extends Error
   final case class MissingMethod(info: MethodInfo, from: From) extends Error
+
+  final case class MissingJSNativeMember(info: ClassInfo, name: MethodName, from: From)
+      extends Error
+
   final case class ConflictingDefaultMethods(infos: List[MethodInfo], from: From) extends Error
-  final case class ConflictingTopLevelExport(name: String, infos: List[ClassInfo]) extends Error {
+
+  final case class InvalidTopLevelExportInScript(info: TopLevelExportInfo) extends Error {
     def from: From = FromExports
   }
 
+  final case class ConflictingTopLevelExport(moduleID: ModuleID, exportName: String,
+      infos: List[TopLevelExportInfo])
+      extends Error {
+    def from: From = FromExports
+  }
+
+  final case class ImportWithoutModuleSupport(module: String, info: ClassInfo,
+      jsNativeMember: Option[MethodName], from: From)
+      extends Error
+
+  final case class MultiplePublicModulesWithoutModuleSupport(
+      moduleIDs: List[ModuleID])
+      extends Error {
+    def from: From = FromExports
+  }
+
+  final case class DynamicImportWithoutModuleSupport(from: From) extends Error
+
+  final case class NewTargetWithoutES2015Support(from: From) extends Error
+
+  final case class ImportMetaWithoutESModule(from: From) extends Error
+
+  final case class ExponentOperatorWithoutES2016Support(from: From) extends Error
+
+  final case class AsyncWithoutES2017Support(from: From) extends Error
+
+  final case class AsyncWithoutJSPI(from: From) extends Error
+
+  final case class OrphanAwaitWithoutWebAssembly(from: From) extends Error
+
+  final case class InvalidLinkTimeProperty(
+      linkTimePropertyName: String,
+      linkTimePropertyType: Type,
+      from: From
+  ) extends Error
+
   sealed trait From
   final case class FromMethod(methodInfo: MethodInfo) extends From
+  final case class FromDispatch(classInfo: ClassInfo, methodName: MethodName) extends From
   final case class FromClass(classInfo: ClassInfo) extends From
   final case class FromCore(moduleName: String) extends From
   case object FromExports extends From
 
   def logError(error: Error, logger: Logger, level: Level): Unit = {
     val headMsg = error match {
-      case MissingJavaLangObjectClass(_) =>
-        "Fatal error: java.lang.Object is missing"
-      case InvalidJavaLangObjectClass(_) =>
-        "Fatal error: java.lang.Object is invalid (it must be a Scala class " +
-        "without superclass nor any implemented interface)"
       case CycleInInheritanceChain(encodedClassNames, _) =>
         ("Fatal error: cycle in inheritance chain involving " +
-            encodedClassNames.map(decodeClassName).mkString(", "))
+        encodedClassNames.map(_.nameString).mkString(", "))
       case MissingClass(info, _) =>
         s"Referring to non-existent class ${info.displayName}"
-      case MissingSuperClass(subClassInfo, _) =>
-        s"${subClassInfo.displayName} (of kind ${subClassInfo.kind}) is " +
-        "missing a super class"
       case InvalidSuperClass(superClassInfo, subClassInfo, _) =>
         s"${superClassInfo.displayName} (of kind ${superClassInfo.kind}) is " +
         s"not a valid super class of ${subClassInfo.displayName} (of kind " +
@@ -230,11 +262,44 @@ object Analysis {
         s"Cannot access module for non-module ${info.displayName}"
       case MissingMethod(info, _) =>
         s"Referring to non-existent method ${info.fullDisplayName}"
+      case MissingJSNativeMember(info, name, _) =>
+        s"Referring to non-existent js native member ${info.displayName}.${name.displayName}"
       case ConflictingDefaultMethods(infos, _) =>
         s"Conflicting default methods: ${infos.map(_.fullDisplayName).mkString(" ")}"
-      case ConflictingTopLevelExport(name, infos) =>
-        s"Conflicting top level export for name $name involving " +
-        infos.map(_.displayName).mkString(", ")
+      case InvalidTopLevelExportInScript(info) =>
+        s"Invalid top level export for name '${info.exportName}' in class " +
+        s"${info.owningClass.nameString} when emitting a Script (NoModule) because it " +
+        "is not a valid JavaScript identifier " +
+        "(did you want to emit a module instead?)"
+      case ConflictingTopLevelExport(moduleID, exportName, infos) =>
+        s"Conflicting top level exports for module $moduleID, name $exportName " +
+        "involving " + infos.map(_.owningClass.nameString).mkString(", ")
+      case ImportWithoutModuleSupport(module, info, None, _) =>
+        s"${info.displayName} needs to be imported from module " +
+        s"'$module' but module support is disabled"
+      case ImportWithoutModuleSupport(module, info, Some(jsNativeMember), _) =>
+        s"${info.displayName}.${jsNativeMember.displayName} " +
+        s"needs to be imported from module '$module' but " +
+        "module support is disabled"
+      case MultiplePublicModulesWithoutModuleSupport(moduleIDs) =>
+        "Found multiple public modules but module support is disabled: " +
+        moduleIDs.map(_.id).mkString("[", ", ", "]")
+      case DynamicImportWithoutModuleSupport(_) =>
+        "Uses dynamic import but module support is disabled"
+      case NewTargetWithoutES2015Support(_) =>
+        "Uses new.target with an ECMAScript version older than ES 2015"
+      case ImportMetaWithoutESModule(_) =>
+        "Uses import.meta with a module kind other than ESModule"
+      case ExponentOperatorWithoutES2016Support(_) =>
+        "Uses the ** operator with an ECMAScript version older than ES 2016"
+      case AsyncWithoutES2017Support(_) =>
+        "Uses an async block with an ECMAScript version older than ES 2017"
+      case AsyncWithoutJSPI(_) =>
+        "Uses an async block without JSPI support in WebAssembly"
+      case OrphanAwaitWithoutWebAssembly(_) =>
+        "Uses an orphan await (outside of an async block) without targeting WebAssembly"
+      case InvalidLinkTimeProperty(name, tpe, _) =>
+        s"Uses invalid link-time property ${name} of type ${tpe}"
     }
 
     logger.log(level, headMsg)
@@ -252,7 +317,7 @@ object Analysis {
     }
 
     private def log(level: Level, msg: String) =
-      logger.log(level, indentation+msg)
+      logger.log(level, indentation + msg)
 
     private def indented[A](body: => A): A = {
       indentation += "  "
@@ -275,6 +340,15 @@ object Analysis {
 
       @tailrec
       def loopTrace(optFrom: Option[From], verb: String = "called"): Unit = {
+        def sameMethod(methodInfo: MethodInfo, fromDispatch: FromDispatch): Boolean = {
+          methodInfo.owner == fromDispatch.classInfo &&
+          methodInfo.namespace == MemberNamespace.Public &&
+          methodInfo.methodName == fromDispatch.methodName
+        }
+
+        def followDispatch(fromDispatch: FromDispatch): Option[From] =
+          fromDispatch.classInfo.dispatchCalledFrom(fromDispatch.methodName).flatMap(_.lastOption)
+
         optFrom match {
           case None =>
             log(level, s"$verb from ... er ... nowhere!? (this is a bug in dce)")
@@ -284,8 +358,17 @@ object Analysis {
                 log(level, s"$verb from ${methodInfo.fullDisplayName}")
                 if (onlyOnce(level, methodInfo)) {
                   involvedClasses ++= methodInfo.instantiatedSubclasses
-                  loopTrace(methodInfo.calledFrom.lastOption)
+                  methodInfo.calledFrom.lastOption match {
+                    case Some(fromDispatch: FromDispatch) if sameMethod(methodInfo, fromDispatch) =>
+                      // avoid logging "dispatch from C.m" just after "called from C.m"
+                      loopTrace(followDispatch(fromDispatch))
+                    case nextFrom =>
+                      loopTrace(nextFrom)
+                  }
                 }
+              case from @ FromDispatch(classInfo, methodName) =>
+                log(level, s"dispatched from ${classInfo.displayName}.${methodName.displayName}")
+                loopTrace(followDispatch(from))
               case FromClass(classInfo) =>
                 log(level, s"$verb from ${classInfo.displayName}")
                 loopTrace(classInfo.linkedFrom.lastOption)

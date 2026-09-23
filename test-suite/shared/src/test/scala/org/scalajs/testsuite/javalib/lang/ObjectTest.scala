@@ -15,20 +15,40 @@ package org.scalajs.testsuite.javalib.lang
 import org.junit.Test
 import org.junit.Assert._
 
-import org.scalajs.testsuite.utils.AssertThrows._
-
-// scalastyle:off disallow.space.before.token
+import org.scalajs.testsuite.utils.Platform._
 
 class ObjectTest {
 
   @Test def testGetClass(): Unit = {
-    class Foo
-    val foo = new Foo
+    @noinline
+    def testNoInline(expected: Class[_], x: Any): Unit =
+      assertSame(expected, x.getClass())
 
-    @noinline def fooAny: Any = foo
+    @inline
+    def test(expected: Class[_], x: Any): Unit = {
+      testNoInline(expected, x)
+      assertSame(expected, x.getClass())
+    }
 
-    assertSame(classOf[Foo], foo.getClass)
-    assertSame(classOf[Foo], fooAny.getClass)
+    test(if (executingInJVM) classOf[scala.runtime.BoxedUnit] else classOf[java.lang.Void], ())
+    test(classOf[java.lang.Boolean], true)
+    test(classOf[java.lang.Character], 'A')
+    test(classOf[java.lang.Byte], 0.toByte)
+    test(classOf[java.lang.Byte], 5.toByte)
+    test(classOf[java.lang.Short], 300.toShort)
+    test(classOf[java.lang.Integer], 100000)
+    test(classOf[java.lang.Long], Long.MaxValue)
+    test(classOf[java.lang.Float], -0.0f)
+    test(classOf[java.lang.Float], 1.5f)
+    test(classOf[java.lang.Float], Float.NaN)
+    test(classOf[java.lang.Double], 1.4)
+    test(classOf[java.lang.String], "hello")
+    test(classOf[java.lang.Object], new Object)
+    test(classOf[Some[_]], Some(5))
+    test(classOf[ObjectTest], this)
+
+    test(classOf[Array[Array[Int]]], new Array[Array[Int]](1))
+    test(classOf[Array[Array[Array[String]]]], new Array[Array[Array[String]]](1))
   }
 
   @Test def equals(): Unit = {
@@ -41,46 +61,45 @@ class ObjectTest {
     assertTrue(l.exists(_ == xy12)) // the workaround
   }
 
-  @Test def everything_but_null_should_be_an_Object(): Unit = {
-    assertTrue((()             : Any).isInstanceOf[Object])
-    assertTrue((true           : Any).isInstanceOf[Object])
-    assertTrue(('a'            : Any).isInstanceOf[Object])
-    assertTrue((1.toByte       : Any).isInstanceOf[Object])
-    assertTrue((658.toShort    : Any).isInstanceOf[Object])
-    assertTrue((60000          : Any).isInstanceOf[Object])
+  @Test def isInstanceOfObjectExceptNull(): Unit = {
+    assertTrue(((): Any).isInstanceOf[Object])
+    assertTrue((true: Any).isInstanceOf[Object])
+    assertTrue(('a': Any).isInstanceOf[Object])
+    assertTrue((1.toByte: Any).isInstanceOf[Object])
+    assertTrue((658.toShort: Any).isInstanceOf[Object])
+    assertTrue((60000: Any).isInstanceOf[Object])
     assertTrue((12345678910112L: Any).isInstanceOf[Object])
-    assertTrue((6.5f           : Any).isInstanceOf[Object])
-    assertTrue((12.4           : Any).isInstanceOf[Object])
-    assertTrue((new Object     : Any).isInstanceOf[Object])
-    assertTrue(("hello"        : Any).isInstanceOf[Object])
-    assertTrue((List(1)        : Any).isInstanceOf[Object])
-    assertTrue((Array(1)       : Any).isInstanceOf[Object])
-    assertTrue((Array(Nil)     : Any).isInstanceOf[Object])
+    assertTrue((6.5f: Any).isInstanceOf[Object])
+    assertTrue((12.4: Any).isInstanceOf[Object])
+    assertTrue((new Object: Any).isInstanceOf[Object])
+    assertTrue(("hello": Any).isInstanceOf[Object])
+    assertTrue((List(1): Any).isInstanceOf[Object])
+    assertTrue((Array(1): Any).isInstanceOf[Object])
+    assertTrue((Array(Nil): Any).isInstanceOf[Object])
   }
 
-  @Test def null_should_not_be_an_Object(): Unit = {
+  @Test def isInstanceOfObjectNull(): Unit =
     assertFalse((null: Any).isInstanceOf[Object])
-  }
 
-  @Test def everything_should_cast_to_Object_successfully_including_null(): Unit = {
-    (()             : Any).asInstanceOf[Object]
-    (true           : Any).asInstanceOf[Object]
-    ('a'            : Any).asInstanceOf[Object]
-    (1.toByte       : Any).asInstanceOf[Object]
-    (658.toShort    : Any).asInstanceOf[Object]
-    (60000          : Any).asInstanceOf[Object]
+  @Test def asInstanceOfObjectAll(): Unit = {
+    ((): Any).asInstanceOf[Object]
+    (true: Any).asInstanceOf[Object]
+    ('a': Any).asInstanceOf[Object]
+    (1.toByte: Any).asInstanceOf[Object]
+    (658.toShort: Any).asInstanceOf[Object]
+    (60000: Any).asInstanceOf[Object]
     (12345678910112L: Any).asInstanceOf[Object]
-    (6.5f           : Any).asInstanceOf[Object]
-    (12.4           : Any).asInstanceOf[Object]
-    (new Object     : Any).asInstanceOf[Object]
-    ("hello"        : Any).asInstanceOf[Object]
-    (List(1)        : Any).asInstanceOf[Object]
-    (Array(1)       : Any).asInstanceOf[Object]
-    (Array(Nil)     : Any).asInstanceOf[Object]
-    (null           : Any).asInstanceOf[Object]
+    (6.5f: Any).asInstanceOf[Object]
+    (12.4: Any).asInstanceOf[Object]
+    (new Object: Any).asInstanceOf[Object]
+    ("hello": Any).asInstanceOf[Object]
+    (List(1): Any).asInstanceOf[Object]
+    (Array(1): Any).asInstanceOf[Object]
+    (Array(Nil): Any).asInstanceOf[Object]
+    (null: Any).asInstanceOf[Object]
   }
 
-  @Test def cloneCtorSideEffects_issue_3192(): Unit = {
+  @Test def cloneCtorSideEffects_Issue3192(): Unit = {
     var ctorInvokeCount = 0
 
     // This class has an inlineable init

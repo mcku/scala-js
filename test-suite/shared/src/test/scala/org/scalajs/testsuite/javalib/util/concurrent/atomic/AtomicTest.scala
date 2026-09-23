@@ -12,8 +12,6 @@
 
 package org.scalajs.testsuite.javalib.util.concurrent.atomic
 
-import scala.language.implicitConversions
-
 import org.junit.Test
 import org.junit.Assert._
 
@@ -44,6 +42,22 @@ class AtomicTest {
     assertEquals(10L, atomic.get())
     assertTrue(atomic.compareAndSet(10, 20))
     assertEquals(20L, atomic.get())
+
+    atomic.set(10L)
+    assertEquals(10L, atomic.getAndUpdate(_ * 2L))
+    assertEquals(20L, atomic.get())
+
+    atomic.set(10L)
+    assertEquals(20L, atomic.updateAndGet(_ * 2L))
+    assertEquals(20L, atomic.get())
+
+    atomic.set(10L)
+    assertEquals(10L, atomic.getAndAccumulate(20L, (x, y) => x - y))
+    assertEquals(-10L, atomic.get())
+
+    atomic.set(10L)
+    assertEquals(-10L, atomic.accumulateAndGet(20L, (x, y) => x - y))
+    assertEquals(-10L, atomic.get())
   }
 
   @Test def atomicIntegerTest(): Unit = {
@@ -71,6 +85,22 @@ class AtomicTest {
     assertEquals(10, atomic.get())
     assertTrue(atomic.compareAndSet(10, 20))
     assertEquals(20, atomic.get())
+
+    atomic.set(10)
+    assertEquals(10, atomic.getAndUpdate(_ * 2))
+    assertEquals(20, atomic.get())
+
+    atomic.set(10)
+    assertEquals(20, atomic.updateAndGet(_ * 2))
+    assertEquals(20, atomic.get())
+
+    atomic.set(10)
+    assertEquals(10, atomic.getAndAccumulate(20, (x, y) => x - y))
+    assertEquals(-10, atomic.get())
+
+    atomic.set(10)
+    assertEquals(-10, atomic.accumulateAndGet(20, (x, y) => x - y))
+    assertEquals(-10, atomic.get())
   }
 
   @Test def atomicBooleanTest(): Unit = {
@@ -109,6 +139,22 @@ class AtomicTest {
     assertFalse(atomic.compareAndSet(thing1bis, thing2))
     assertSame(thing1, atomic.getAndSet(thing2))
     assertSame(thing2, atomic.get())
+
+    atomic.set(thing1)
+    assertSame(thing1, atomic.getAndUpdate(f => Foo(f.i * 2)))
+    assertEquals(thing2, atomic.get())
+
+    atomic.set(thing1)
+    assertEquals(thing2, atomic.updateAndGet(f => Foo(f.i * 2)))
+    assertEquals(thing2, atomic.get())
+
+    atomic.set(thing1)
+    assertSame(thing1, atomic.getAndAccumulate(thing2, (x, y) => Foo(x.i - y.i)))
+    assertEquals(Foo(-5), atomic.get())
+
+    atomic.set(thing1)
+    assertEquals(Foo(-5), atomic.accumulateAndGet(thing2, (x, y) => Foo(x.i - y.i)))
+    assertEquals(Foo(-5), atomic.get())
   }
 
   @Test def atomicReferenceArrayTest(): Unit = {
@@ -131,7 +177,7 @@ class AtomicTest {
     assertSame(thing1, atomic.getAndSet(1, thing2))
     assertSame(thing2, atomic.get(1))
 
-    val initArray = Array(thing1,thing2)
+    val initArray = Array(thing1, thing2)
     val atomic2 = new java.util.concurrent.atomic.AtomicReferenceArray[Foo](initArray)
     assertSame(thing1, atomic2.get(0))
     assertSame(thing2, atomic2.get(1))

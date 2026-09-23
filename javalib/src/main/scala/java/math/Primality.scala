@@ -42,6 +42,7 @@ package java.math
 
 import java.util.Arrays
 import java.util.Random
+import java.util.ScalaOps._
 
 /** Provides primality probabilistic methods. */
 private[math] object Primality {
@@ -52,7 +53,7 @@ private[math] object Primality {
       59, 54, 49, 44, 38, 32, 26, 1)
 
   /** All prime numbers with bit length lesser than 10 bits. */
-  private val Primes = Array[Int](2, 3, 5, 7, 11, 13, 17, 19, 23, 29,
+  private val Primes = Array(2, 3, 5, 7, 11, 13, 17, 19, 23, 29,
       31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101,
       103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167,
       173, 179, 181, 191, 193, 197, 199, 211, 223, 227, 229, 233, 239,
@@ -78,8 +79,13 @@ private[math] object Primality {
       (18, 13), (31, 23), (54, 43), (97, 75))
 
   /** All {@code BigInteger} prime numbers with bit length lesser than 8 bits. */
-  private val BiPrimes =
-    Array.tabulate[BigInteger](Primes.length)(i => BigInteger.valueOf(Primes(i)))
+  private val BiPrimes = {
+    val len = Primes.length
+    val result = new Array[BigInteger](len)
+    for (i <- 0 until len)
+      result(i) = BigInteger.valueOf(Primes(i))
+    result
+  }
 
   /** A random number is generated until a probable prime number is found.
    *
@@ -128,18 +134,20 @@ private[math] object Primality {
     } else if (!n.testBit(0)) {
       // To discard all even numbers
       false
-    } else if (n.numberLength == 1 && (n.digits(0) & 0XFFFFFC00) == 0) {
+    } else if (n.numberLength == 1 && (n.digits(0) & 0xfffffc00) == 0) {
       // To check if 'n' exists in the table (it fit in 10 bits)
       Arrays.binarySearch(Primes, n.digits(0)) >= 0
     } else {
       // To check if 'n' is divisible by some prime of the table
-      for (i <- 1 until Primes.length) {
+      var i: Int = 1
+      val primesLength = Primes.length
+      while (i != primesLength) {
         if (Division.remainderArrayByInt(n.digits, n.numberLength, Primes(i)) == 0)
           return false
+        i += 1
       }
 
       // To set the number of iterations necessary for Miller-Rabin test
-      var i: Int = 0
       val bitLength = n.bitLength()
       i = 2
       while (bitLength < Bits(i)) {
@@ -206,7 +214,7 @@ private[math] object Primality {
       // At this point, all numbers in the gap are initialized as probably primes
       Arrays.fill(isDivisible, false)
       // To discard multiples of first primes
-      for (i <-0 until Primes.length) {
+      for (i <- 0 until Primes.length) {
         modules(i) = (modules(i) + gapSize) % Primes(i)
         var j =
           if (modules(i) == 0) 0
@@ -217,13 +225,15 @@ private[math] object Primality {
         }
       }
       // To execute Miller-Rabin for non-divisible numbers by all first primes
-      for (j <- 0 until gapSize) {
+      var j = 0
+      while (j != gapSize) {
         if (!isDivisible(j)) {
           Elementary.inplaceAdd(probPrime, j)
           if (millerRabin(probPrime, certainty)) {
             return probPrime
           }
         }
+        j += 1
       }
       Elementary.inplaceAdd(startPoint, gapSize)
     }
@@ -247,16 +257,18 @@ private[math] object Primality {
     var y: BigInteger = null
     val nMinus1 = n.subtract(BigInteger.ONE)
     val bitLength = nMinus1.bitLength()
-    val k = nMinus1.getLowestSetBit
+    val k = nMinus1.getLowestSetBit()
     val q = nMinus1.shiftRight(k)
     val rnd = new Random()
-    for (i <- 0 until t) {
+
+    var i = 0
+    while (i != t) {
       // To generate a witness 'x', first it use the primes of table
       if (i < Primes.length) {
         x = BiPrimes(i)
       } else {
         /*
-         * It generates random witness only if it's necesssary. Note that all
+         * It generates random witness only if it's necessary. Note that all
          * methods would call Miller-Rabin with t <= 50 so this part is only to
          * do more robust the algorithm
          */
@@ -266,17 +278,21 @@ private[math] object Primality {
       }
 
       y = x.modPow(q, n)
-      if (!(y.isOne || y == nMinus1)) {
-        for (j <- 1 until k) {
-          if (y != nMinus1) {
+      if (!(y.isOne || y.equals(nMinus1))) {
+        var j = 1
+        while (j != k) {
+          if (!y.equals(nMinus1)) {
             y = y.multiply(y).mod(n)
             if (y.isOne)
               return false
           }
+          j += 1
         }
-        if (y != nMinus1)
+        if (!y.equals(nMinus1))
           return false
       }
+
+      i += 1
     }
     true
     // scalastyle:on return

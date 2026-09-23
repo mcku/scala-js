@@ -12,6 +12,9 @@
 
 package java.nio
 
+import java.util.function._
+import java.util.internal.GenericArrayOps._
+
 private[nio] object GenBuffer {
   def apply[B <: Buffer](self: B): GenBuffer[B] =
     new GenBuffer(self)
@@ -21,8 +24,7 @@ private[nio] object GenBuffer {
  * `self.ElementType` and `self.BufferType` appear in signatures.
  * It's tolerable because the class is `private[nio]` anyway.
  */
-private[nio] final class GenBuffer[B <: Buffer] private (val self: B)
-    extends AnyVal {
+private[nio] final class GenBuffer[B <: Buffer] private (val self: B) extends AnyVal {
 
   import self._
 
@@ -38,20 +40,23 @@ private[nio] final class GenBuffer[B <: Buffer] private (val self: B)
   }
 
   @inline
-  def generic_get(index: Int): ElementType =
-    load(validateIndex(index))
+  def generic_get(index: Int): ElementType = {
+    BoundsChecks.checkIndex(index, limit())
+    load(index)
+  }
 
   @inline
   def generic_put(index: Int, elem: ElementType): BufferType = {
     ensureNotReadOnly()
-    store(validateIndex(index), elem)
+    BoundsChecks.checkIndex(index, limit())
+    store(index, elem)
     self
   }
 
   @inline
-  def generic_get(dst: Array[ElementType],
-      offset: Int, length: Int): BufferType = {
-    validateArrayIndexRange(dst, offset, length)
+  def generic_get(dst: Array[ElementType], offset: Int, length: Int)(
+      implicit arrayOps: ArrayOps[ElementType]): BufferType = {
+    BoundsChecks.checkOffsetCount(offset, length, arrayOps.length(dst))
     load(getPosAndAdvanceRead(length), dst, offset, length)
     self
   }
@@ -61,8 +66,8 @@ private[nio] final class GenBuffer[B <: Buffer] private (val self: B)
     if (src eq self)
       throw new IllegalArgumentException
     ensureNotReadOnly()
-    val srcLimit = src.limit
-    var srcPos = src.position
+    val srcLimit = src.limit()
+    var srcPos = src.position()
     val length = srcLimit - srcPos
     var selfPos = getPosAndAdvanceWrite(length)
     src.position(srcLimit)
@@ -82,24 +87,24 @@ private[nio] final class GenBuffer[B <: Buffer] private (val self: B)
   }
 
   @inline
-  def generic_put(src: Array[ElementType],
-      offset: Int, length: Int): BufferType = {
+  def generic_put(src: Array[ElementType], offset: Int, length: Int)(
+      implicit arrayOps: ArrayOps[ElementType]): BufferType = {
     ensureNotReadOnly()
-    validateArrayIndexRange(src, offset, length)
+    BoundsChecks.checkOffsetCount(offset, length, arrayOps.length(src))
     store(getPosAndAdvanceWrite(length), src, offset, length)
     self
   }
 
   @inline
   def generic_hasArray(): Boolean =
-    _array != null && !isReadOnly
+    _array != null && !isReadOnly()
 
   @inline
   def generic_array(): Array[ElementType] = {
     val a = _array
     if (a == null)
       throw new UnsupportedOperationException
-    if (isReadOnly)
+    if (isReadOnly())
       throw new ReadOnlyBufferException
     a
   }
@@ -109,36 +114,36 @@ private[nio] final class GenBuffer[B <: Buffer] private (val self: B)
     val o = _arrayOffset
     if (o == -1)
       throw new UnsupportedOperationException
-    if (isReadOnly)
+    if (isReadOnly())
       throw new ReadOnlyBufferException
     o
   }
 
   @inline
   def generic_hashCode(hashSeed: Int): Int = {
-    import scala.util.hashing.MurmurHash3._
-    val start = position
-    val end = limit
+    import java.util.internal.MurmurHash3._
+    val start = position()
+    val end = limit()
     var h = hashSeed
     var i = start
     while (i != end) {
-      h = mix(h, load(i).##)
+      h = mix(h, load(i).hashCode())
       i += 1
     }
-    finalizeHash(h, end-start)
+    finalizeHash(h, end - start)
   }
 
   @inline
   def generic_compareTo(that: BufferType)(
-      compare: (ElementType, ElementType) => Int): Int = {
+      compare: BiFunction[ElementType, ElementType, Int]): Int = {
     // scalastyle:off return
     if (self eq that) {
       0
     } else {
-      val thisStart = self.position
-      val thisRemaining = self.limit - thisStart
-      val thatStart = that.position
-      val thatRemaining = that.limit - thatStart
+      val thisStart = self.position()
+      val thisRemaining = self.limit() - thisStart
+      val thatStart = that.position()
+      val thatRemaining = that.limit() - thatStart
       val shortestLength = Math.min(thisRemaining, thatRemaining)
 
       var i = 0
@@ -149,19 +154,20 @@ private[nio] final class GenBuffer[B <: Buffer] private (val self: B)
         i += 1
       }
 
-      thisRemaining.compareTo(thatRemaining)
+      Integer.compare(thisRemaining, thatRemaining)
     }
     // scalastyle:on return
   }
 
   @inline
   def generic_load(startIndex: Int,
-      dst: Array[ElementType], offset: Int, length: Int): Unit = {
+      dst: Array[ElementType], offset: Int, length: Int)(
+      implicit arrayOps: ArrayOps[ElementType]): Unit = {
     var selfPos = startIndex
     val endPos = selfPos + length
     var arrayIndex = offset
     while (selfPos != endPos) {
-      dst(arrayIndex) = load(selfPos)
+      arrayOps.set(dst, arrayIndex, load(selfPos))
       selfPos += 1
       arrayIndex += 1
     }
@@ -169,12 +175,13 @@ private[nio] final class GenBuffer[B <: Buffer] private (val self: B)
 
   @inline
   def generic_store(startIndex: Int,
-      src: Array[ElementType], offset: Int, length: Int): Unit = {
+      src: Array[ElementType], offset: Int, length: Int)(
+      implicit arrayOps: ArrayOps[ElementType]): Unit = {
     var selfPos = startIndex
     val endPos = selfPos + length
     var arrayIndex = offset
     while (selfPos != endPos) {
-      store(selfPos, src(arrayIndex))
+      store(selfPos, arrayOps.get(src, arrayIndex))
       selfPos += 1
       arrayIndex += 1
     }

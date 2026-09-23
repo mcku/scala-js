@@ -12,16 +12,14 @@
 
 package scala.scalajs.js.annotation
 
-/** Marks the annotated class or object as imported from another JS module.
+import scala.annotation.meta._
+
+/** Marks the annotated declaration as imported from another JS module.
  *
  *  Intuitively, this corresponds to ECMAScript import directives. See the
  *  documentation of the various constructors.
- *
- *  `@JSImport` is not compatible with the `jsDependencies` mechanism offered
- *  by the Scala.js sbt plugin. You are responsible for resolving and/or
- *  bundling the JavaScript modules that you are importing using other
- *  mechanisms.
  */
+@field @getter @setter
 class JSImport private () extends scala.annotation.StaticAnnotation {
 
   /** Named import of a member of the module.
@@ -29,7 +27,21 @@ class JSImport private () extends scala.annotation.StaticAnnotation {
    *  Intuitively, this corresponds to the following ECMAScript import
    *  directive:
    *  {{{
-   *  import { <name> as AnnotatedClassOrObject } from <module>
+   *  import { AnnotatedDeclaration } from <module>
+   *  }}}
+   *
+   *  The import name is inferred from the annotated declaration's name.
+   *  To import the default export of a module, use `JSImport.Default` as
+   *  the second parameter `name`.
+   */
+  def this(module: String) = this()
+
+  /** Named import of a member of the module.
+   *
+   *  Intuitively, this corresponds to the following ECMAScript import
+   *  directive:
+   *  {{{
+   *  import { <name> as AnnotatedDeclaration } from <module>
    *  }}}
    *
    *  To import the default export of a module, use `JSImport.Default` as
@@ -43,7 +55,7 @@ class JSImport private () extends scala.annotation.StaticAnnotation {
    *
    *  Intuitively, this corresponds to
    *  {{{
-   *  import * as AnnotatedObject from <module>
+   *  import * as AnnotatedDeclaration from <module>
    *  }}}
    */
   def this(module: String, name: JSImport.Namespace.type) = this()
@@ -73,6 +85,7 @@ class JSImport private () extends scala.annotation.StaticAnnotation {
 }
 
 object JSImport {
+
   /** Use as the `name` of a `JSImport` to use the default import.
    *
    *  The actual value of this constant, the string `"default"`, is not
@@ -85,7 +98,7 @@ object JSImport {
    *
    *  Intuitively, it corresponds to `*` in an ECMAScript import:
    *  {{{
-   *  import * as AnnotatedObject from <module>
+   *  import * as AnnotatedDeclaration from <module>
    *  }}}
    */
   object Namespace

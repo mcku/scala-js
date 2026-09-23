@@ -16,6 +16,8 @@ import scala.language.implicitConversions
 
 import java.nio._
 
+import org.scalajs.javalibintf.{TypedArrayBuffer => Intf}
+
 /** Additional operations on a [[java.nio.Buffer Buffer]] with interoperability
  *  with JavaScript Typed Arrays.
  *
@@ -28,12 +30,20 @@ final class TypedArrayBufferOps[ // scalastyle:ignore
     private val buffer: Buffer)
     extends AnyVal {
 
-  /** Tests whether this buffer has a valid associated [[ArrayBuffer]].
+  /** Tests whether this buffer is backed by an accessible JavaScript [[ArrayBuffer]].
    *
-   *  This is true iff the buffer is direct and not read-only.
+   *  Returns true for read-write buffers created with any of the `wrap`
+   *  methods of [[TypedArrayBuffer]], since they are always backed by an
+   *  accessible [[ArrayBuffer]].
+   *
+   *  Otherwise, whether a buffer has an accessible backing [[ArrayBuffer]] is
+   *  left unspecified.
+   *
+   *  If this method returns `true`, then `arrayBuffer()`, `arrayBufferOffset()`
+   *  and `dataView()` do not throw any `UnsupportedOperationException`.
    */
   def hasArrayBuffer(): Boolean =
-    TypedArrayBufferBridge.Buffer_hasArrayBuffer(buffer)
+    Intf.hasArrayBuffer(buffer)
 
   /** [[ArrayBuffer]] backing this buffer _(optional operation)_.
    *
@@ -41,7 +51,7 @@ final class TypedArrayBufferOps[ // scalastyle:ignore
    *    If this buffer has no backing [[ArrayBuffer]], i.e., !hasArrayBuffer()
    */
   def arrayBuffer(): ArrayBuffer =
-    TypedArrayBufferBridge.Buffer_arrayBuffer(buffer)
+    Intf.arrayBuffer(buffer).asInstanceOf[ArrayBuffer]
 
   /** Byte offset in the associated [[ArrayBuffer]] _(optional operation)_.
    *
@@ -49,7 +59,7 @@ final class TypedArrayBufferOps[ // scalastyle:ignore
    *    If this buffer has no backing [[ArrayBuffer]], i.e., !hasArrayBuffer()
    */
   def arrayBufferOffset(): Int =
-    TypedArrayBufferBridge.Buffer_arrayBufferOffset(buffer)
+    Intf.arrayBufferOffset(buffer)
 
   /** [[DataView]] of the backing [[ArrayBuffer]] _(optional operation)_.
    *
@@ -60,21 +70,22 @@ final class TypedArrayBufferOps[ // scalastyle:ignore
    *    If this buffer has no backing [[ArrayBuffer]], i.e., !hasArrayBuffer()
    */
   def dataView(): DataView =
-    TypedArrayBufferBridge.Buffer_dataView(buffer)
+    Intf.dataView(buffer).asInstanceOf[DataView]
 
-  /** Tests whether this direct buffer has a valid associated [[TypedArray]].
+  /** Tests whether this buffer is backed by an accessible JavaScript [[TypedArray]].
    *
-   *  If this buffer is read-only, returns false.
+   *  Returns true for read-write buffers created with any of the `wrap`
+   *  methods of [[TypedArrayBuffer]], since they are always backed by an
+   *  accessible [[TypedArray]].
    *
-   *  For read-write buffers:
+   *  Otherwise, whether a buffer has an accessible backing [[TypedArray]] is
+   *  left unspecified.
    *
-   *  * Direct Byte buffers always have an associated [[TypedArray]].
-   *  * Long buffers never do.
-   *  * Other kinds of direct buffers have an associated [[TypedArray]] if and
-   *    only if their byte order is the native order of the platform.
+   *  If this method returns `true`, then `typedArray()` does not throw any
+   *  `UnsupportedOperationException`.
    */
   def hasTypedArray(): Boolean =
-    TypedArrayBufferBridge.Buffer_hasTypedArray(buffer)
+    Intf.hasTypedArray(buffer)
 
   /** [[TypedArray]] backing this direct buffer _(optional operation)_.
    *
@@ -85,7 +96,7 @@ final class TypedArrayBufferOps[ // scalastyle:ignore
    *    If this buffer does not have a backing [[TypedArray]], i.e., !hasTypedArray().
    */
   def typedArray(): TypedArrayType =
-    TypedArrayBufferBridge.Buffer_typedArray(buffer).asInstanceOf[TypedArrayType]
+    Intf.typedArray(buffer).asInstanceOf[TypedArrayType]
 }
 
 /** Extensions to [[java.nio.Buffer Buffer]]s for interoperability with

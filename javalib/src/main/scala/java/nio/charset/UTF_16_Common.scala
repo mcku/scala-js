@@ -16,11 +16,11 @@ import scala.annotation.tailrec
 
 import java.nio._
 
-/** This is a very specific common implementation for UTF_16BE and UTF_16LE.
- */
+/** This is a very specific common implementation for UTF_16BE and UTF_16LE. */
 private[charset] abstract class UTF_16_Common protected (
     name: String, aliases: Array[String],
-    private val endianness: Int) extends Charset(name, aliases) {
+    private val endianness: Int)
+    extends Charset(name, aliases) {
 
   import UTF_16_Common._
 
@@ -30,7 +30,7 @@ private[charset] abstract class UTF_16_Common protected (
   def newEncoder(): CharsetEncoder = new Encoder
 
   private class Decoder extends CharsetDecoder(
-      UTF_16_Common.this, 0.5f, 1.0f) {
+          UTF_16_Common.this, 0.5f, 1.0f) {
     private var endianness = UTF_16_Common.this.endianness
 
     override protected def implReset(): Unit = {
@@ -42,7 +42,7 @@ private[charset] abstract class UTF_16_Common protected (
       @inline
       @tailrec
       def loop(): CoderResult = {
-        if (in.remaining < 2) CoderResult.UNDERFLOW
+        if (in.remaining() < 2) CoderResult.UNDERFLOW
         else {
           val b1 = in.get() & 0xff
           val b2 = in.get() & 0xff
@@ -76,7 +76,7 @@ private[charset] abstract class UTF_16_Common protected (
               in.position(in.position() - 2)
               CoderResult.malformedForLength(2)
             } else if (!Character.isHighSurrogate(c1)) {
-              if (out.remaining == 0) {
+              if (out.remaining() == 0) {
                 in.position(in.position() - 2)
                 CoderResult.OVERFLOW
               } else {
@@ -84,7 +84,7 @@ private[charset] abstract class UTF_16_Common protected (
                 loop()
               }
             } else {
-              if (in.remaining < 2) {
+              if (in.remaining() < 2) {
                 in.position(in.position() - 2)
                 CoderResult.UNDERFLOW
               } else {
@@ -96,7 +96,7 @@ private[charset] abstract class UTF_16_Common protected (
                   in.position(in.position() - 4)
                   CoderResult.malformedForLength(4)
                 } else {
-                  if (out.remaining < 2) {
+                  if (out.remaining() < 2) {
                     in.position(in.position() - 4)
                     CoderResult.OVERFLOW
                   } else {
@@ -116,9 +116,11 @@ private[charset] abstract class UTF_16_Common protected (
   }
 
   private class Encoder extends CharsetEncoder(
-      UTF_16_Common.this, 2.0f, 2.0f,
-      // Character 0xfffd
-      if (endianness == LittleEndian) Array(-3, -1) else Array(-1, -3)) {
+          UTF_16_Common.this, 2.0f,
+          if (endianness == AutoEndian) 4.0f else 2.0f,
+          // Character 0xfffd
+          if (endianness == LittleEndian) Array(-3.toByte, -1.toByte)
+          else Array(-1.toByte, -3.toByte)) {
 
     private var needToWriteBOM: Boolean = endianness == AutoEndian
 
@@ -129,7 +131,7 @@ private[charset] abstract class UTF_16_Common protected (
 
     def encodeLoop(in: CharBuffer, out: ByteBuffer): CoderResult = {
       if (needToWriteBOM) {
-        if (out.remaining < 2) {
+        if (out.remaining() < 2) {
           return CoderResult.OVERFLOW // scalastyle:ignore
         } else {
           // Always encode in big endian
@@ -155,7 +157,7 @@ private[charset] abstract class UTF_16_Common protected (
       @inline
       @tailrec
       def loop(): CoderResult = {
-        if (in.remaining == 0) CoderResult.UNDERFLOW
+        if (in.remaining() == 0) CoderResult.UNDERFLOW
         else {
           val c1 = in.get()
 
@@ -163,7 +165,7 @@ private[charset] abstract class UTF_16_Common protected (
             in.position(in.position() - 1)
             CoderResult.malformedForLength(1)
           } else if (!Character.isHighSurrogate(c1)) {
-            if (out.remaining < 2) {
+            if (out.remaining() < 2) {
               in.position(in.position() - 1)
               CoderResult.OVERFLOW
             } else {
@@ -171,7 +173,7 @@ private[charset] abstract class UTF_16_Common protected (
               loop()
             }
           } else {
-            if (in.remaining < 1) {
+            if (in.remaining() < 1) {
               in.position(in.position() - 1)
               CoderResult.UNDERFLOW
             } else {
@@ -181,7 +183,7 @@ private[charset] abstract class UTF_16_Common protected (
                 in.position(in.position() - 2)
                 CoderResult.malformedForLength(1)
               } else {
-                if (out.remaining < 4) {
+                if (out.remaining() < 4) {
                   in.position(in.position() - 2)
                   CoderResult.OVERFLOW
                 } else {

@@ -14,17 +14,16 @@ package org.scalajs.testsuite.javalib.lang
 
 import java.nio.charset.Charset
 
-import scala.language.implicitConversions
-
 import org.junit.Test
 import org.junit.Assert._
+import org.junit.Assume._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.{assertThrows, assertThrowsNPEIfCompliant}
 import org.scalajs.testsuite.utils.Platform._
 
 class StringTest {
 
-  @Test def length_test(): Unit = {
+  @Test def lengthTest(): Unit = {
     assertEquals(8, "Scala.js".length)
     assertEquals(0, "".length)
   }
@@ -44,19 +43,84 @@ class StringTest {
     assertTrue("åløb".equalsIgnoreCase("ÅLØb"))
     assertFalse("Scala.js".equalsIgnoreCase("Java"))
     assertFalse("Scala.js".equalsIgnoreCase(null))
+
+    // Case folding that changes the string length are not supported,
+    // therefore ligatures are not equal to their expansion.
+    // U+FB00 LATIN SMALL LIGATURE FF
+    assertFalse("Eﬀet".equalsIgnoreCase("effEt"))
+    assertFalse("Eﬀet".equalsIgnoreCase("eFFEt"))
+
+    // "ı" and 'i' are considered equal, as well as their uppercase variants
+    assertTrue("ıiIİ ıiIİ ıiIİ ıiIİ".equalsIgnoreCase("ıııı iiii IIII İİİİ"))
+
+    // null is a valid input
+    assertFalse("foo".equalsIgnoreCase(null))
+
+    // #5283 Case folding is done by code point
+
+    /* Letters from the Warang Citi script.
+     * "𑢹𑣗𑣁𑣜𑣊 𑣏𑣂𑣕𑣂" is the native name for "Warang Citi"
+     */
+    assertTrue(
+        // "𑢹𑣗𑣁𑣜𑣊" == "𑣙𑣗𑣁𑣜𑣊"; folding on the the first code point
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".equalsIgnoreCase(
+            "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca"))
+    assertTrue(
+        // "𑢹𑣗𑣁𑣜𑣊" == "𑢹𑢷𑢡𑢼𑢪"; folding on the second code point and following
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".equalsIgnoreCase(
+            "\ud806\udcb9\ud806\udcb7\ud806\udca1\ud806\udcbc\ud806\udcaa"))
+    assertFalse(
+        // "𑢹𑣗𑣁𑣜𑣊" != "𑣙𑣗𑣁𑣏𑣊"; mimatch on the next-to-last code point
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".equalsIgnoreCase(
+            "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udccf\ud806\udcca"))
   }
 
   @Test def compareTo(): Unit = {
-    assertTrue("Scala.js".compareTo("Scala") > 0)
+    assertEquals(3, "Scala.js".compareTo("Scala"))
     assertEquals(0, "Scala.js".compareTo("Scala.js"))
-    assertTrue("Scala.js".compareTo("banana") < 0)
+    assertEquals(-15, "Scala.js".compareTo("banana"))
   }
 
   @Test def compareToIgnoreCase(): Unit = {
     assertEquals(0, "Scala.JS".compareToIgnoreCase("Scala.js"))
-    assertTrue("Scala.JS".compareToIgnoreCase("scala") > 0)
+    assertEquals(3, "Scala.JS".compareToIgnoreCase("scala"))
     assertEquals(0, "åløb".compareToIgnoreCase("ÅLØB"))
-    assertTrue("Java".compareToIgnoreCase("Scala") < 0)
+    assertEquals(-9, "Java".compareToIgnoreCase("Scala"))
+
+    // Case folding that changes the string length are not supported,
+    // therefore ligatures are not equal to their expansion.
+    // U+FB00 LATIN SMALL LIGATURE FF
+    assertEquals(64154, "Eﬀet".compareToIgnoreCase("effEt"))
+    assertEquals(64154, "Eﬀet".compareToIgnoreCase("eFFEt"))
+
+    // "ı" and 'i' are considered equal, as well as their uppercase variants
+    assertEquals(0, "ıiIİ ıiIİ ıiIİ ıiIİ".compareToIgnoreCase("ıııı iiii IIII İİİİ"))
+
+    // #5283 Case folding is done by code point
+
+    /* Letters from the Warang Citi script.
+     * "𑢹𑣗𑣁𑣜𑣊 𑣏𑣂𑣕𑣂" is the native name for "Warang Citi"
+     */
+    assertEquals(
+        // "𑢹𑣗𑣁𑣜𑣊" == "𑣙𑣗𑣁𑣜𑣊"; folding on the the first code point
+        0,
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".compareToIgnoreCase(
+            "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca"))
+    assertEquals(
+        // "𑢹𑣗𑣁𑣜𑣊" == "𑢹𑢷𑢡𑢼𑢪"; folding on the second code point and following
+        0,
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".compareToIgnoreCase(
+            "\ud806\udcb9\ud806\udcb7\ud806\udca1\ud806\udcbc\ud806\udcaa"))
+    assertEquals(
+        // "𑢹𑣗𑣁𑣜𑣊" > "𑣙𑣗𑣁𑣏𑣊"; mismatch on the next-to-last code point
+        13,
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".compareToIgnoreCase(
+            "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udccf\ud806\udcca"))
+    assertEquals(
+        // "𑣙𑣗𑣁𑢯𑣊" < "𑢹𑣗𑣁𑣜𑣊"; mismatch on the next-to-last code point; diff on the folded CPs
+        -13,
+        "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udcaf\ud806\udcca".compareToIgnoreCase(
+            "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca"))
   }
 
   @Test def isEmpty(): Unit = {
@@ -76,6 +140,8 @@ class StringTest {
     assertTrue("Scala.js".startsWith("Scala.js"))
     assertFalse("Scala.js".startsWith("scala"))
     assertTrue("ananas".startsWith("an"))
+
+    assertThrowsNPEIfCompliant("ananas".startsWith(null))
   }
 
   @Test def endsWith(): Unit = {
@@ -83,76 +149,115 @@ class StringTest {
     assertTrue("Scala.js".endsWith("Scala.js"))
     assertFalse("Scala.js".endsWith("JS"))
     assertTrue("banana".endsWith("na"))
+
+    assertThrowsNPEIfCompliant("banana".endsWith(null))
   }
 
-  @Test def indexOf_String(): Unit = {
+  @Test def indexOfString(): Unit = {
     assertEquals(6, "Scala.js".indexOf("js"))
     assertEquals(0, "Scala.js".indexOf("Scala.js"))
     assertEquals(1, "ananas".indexOf("na"))
     assertEquals(-1, "Scala.js".indexOf("Java"))
   }
 
-  @Test def indexOf_int(): Unit = {
+  @Test def indexOfInt(): Unit = {
     assertEquals(0, "abc\uD834\uDF06def\uD834\uDF06def".indexOf(0x61))
-    assertEquals(3, "abc\uD834\uDF06def\uD834\uDF06def".indexOf(0x1D306))
-    assertEquals(3, "abc\uD834\uDF06def\uD834\uDF06def".indexOf(0xD834))
-    assertEquals(4, "abc\uD834\uDF06def\uD834\uDF06def".indexOf(0xDF06))
+    assertEquals(3, "abc\uD834\uDF06def\uD834\uDF06def".indexOf(0x1d306))
+    assertEquals(3, "abc\uD834\uDF06def\uD834\uDF06def".indexOf(0xd834))
+    assertEquals(4, "abc\uD834\uDF06def\uD834\uDF06def".indexOf(0xdf06))
     assertEquals(5, "abc\uD834\uDF06def\uD834\uDF06def".indexOf(0x64))
   }
 
-  @Test def lastIndexOf_String(): Unit = {
+  @Test def lastIndexOfString(): Unit = {
     assertEquals(0, "Scala.js".lastIndexOf("Scala.js"))
     assertEquals(3, "ananas".lastIndexOf("na"))
     assertEquals(-1, "Scala.js".lastIndexOf("Java"))
     assertEquals(-1, "Negative index".lastIndexOf("N", -5))
   }
 
-  @Test def lastIndexOf_int(): Unit = {
+  @Test def lastIndexOfInt(): Unit = {
     assertEquals(0, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0x61))
-    assertEquals(8, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0x1D306))
-    assertEquals(8, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0xD834))
-    assertEquals(9, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0xDF06))
+    assertEquals(8, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0x1d306))
+    assertEquals(8, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0xd834))
+    assertEquals(9, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0xdf06))
     assertEquals(10, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0x64))
     assertEquals(-1, "abc\uD834\uDF06def\uD834\uDF06def".lastIndexOf(0x64, -1))
   }
 
-  @Test def toUpperCase(): Unit = {
+  @Test def toUpperCase(): Unit =
     assertEquals("SCALA.JS", "Scala.js".toUpperCase())
-  }
 
-  @Test def toLowerCase(): Unit = {
+  @Test def toLowerCase(): Unit =
     assertEquals("scala.js", "Scala.js".toLowerCase())
-  }
 
   @Test def charAt(): Unit = {
-    assertEquals('.', "Scala.js".charAt(5))
-    assertNotEquals("Scala.js".charAt(6), '.')
+    @noinline def testNoInline(expected: Char, s: String, i: Int): Unit =
+      assertEquals(expected, s.charAt(i))
+
+    @inline def test(expected: Char, s: String, i: Int): Unit = {
+      testNoInline(expected, s, i)
+      assertEquals(expected, s.charAt(i))
+    }
+
+    test('S', "Scala.js", 0)
+    test('.', "Scala.js", 5)
+    test('s', "Scala.js", 7)
+    test('o', "foo", 1)
+  }
+
+  @Test def charAtIndexOutOfBounds(): Unit = {
+    assumeTrue("Assuming compliant StringIndexOutOfBounds",
+        hasCompliantStringIndexOutOfBounds)
+
+    def test(s: String, i: Int): Unit = {
+      val e = assertThrows(classOf[StringIndexOutOfBoundsException], s.charAt(i))
+      assertTrue(e.getMessage(), e.getMessage().contains(i.toString()))
+    }
+
+    test("foo", -1)
+    test("foo", -10000)
+    test("foo", Int.MinValue)
+    test("foo", 3)
+    test("foo", 10000)
+    test("foo", Int.MaxValue)
+
+    test("", -1)
+    test("", 0)
+    test("", 1)
+
+    // Test non-constant-folding
+    assertThrows(classOf[StringIndexOutOfBoundsException], "foo".charAt(4))
   }
 
   @Test def codePointAt(): Unit = {
     // String that starts with a BMP symbol
     assertEquals(0x61, "abc\uD834\uDF06def".codePointAt(0))
-    assertEquals(0x1D306, "abc\uD834\uDF06def".codePointAt(3))
-    assertEquals(0xDF06, "abc\uD834\uDF06def".codePointAt(4))
+    assertEquals(0x1d306, "abc\uD834\uDF06def".codePointAt(3))
+    assertEquals(0xdf06, "abc\uD834\uDF06def".codePointAt(4))
     assertEquals(0x64, "abc\uD834\uDF06def".codePointAt(5))
 
     // String that starts with an astral symbol
-    assertEquals(0x1D306, "\uD834\uDF06def".codePointAt(0))
-    assertEquals(0xDF06, "\uD834\uDF06def".codePointAt(1))
+    assertEquals(0x1d306, "\uD834\uDF06def".codePointAt(0))
+    assertEquals(0xdf06, "\uD834\uDF06def".codePointAt(1))
 
     // Lone high surrogates
-    assertEquals(0xD834, "\uD834abc".codePointAt(0))
+    assertEquals(0xd834, "\uD834abc".codePointAt(0))
 
     // Lone low surrogates
-    assertEquals(0xDF06, "\uDF06abc".codePointAt(0))
-    assertEquals(0xD834, "abc\uD834".codePointAt(3))
+    assertEquals(0xdf06, "\uDF06abc".codePointAt(0))
+    assertEquals(0xd834, "abc\uD834".codePointAt(3))
+  }
 
-    if (executingInJVM) {
-      expectThrows(classOf[IndexOutOfBoundsException],
-          "abc\ud834\udf06def".codePointAt(-1))
-      expectThrows(classOf[IndexOutOfBoundsException],
-          "abc\ud834\udf06def".codePointAt(15))
-    }
+  @Test def codePointAtIndexOutOfBounds(): Unit = {
+    assumeTrue("Assuming compliant StringIndexOutOfBounds",
+        hasCompliantStringIndexOutOfBounds)
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "abc\ud834\udf06def".codePointAt(-1))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "abc\ud834\udf06def".codePointAt(8))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "abc\ud834\udf06def".codePointAt(15))
   }
 
   @Test def codePointBefore(): Unit = {
@@ -160,17 +265,25 @@ class StringTest {
     assertEquals(0x1d306, "abc\ud834\udf06def".codePointBefore(5))
     assertEquals(0xd834, "abc\ud834\udf06def".codePointBefore(4))
     assertEquals(0x64, "abc\ud834\udf06def".codePointBefore(6))
+    assertEquals('f'.toInt, "abc\ud834\udf06def".codePointBefore(8))
     assertEquals(0x1d306, "\ud834\udf06def".codePointBefore(2))
     assertEquals(0xd834, "\ud834\udf06def".codePointBefore(1))
     assertEquals(0xd834, "\ud834abc".codePointBefore(1))
     assertEquals(0xdf06, "\udf06abc".codePointBefore(1))
+  }
 
-    if (executingInJVM) {
-      expectThrows(classOf[IndexOutOfBoundsException],
-          "abc\ud834\udf06def".codePointBefore(0))
-      expectThrows(classOf[IndexOutOfBoundsException],
-          "abc\ud834\udf06def".codePointBefore(15))
-    }
+  @Test def codePointBeforeIndexOutOfBounds(): Unit = {
+    assumeTrue("Assuming compliant StringIndexOutOfBounds",
+        hasCompliantStringIndexOutOfBounds)
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "abc\ud834\udf06def".codePointBefore(-5))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "abc\ud834\udf06def".codePointBefore(0))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "abc\ud834\udf06def".codePointBefore(9))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "abc\ud834\udf06def".codePointBefore(15))
   }
 
   @Test def codePointCount(): Unit = {
@@ -189,9 +302,11 @@ class StringTest {
     assertEquals(0, s.codePointCount(s.length - 1, s.length - 1))
     assertEquals(0, s.codePointCount(s.length, s.length))
 
-    expectThrows(classOf[IndexOutOfBoundsException], s.codePointCount(-3, 4))
-    expectThrows(classOf[IndexOutOfBoundsException], s.codePointCount(6, 2))
-    expectThrows(classOf[IndexOutOfBoundsException], s.codePointCount(10, 30))
+    assertThrows(classOf[IndexOutOfBoundsException], s.codePointCount(-3, 0))
+    assertThrows(classOf[IndexOutOfBoundsException], s.codePointCount(-3, 4))
+    assertThrows(classOf[IndexOutOfBoundsException], s.codePointCount(6, 2))
+    assertThrows(classOf[IndexOutOfBoundsException], s.codePointCount(10, 30))
+    assertThrows(classOf[IndexOutOfBoundsException], s.codePointCount(10, 0))
   }
 
   @Test def offsetByCodePoints(): Unit = {
@@ -210,9 +325,9 @@ class StringTest {
     assertEquals(s.length - 1, s.offsetByCodePoints(s.length - 1, 0))
     assertEquals(s.length, s.offsetByCodePoints(s.length, 0))
 
-    expectThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(-3, 4))
-    expectThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(6, 18))
-    expectThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(30, 2))
+    assertThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(-3, 4))
+    assertThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(6, 18))
+    assertThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(30, 2))
   }
 
   @Test def offsetByCodePointsBackwards(): Unit = {
@@ -231,9 +346,67 @@ class StringTest {
     assertEquals(s.length - 1, s.offsetByCodePoints(s.length - 1, -0))
     assertEquals(s.length, s.offsetByCodePoints(s.length, -0))
 
-    expectThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(-3, 4))
-    expectThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(6, 18))
-    expectThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(30, 2))
+    assertThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(-3, -4))
+    assertThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(6, -18))
+    assertThrows(classOf[IndexOutOfBoundsException], s.offsetByCodePoints(30, -2))
+  }
+
+  @Test def substringBegin(): Unit = {
+    assertEquals("", "".substring(0))
+    assertEquals("", "foo".substring(3))
+    assertEquals("", "hello".substring(5))
+    assertEquals("lo", "hello".substring(3))
+    assertEquals("baz", "foo bar baz".substring(8))
+    assertEquals("foo bar baz", "foo bar baz".substring(0))
+  }
+
+  @Test def substringBeginIndexOutOfBounds(): Unit = {
+    assumeTrue("Assuming compliant StringIndexOutOfBounds",
+        hasCompliantStringIndexOutOfBounds)
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".substring(-1))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".substring(4))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".substring(15))
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "".substring(-1))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "".substring(1))
+  }
+
+  @Test def substringBeginEnd(): Unit = {
+    assertEquals("", "".substring(0, 0))
+    assertEquals("", "foo".substring(3, 3))
+    assertEquals("", "hello".substring(3, 3))
+    assertEquals("lo", "hello".substring(3, 5))
+    assertEquals("bar", "foo bar baz".substring(4, 7))
+    assertEquals("foo bar baz", "foo bar baz".substring(0, 11))
+    assertEquals("foo bar", "foo bar baz".substring(0, 7))
+  }
+
+  @Test def substringBeginEndIndexOutOfBounds(): Unit = {
+    assumeTrue("Assuming compliant StringIndexOutOfBounds",
+        hasCompliantStringIndexOutOfBounds)
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".substring(-1, 1))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".substring(4, 4))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".substring(1, 4))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".substring(-1, 4))
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".substring(2, 1))
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "".substring(-1, -1))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "".substring(1, 1))
   }
 
   @Test def subSequence(): Unit = {
@@ -241,6 +414,28 @@ class StringTest {
     assertEquals("js", "Scala.js".subSequence(6, 8))
     assertEquals("la", "Scala.js".subSequence(3, 5))
     assertEquals("", "Scala.js".subSequence(3, 3))
+  }
+
+  @Test def subSequenceIndexOutOfBounds(): Unit = {
+    assumeTrue("Assuming compliant StringIndexOutOfBounds",
+        hasCompliantStringIndexOutOfBounds)
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".subSequence(-1, 1))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".subSequence(4, 4))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".subSequence(1, 4))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".subSequence(-1, 4))
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "foo".subSequence(2, 1))
+
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "".subSequence(-1, -1))
+    assertThrows(classOf[StringIndexOutOfBoundsException],
+        "".subSequence(1, 1))
   }
 
   @Test def replace(): Unit = {
@@ -256,14 +451,12 @@ class StringTest {
 
   @Test def split(): Unit = {
     assertArrayEquals(Array[AnyRef]("Sc", "l", ".js"), erased("Scala.js".split("a")))
-    if (!executingInJVMOnJDK7OrLower) {
-      assertArrayEquals(Array[AnyRef]("a", "s", "d", "f"), erased("asdf".split("")))
-      assertArrayEquals(Array[AnyRef]("a", "s", "d", "f", ""), erased("asdf".split("", -1)))
-    }
+    assertArrayEquals(Array[AnyRef]("a", "s", "d", "f"), erased("asdf".split("")))
+    assertArrayEquals(Array[AnyRef]("a", "s", "d", "f", ""), erased("asdf".split("", -1)))
   }
 
-  @Test def split_with_char_as_argument(): Unit = {
-    assertArrayEquals(Array[AnyRef]("Scala","js"), erased("Scala.js".split('.')))
+  @Test def splitWithCharAsArgument(): Unit = {
+    assertArrayEquals(Array[AnyRef]("Scala", "js"), erased("Scala.js".split('.')))
     for (i <- 0 to 32) {
       val c = i.toChar
       assertArrayEquals(Array[AnyRef]("blah", "blah", "blah", "blah"),
@@ -271,7 +464,7 @@ class StringTest {
     }
   }
 
-  @Test def `startsWith(prefix, toffset) - #1603`(): Unit = {
+  @Test def startsWithPrefixToffset_Issue1603(): Unit = {
     assertTrue("Scala.js".startsWith("ala", 2))
     assertTrue("Scala.js".startsWith("Scal", 0))
 
@@ -286,11 +479,26 @@ class StringTest {
     assertFalse("Scala.js".startsWith(".js", 10))
     assertFalse("Scala.js".startsWith("", -1))
     assertFalse("Scala.js".startsWith("", 9))
+
+    // When the offset is within bounds, a null prefix causes an NPE
+    assertThrowsNPEIfCompliant("Scala.js".startsWith(null, 0))
+    assertThrowsNPEIfCompliant("Scala.js".startsWith(null, 2))
+    assertThrowsNPEIfCompliant("Scala.js".startsWith(null, 8))
+
+    /* But if the offset is out of bounds, the result is not clearly specified,
+     * and the JVM is inconsistent.
+     * Our chosen semantics is to be maximally tolerant, to delay UB until
+     * there is no other choice. We test that behavior.
+     */
+    if (!executingInJVM) {
+      assertFalse("Scala.js".startsWith(null, -1))
+      assertFalse("Scala.js".startsWith(null, 9))
+      assertFalse("Scala.js".startsWith(null, 50))
+    }
   }
 
-  @Test def toCharArray(): Unit = {
+  @Test def toCharArray(): Unit =
     assertEquals('.', "Scala.js".toCharArray()(5))
-  }
 
   @Test def hashCodeTest(): Unit = {
     assertEquals(-1395193631, "a`jkxzcbfaslkjfbkj,289oinkasdf".hashCode())
@@ -301,23 +509,21 @@ class StringTest {
   @Test def getChars(): Unit = {
     val trg = new Array[Char](10)
     "asdf_foo".getChars(2, 6, trg, 3)
-    val exp = Array(0,0,0,'d','f','_','f',0,0,0)
+    val exp = Array(0, 0, 0, 'd', 'f', '_', 'f', 0, 0, 0)
 
-    for ((i,e) <- trg zip exp) {
+    for ((i, e) <- trg zip exp) {
       assertEquals(e, i.toInt)
     }
   }
 
-
-  @Test def concat(): Unit = {
+  @Test def concat(): Unit =
     assertEquals("asdffdsa", "asdf".concat("fdsa"))
-  }
 
   @Test def constructors(): Unit = {
     val charArray =
       Array('a', 'b', 'c', 'd', '\uD834', '\uDF06', 'e', 'f', 'g', 'h', 'i')
     val codePointArray =
-      Array(65, 0x1D306, 67, 68, 0xD834, 69, 72, 0xDF06)
+      Array(65, 0x1d306, 67, 68, 0xd834, 69, 72, 0xdf06)
 
     assertEquals("", new String())
     assertEquals("abcd\uD834\uDF06efghi", new String(charArray))
@@ -378,20 +584,51 @@ class StringTest {
     assertFalse(testU.regionMatches(true, 1, "bCdx", 1, 3))
     assertTrue(testU.regionMatches(true, 0, "xaBcd", 1, 4))
 
-    expectThrows(classOf[NullPointerException], test.regionMatches(-1, null, -1, -1))
-    expectThrows(classOf[NullPointerException], test.regionMatches(true, -1, null, -1, -1))
+    // #5283 Case folding is done by code point
 
-    // scalastyle:off line.size.limit
+    /* Letters from the Warang Citi script.
+     * "𑢹𑣗𑣁𑣜𑣊 𑣏𑣂𑣕𑣂" is the native name for "Warang Citi"
+     * Note that indices are expressed in chars, not in code points.
+     * For example, the chars [2:6) represent the code points [1:3) in these tests.
+     */
+    assertFalse(
+        // "𑢹𑣗𑣁𑣜𑣊"[0:4) != "𑣙𑣗𑣁𑣜𑢹"[0:4) case-sensitive
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".regionMatches(
+            false, 0, "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca", 0, 4))
+    assertTrue(
+        // "𑢹𑣗𑣁𑣜𑣊"[2:6) == "𑣙𑣗𑣁𑣜𑢹"[2:6) case-sensitive
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".regionMatches(
+            false, 2, "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca", 2, 4))
+    assertTrue(
+        // "𑢹𑣗𑣁𑣜𑣊"[0:4) == "𑣙𑣗𑣁𑣜𑢹"[0:4) case-insensitive
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".regionMatches(
+            true, 0, "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca", 0, 4))
+    assertTrue(
+        // "𑢹𑣗𑣁𑣜𑣊"[2:6) == "𑣙𑣗𑣁𑣜𑢹"[2:6) case-insensitive
+        "\ud806\udcb9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca".regionMatches(
+            true, 2, "\ud806\udcd9\ud806\udcd7\ud806\udcc1\ud806\udcdc\ud806\udcca", 2, 4))
+
     /* If len is negative, you must return true in some cases. See
      * http://docs.oracle.com/javase/8/docs/api/java/lang/String.html#regionMatches-boolean-int-java.lang.String-int-int-
      */
-    // scalastyle:on line.size.limit
 
     // four cases that are false, irrelevant of sign of len nor the value of the other string
     assertFalse(test.regionMatches(-1, test, 0, -4))
     assertFalse(test.regionMatches(0, test, -1, -4))
     assertFalse(test.regionMatches(100, test, 0, -4))
     assertFalse(test.regionMatches(0, test, 100, -4))
+
+    // offset + len > length
+    assertFalse(test.regionMatches(3, "defg", 0, 4)) // on receiver string
+    assertFalse(test.regionMatches(3, "abcde", 3, 3)) // on other string
+    assertFalse(test.regionMatches(Int.MaxValue, "ab", 0, 1)) // #4878 overflow, large toffset
+    assertFalse(test.regionMatches(0, "ab", Int.MaxValue, 1)) // #4878 overflow, large ooffset
+    assertFalse(test.regionMatches(1, "ab", 1, Int.MaxValue)) // #4878 overflow, large len
+    assertFalse(test.regionMatches(true, 3, "defg", 0, 4)) // on receiver string
+    assertFalse(test.regionMatches(true, 3, "abcde", 3, 3)) // on other string
+    assertFalse(test.regionMatches(true, Int.MaxValue, "ab", 0, 1)) // #4878 overflow, large toffset
+    assertFalse(test.regionMatches(true, 0, "ab", Int.MaxValue, 1)) // #4878 overflow, large ooffset
+    assertFalse(test.regionMatches(true, 1, "ab", 1, Int.MaxValue)) // #4878 overflow, large len
 
     // the strange cases that are true
     assertTrue(test.regionMatches(0, test, 0, -4))
@@ -403,7 +640,28 @@ class StringTest {
     assertTrue(testU.regionMatches(true, 1, "bCdx", 1, -3))
   }
 
-  @Test def createFromLargeCharArray_issue2553(): Unit = {
+  @Test def trim(): Unit = {
+    // Char values <= ' ' are trimmed
+    for (c <- '\u0000' to '\u0020') {
+      // on the left
+      assertEquals(c.toInt.toString, s"foo${c}bar", s"${c} foo${c}bar".trim())
+      // on the right
+      assertEquals(c.toInt.toString, s"foo${c}bar", s"foo${c}bar\n${c}".trim())
+      // on both sides
+      assertEquals(c.toInt.toString, s"foo${c}bar", s"${c} foo${c}bar\n${c}".trim())
+    }
+
+    // Char values > ' ' are not trimmed, even Unicode Whitespace characters
+    for (c <- '\u0021' to Char.MaxValue)
+      assertEquals(c.toInt.toString, s"${c}foo${c}bar${c}", s"${c}foo${c}bar${c}")
+
+    // Potential corner cases
+    assertEquals("", "".trim())
+    assertEquals("", " \n\r".trim())
+    assertEquals("foo bar", "foo bar".trim())
+  }
+
+  @Test def createFromLargeCharArray_Issue2553(): Unit = {
     val largeCharArray =
       (1 to 100000).toArray.flatMap(_ => Array('a', 'b', 'c', 'd', 'e', 'f'))
     val str = new String(largeCharArray)
@@ -414,7 +672,7 @@ class StringTest {
       assertEquals(('a' + i % 6).toChar, str.charAt(i))
   }
 
-  @Test def createFromLargeCodePointArray_issue2553(): Unit = {
+  @Test def createFromLargeCodePointArray_Issue2553(): Unit = {
     val largeCodePointArray =
       (1 to 100000).toArray.flatMap(_ => Array[Int]('a', 'b', 'c', 'd', 'e', 'f'))
     val str = new String(largeCodePointArray, 0, largeCodePointArray.length)
@@ -425,7 +683,7 @@ class StringTest {
       assertEquals(('a' + i % 6).toChar, str.charAt(i))
   }
 
-  @Test def String_CASE_INSENSITIVE_ORDERING(): Unit = {
+  @Test def stringCaseInsensitiveOrdering(): Unit = {
     def compare(s1: String, s2: String): Int =
       String.CASE_INSENSITIVE_ORDER.compare(s1, s2)
 
@@ -438,7 +696,350 @@ class StringTest {
     assertTrue(compare("Java", "Scala") < 0)
   }
 
-  @inline private def erased(array: Array[String]): Array[AnyRef] = {
-    array.asInstanceOf[Array[AnyRef]]
+  @Test def repeat(): Unit = {
+    assertThrows(classOf[IllegalArgumentException], "".repeat(-1))
+    assertTrue("".repeat(0) == "")
+    assertTrue("".repeat(1) == "")
+    assertTrue("".repeat(100) == "")
+
+    val str = "a_"
+    assertThrows(classOf[IllegalArgumentException], str.repeat(-1))
+    assertTrue(str.repeat(0) == "")
+    assertTrue(str.repeat(1) == "a_")
+    assertTrue(str.repeat(3) == "a_a_a_")
+    assertTrue(str.repeat(10) == List.fill(10)(str).mkString(""))
+    assertTrue(str.repeat(100) == List.fill(100)(str).mkString(""))
+    assertTrue(str.repeat(1000) == List.fill(1000)(str).mkString(""))
   }
+
+  @Test def strip(): Unit = {
+    assertEquals("", "".strip())
+    assertEquals("", " ".strip())
+    assertEquals("", "  ".strip())
+    assertEquals("", "   ".strip())
+    assertEquals("", (" " * 1000).strip())
+    assertEquals("\u0394", "\u0394".strip())
+    assertEquals("a", "a ".strip())
+    assertEquals("a", " a".strip())
+    assertEquals("a", " a ".strip())
+    assertEquals("a", "  a ".strip())
+    assertEquals("a", " a  ".strip())
+    assertEquals("a", "  a  ".strip())
+    assertEquals("a b", " a b ".strip())
+    assertEquals("a  b", " a  b ".strip())
+    assertEquals("a_", "a_".strip())
+    assertEquals("a_", " a_".strip())
+    assertEquals("a_", " a_ ".strip())
+    assertEquals("a_", " a_ ".strip())
+
+    assertEquals("A", "\u2028 A \u2028".strip())
+    assertEquals("A", "\u2029 A \u2029".strip())
+    assertEquals("A", "\u2004 A \u2004".strip())
+    assertEquals("A", "\u200A A \u200A".strip())
+    assertEquals("A", "\u3000 A \u3000".strip())
+    assertEquals("A", "\u200A \u3000 A \u2028 \u2029 \u2004 ".strip())
+  }
+
+  @Test def stripLeading(): Unit = {
+    assertEquals("", "".stripLeading())
+    assertEquals("", " ".stripLeading())
+    assertEquals("", "  ".stripLeading())
+    assertEquals("", "   ".stripLeading())
+    assertEquals("", (" " * 1000).stripLeading())
+    assertEquals("\u0394", "\u0394".stripLeading())
+    assertEquals("a ", "a ".stripLeading())
+    assertEquals("a", " a".stripLeading())
+    assertEquals("a ", " a ".stripLeading())
+    assertEquals("a ", "  a ".stripLeading())
+    assertEquals("a  ", " a  ".stripLeading())
+    assertEquals("a  ", "  a  ".stripLeading())
+    assertEquals("a b ", " a b ".stripLeading())
+    assertEquals("a  b ", " a  b ".stripLeading())
+    assertEquals("a_", "a_".stripLeading())
+    assertEquals("a_", " a_".stripLeading())
+    assertEquals("a_ ", " a_ ".stripLeading())
+    assertEquals("a_ ", " a_ ".stripLeading())
+    assertEquals("A", " \t\n\r\f\u001C\u001D\u001E\u001FA".stripLeading())
+
+    assertEquals("A ", "\u2028 A ".stripLeading())
+    assertEquals("A ", "\u2029 A ".stripLeading())
+    assertEquals("A ", "\u2004 A ".stripLeading())
+    assertEquals("A ", "\u200A A ".stripLeading())
+    assertEquals("A ", "\u3000 A ".stripLeading())
+    assertEquals("A ", "\u2028 \u2029 \u2004 \u200A \u3000 A ".stripLeading())
+  }
+
+  @Test def stripTrailing(): Unit = {
+    assertEquals("", "".stripTrailing())
+    assertEquals("", " ".stripTrailing())
+    assertEquals("", "  ".stripTrailing())
+    assertEquals("", "   ".stripTrailing())
+    assertEquals("", (" " * 1000).stripTrailing())
+    assertEquals("\u0394", "\u0394".stripTrailing())
+    assertEquals("a", "a ".stripTrailing())
+    assertEquals(" a", " a".stripTrailing())
+    assertEquals(" a", " a ".stripTrailing())
+    assertEquals("  a", "  a ".stripTrailing())
+    assertEquals(" a", " a  ".stripTrailing())
+    assertEquals("  a", "  a  ".stripTrailing())
+    assertEquals(" a b", " a b ".stripTrailing())
+    assertEquals(" a  b", " a  b ".stripTrailing())
+    assertEquals("a_", "a_".stripTrailing())
+    assertEquals(" a_", " a_".stripTrailing())
+    assertEquals(" a_", " a_ ".stripTrailing())
+    assertEquals(" a_", " a_ ".stripTrailing())
+    assertEquals("A", "A \t\n\r\f\u001C\u001D\u001E\u001F".stripTrailing())
+
+    assertEquals(" A", " A \u2028".stripTrailing())
+    assertEquals(" A", " A \u2029".stripTrailing())
+    assertEquals(" A", " A \u2004".stripTrailing())
+    assertEquals(" A", " A \u200A".stripTrailing())
+    assertEquals(" A", " A \u3000".stripTrailing())
+    assertEquals(" A", " A \u2028 \u2029 \u2004 \u200A \u3000".stripTrailing())
+  }
+
+  @Test def isBlank(): Unit = {
+    assertFalse("a".isBlank())
+    assertFalse(" a".isBlank())
+    assertFalse("\u00A0".isBlank())
+    assertFalse("\u2007".isBlank())
+    assertFalse("\u202F".isBlank())
+
+    // from unicode: "Separator: Space, Line, Paragraph"
+    assertTrue("\u2028".isBlank())
+    assertTrue("\u2029".isBlank())
+    assertTrue("\u2004".isBlank())
+    assertTrue("\u200A".isBlank())
+    assertTrue("\u3000".isBlank())
+    assertTrue("\u2028 \u2029 \u2004 \u200A \u3000".isBlank())
+
+    assertTrue("\t".isBlank())
+    assertTrue("\n".isBlank())
+    assertTrue("\u000B".isBlank())
+    assertTrue("\f".isBlank())
+    assertTrue("\r".isBlank())
+    assertTrue("\u001C".isBlank())
+    assertTrue("\u001D".isBlank())
+    assertTrue("\u001E".isBlank())
+    assertTrue("\u001F".isBlank())
+    assertTrue("".isBlank())
+    assertTrue(" ".isBlank())
+    assertTrue("  ".isBlank())
+    assertTrue(" \t\n\r\f\u001C\u001D\u001E\u001F".isBlank())
+    assertTrue((" " * 1000).isBlank())
+  }
+
+  @Test def indent(): Unit = {
+    assertEquals("", "".indent(1))
+    assertEquals("", "".indent(0))
+    assertEquals("", "".indent(-1))
+    assertEquals(" \n", "\n".indent(1))
+    assertEquals("\n", "\n".indent(0))
+    assertEquals("\n", "\n".indent(-1))
+
+    // indent adds the extra new line due to JDK normalization requirements
+    assertEquals("  abc\n", "abc".indent(2))
+    assertEquals(" abc\n", "abc".indent(1))
+    assertEquals("abc\n", "abc".indent(0))
+    assertEquals("abc\n", "abc".indent(-1))
+    assertEquals("abc\n", "abc".indent(-2))
+    assertEquals("     a\n       b\n", "a\n  b\n".indent(5))
+    assertEquals("a\n  b\n", "a\n  b\n".indent(0))
+    assertEquals("a\nb\n", "a\n  b\n".indent(-5))
+    assertEquals("      \n", "      ".indent(0))
+    assertEquals("            \n", "      ".indent(6))
+    assertEquals("\n", "      ".indent(-6))
+    assertEquals(" \n", "   ".indent(-2))
+    assertEquals("  \n", "        ".indent(-6))
+
+    assertEquals("  a\n  \n  c\n", "a\n\nc".indent(2))
+    assertEquals("  abc\n  def\n", "abc\ndef".indent(2))
+    assertEquals("  abc\n  def\n  \n  \n  \n  a\n", "abc\ndef\n\n\n\na".indent(2))
+
+    assertEquals(" \n  \n", "\n \n".indent(1))
+    assertEquals("  \n  \n  \n", " \n \n ".indent(1))
+    assertEquals(" \n \n \n \n", "\n\n\n\n".indent(1))
+    assertEquals(" 0\n A\n B\n C\n D\n", "0\r\nA\r\nB\r\nC\r\nD".indent(1))
+    assertEquals(" 0\n A\n B\n C\n D\n", "0\rA\rB\rC\rD".indent(1))
+
+    assertEquals("  \n  \n  \n", "\r\r\n\n".indent(2))
+    assertEquals("  \n  \n  \n  \n", "\r\r\r\r".indent(2))
+    assertEquals("  \n  \n", "\r\n\r\n".indent(2))
+    assertEquals("\n\n\n", "\r\n\n\n".indent(-1))
+    assertEquals("\n\n\n", "\r\n\n\n".indent(0))
+
+    // non-U+0020 WS
+    assertEquals(
+        "  \u2028 \u2029 \u2004 \u200a \u3000 \n", "\u2028 \u2029 \u2004 \u200A \u3000 ".indent(2))
+    assertEquals("\u2029 \u2004 \u200A \u3000 \n", "\u2028 \u2029 \u2004 \u200A \u3000 ".indent(-2))
+    assertEquals(
+        "\u2028 \u2029 \u2004 \u200A \u3000 \n", "\u2028 \u2029 \u2004 \u200A \u3000 ".indent(0))
+
+  }
+
+  @Test def transform(): Unit = {
+    assertEquals("", "".transform(x => x))
+    assertEquals("abcabc", "abc".transform(_ * 2))
+    assertEquals("bar", "foo".transform(_ => "bar"))
+  }
+
+  @Test def stripIndent(): Unit = {
+
+    // single line indents
+    assertEquals("", "".stripIndent())
+    assertEquals("", " ".stripIndent())
+    assertEquals("-", "-".stripIndent())
+    assertEquals("-", " -".stripIndent())
+    assertEquals("-", "   -".stripIndent())
+    assertEquals("-", "   -   ".stripIndent())
+    assertEquals("", "  ".stripIndent())
+
+    // new line normalization
+    assertEquals("\n", "\n".stripIndent())
+    assertEquals("\n", " \n".stripIndent())
+    assertEquals("\n", " \n ".stripIndent())
+    assertEquals("\n\n", "\n\n".stripIndent())
+    assertEquals("\n\n\n", "\n\n\n".stripIndent())
+    assertEquals("\n\n", "\n  \n".stripIndent())
+    assertEquals("  A\n  B\n\n", "  A\n  B\r \n".stripIndent())
+    assertEquals("  A\n  B\n", "  A\n  B\r\n".stripIndent())
+    assertEquals("  A\n  B\n", "  A\n  B\n".stripIndent())
+    assertEquals("A\nB", "  A\n  B".stripIndent())
+    assertEquals("\n\n", "\n  \n    ".stripIndent())
+    assertEquals("\n  A\n  B\n", "  \n  A\n  B  \n".stripIndent())
+    assertEquals("\nA\nB", "  \nA  \nB".stripIndent())
+    assertEquals("A\nA\nB", "A  \nA  \nB".stripIndent())
+    assertEquals("A\nA\nA\nA", "  A\n  A\n  A\n  A".stripIndent())
+    assertEquals("A\nA\nA\nA", "  A\n  A\n  A\n  A ".stripIndent())
+    assertEquals("__\nABC\n Ac\nA", "  __  \n  ABC  \n   Ac\n  A  ".stripIndent())
+
+    // variable indents
+    assertEquals("A\n B\n  C\n   D\n    E\n", "A\n B\n  C\n   D\n    E\n     ".stripIndent())
+    assertEquals("    A\n   B\n  C\n   D\n    E\n", "    A\n   B\n  C\n   D\n    E\n".stripIndent())
+    assertEquals("    A\nB\n\n", "    A\nB\n  \n".stripIndent())
+    assertEquals("  A\n    B\n  C\n", "  A\n    B\n  C\n".stripIndent())
+
+    // variable indents (no trailing new line)
+    assertEquals("A\n B\n  C\n   D\n    E", "A\n B\n  C\n   D\n    E".stripIndent())
+    assertEquals("  A\n B\nC\n D\n  E", "    A\n   B\n  C\n   D\n    E".stripIndent())
+    assertEquals("    A\nB", "    A\nB".stripIndent())
+    assertEquals("A\n  B\nC", "  A\n    B\n  C".stripIndent())
+
+    // alternative WS and tabs
+    assertEquals(
+        "A\n\u2028B\n\u2028C\n\u2028\u2028D\n\u2028\u2028\u2028E",
+        "A\n\u2028B\n\u2028C\u2028\n\u2028\u2028D\u2028\n\u2028\u2028\u2028E \u2028".stripIndent())
+    assertEquals(
+        "\u2028 A\n B\nC\n\n  E",
+        "\u2029 \u2028 A\n   B\n\u3000 C \u2028\n \t\n \u2004  E".stripIndent())
+    assertEquals("    A\nB", "    A\t\nB".stripIndent())
+    assertEquals("\tA\n  B\nC", "\t\tA\t\n   B\n\tC".stripIndent())
+    assertEquals("A\n B\nC", "\tA\n\t B\t\n\tC".stripIndent())
+
+    // leading/trailing WS
+    assertEquals("A\nB\n", " A\n B\n ".stripIndent())
+    assertEquals("A\nB\n", " A\n B\n  ".stripIndent())
+    assertEquals("  A\n  B\n", "  A\n  B\n".stripIndent())
+    assertEquals(" A\n B\n", "  A\n  B\n ".stripIndent())
+    assertEquals("A\nB\n", "  A\n  B\n  ".stripIndent())
+    assertEquals("A\nB\n", "  A\n  B\n   ".stripIndent())
+    assertEquals(" A\n B\n", "   A\n   B\n  ".stripIndent())
+
+    assertEquals("\n", "    \n".stripIndent())
+    assertEquals("\n", "   \n".stripIndent())
+    assertEquals("\n", "  \n ".stripIndent())
+    assertEquals("\n", " \n  ".stripIndent())
+    assertEquals("\n", "\n   ".stripIndent())
+    assertEquals("\n", " \n".stripIndent())
+    assertEquals("\n", "  \n ".stripIndent())
+    assertEquals("\n", "   \n  ".stripIndent())
+    assertEquals("\n", "    \n   ".stripIndent())
+    assertEquals("\n", "  \n".stripIndent())
+    assertEquals("\n", "  \n ".stripIndent())
+    assertEquals("\n", "  \n  ".stripIndent())
+    assertEquals("\n", "  \n   ".stripIndent())
+  }
+
+  @Test def translateEscapes(): Unit = {
+
+    // bad escapes
+    assertThrows(classOf[IllegalArgumentException], "\\u2022".translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """\z""".translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """\_""".translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """\999""".translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """\""".translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """\ """.translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """ \""".translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """\_\""".translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """\n\""".translateEscapes())
+    assertThrows(classOf[IllegalArgumentException], """foo\""".translateEscapes())
+
+    def oct(s: String): Char = Integer.parseInt(s, 8).toChar
+
+    // octals
+    assertEquals(s"${oct("333")}", """\333""".translateEscapes())
+    assertEquals(s"${oct("12")}", """\12""".translateEscapes())
+    assertEquals(s"${oct("77")}", """\77""".translateEscapes())
+    assertEquals(s"${oct("42")}", """\42""".translateEscapes())
+    assertEquals(s"${oct("0")}", """\0""".translateEscapes())
+    assertEquals(s"${oct("00")}", """\00""".translateEscapes())
+    assertEquals(s"${oct("000")}", """\000""".translateEscapes())
+    assertEquals(s" ${oct("333")}_${oct("333")} ", """ \333_\333 """.translateEscapes())
+    assertEquals(s" ${oct("12")}_${oct("12")} ", """ \12_\12 """.translateEscapes())
+    assertEquals(s" ${oct("77")}_${oct("77")} ", """ \77_\77 """.translateEscapes())
+    assertEquals(s" ${oct("42")}_${oct("42")} ", """ \42_\42 """.translateEscapes())
+    assertEquals(s" ${oct("0")}_${oct("0")} ", """ \0_\0 """.translateEscapes())
+    assertEquals(s" ${oct("00")}_${oct("00")} ", """ \00_\00 """.translateEscapes())
+    assertEquals(s" ${oct("000")}_${oct("000")} ", """ \000_\000 """.translateEscapes())
+    assertEquals(s"\t${oct("12")}${oct("34")}${oct("56")}${oct("7")} 89",
+        """\t\12\34\56\7 89""".translateEscapes())
+    assertEquals(s" ${oct("111")}1 ", """ \1111 """.translateEscapes())
+    assertEquals(s" ${oct("54")}11 ", """ \5411 """.translateEscapes())
+    assertEquals(s" ${oct("1")}92 ", """ \192 """.translateEscapes())
+    assertEquals(s" ${oct("12")}81 ", """ \1281 """.translateEscapes())
+
+    // don't discard CR/LF if not preceded by \
+    assertEquals("\r", "\r".translateEscapes())
+    assertEquals("\n", "\n".translateEscapes())
+    assertEquals("\r\n", "\r\n".translateEscapes())
+    assertEquals(" \r \n ", " \r \n ".translateEscapes())
+    assertEquals(" \r\n ", " \r\n ".translateEscapes())
+
+    // do discard otherwise
+    assertEquals("", "\\\n".translateEscapes())
+    assertEquals("", "\\\r".translateEscapes())
+    assertEquals("", "\\\r\n".translateEscapes())
+    assertEquals("", "\\\n\\\n".translateEscapes())
+    assertEquals("", "\\\r\\\n".translateEscapes())
+    assertEquals(" ", "\\\n \\\n".translateEscapes())
+    assertEquals("  ", " \\\n\\\n ".translateEscapes())
+    assertEquals("   ", "   \\\n".translateEscapes())
+
+    // expected should look syntactically equivalent to actual but in normal quotes
+    assertEquals("", """""".translateEscapes())
+    assertEquals(" ", """ """.translateEscapes())
+    assertEquals("\u2022", """•""".translateEscapes())
+    assertEquals("\t\n", """\t\n""".translateEscapes())
+    assertEquals("\r\n", """\r\n""".translateEscapes())
+    assertEquals("\n\n", """\n\n""".translateEscapes())
+    assertEquals("\n\n\n\n0\n\n\n\n0\n\n\n\naaaa\n\n\\",
+        """\n\n\n\n0\n\n\n\n0\n\n\n\naaaa\n\n\\""".translateEscapes())
+    assertEquals("a\nb\nc\nd\ne\nf\t", """a\nb\nc\nd\ne\nf\t""".translateEscapes())
+    assertEquals("\na", """\na""".translateEscapes())
+    assertEquals("\na\n", """\na\n""".translateEscapes())
+    assertEquals("a\n", """a\n""".translateEscapes())
+    assertEquals("a\nb", """a\nb""".translateEscapes())
+    assertEquals("a\nb\n", """a\nb\n""".translateEscapes())
+    assertEquals("abcd", """abcd""".translateEscapes())
+    assertEquals("\"\' \r\f\n\t\b\\\"\' \r\f\n\t\b\"",
+        """\"\'\s\r\f\n\t\b\\\"\'\s\r\f\n\t\b\"""".translateEscapes())
+    assertEquals("\\\\", """\\\\""".translateEscapes())
+    assertEquals("\\abcd", """\\abcd""".translateEscapes())
+    assertEquals("abcd\\", """abcd\\""".translateEscapes())
+    assertEquals("\\abcd\\", """\\abcd\\""".translateEscapes())
+    assertEquals("\\\\\\", """\\\\\\""".translateEscapes())
+  }
+
+  @inline private def erased(array: Array[String]): Array[AnyRef] =
+    array.asInstanceOf[Array[AnyRef]]
 }

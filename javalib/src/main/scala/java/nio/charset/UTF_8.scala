@@ -16,8 +16,7 @@ import scala.annotation.{switch, tailrec}
 
 import java.nio._
 
-private[charset] object UTF_8 extends Charset("UTF-8", Array(
-    "UTF8", "unicode-1-1-utf-8")) {
+private[charset] object UTF_8 extends Charset("UTF-8", Array("UTF8", "unicode-1-1-utf-8")) {
 
   import java.lang.Character._
 
@@ -73,20 +72,20 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
 
   private class Decoder extends CharsetDecoder(UTF_8, 1.0f, 1.0f) {
     def decodeLoop(in: ByteBuffer, out: CharBuffer): CoderResult = {
-      if (in.hasArray && out.hasArray)
+      if (in.hasArray() && out.hasArray())
         decodeLoopArray(in, out)
       else
         decodeLoopNoArray(in, out)
     }
 
     private def decodeLoopArray(in: ByteBuffer, out: CharBuffer): CoderResult = {
-      val inArray = in.array
-      val inOffset = in.arrayOffset
+      val inArray = in.array()
+      val inOffset = in.arrayOffset()
       val inStart = in.position() + inOffset
       val inEnd = in.limit() + inOffset
 
-      val outArray = out.array
-      val outOffset = out.arrayOffset
+      val outArray = out.array()
+      val outOffset = out.arrayOffset()
       val outStart = out.position() + outOffset
       val outEnd = out.limit() + outOffset
 
@@ -110,7 +109,7 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
               finalize(CoderResult.OVERFLOW)
             } else {
               outArray(outPos) = leading.toChar
-              loop(inPos+1, outPos+1)
+              loop(inPos + 1, outPos + 1)
             }
           } else {
             // Multi-byte
@@ -152,20 +151,20 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
                 finalize(decoded.failure)
               } else if (decoded.low == 0) {
                 // not a surrogate pair
-                if (outPos == outEnd)
+                if (outPos == outEnd) {
                   finalize(CoderResult.OVERFLOW)
-                else {
+                } else {
                   outArray(outPos) = decoded.high
-                  loop(inPos+length, outPos+1)
+                  loop(inPos + length, outPos + 1)
                 }
               } else {
                 // a surrogate pair
-                if (outPos + 2 > outEnd)
+                if (outPos + 2 > outEnd) {
                   finalize(CoderResult.OVERFLOW)
-                else {
+                } else {
                   outArray(outPos) = decoded.high
-                  outArray(outPos+1) = decoded.low
-                  loop(inPos+length, outPos+2)
+                  outArray(outPos + 1) = decoded.low
+                  loop(inPos + length, outPos + 2)
                 }
               }
             }
@@ -189,13 +188,13 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
           result
         }
 
-        if (!in.hasRemaining) {
+        if (!in.hasRemaining()) {
           CoderResult.UNDERFLOW
         } else {
           val leading = in.get().toInt
           if (leading >= 0) {
             // US-ASCII repertoire
-            if (!out.hasRemaining) {
+            if (!out.hasRemaining()) {
               fail(CoderResult.OVERFLOW)
             } else {
               out.put(leading.toChar)
@@ -208,19 +207,19 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
               fail(CoderResult.malformedForLength(1))
             } else {
               val decoded = {
-                if (in.hasRemaining) {
+                if (in.hasRemaining()) {
                   val b2 = in.get()
                   if (isInvalidNextByte(b2)) {
                     DecodedMultiByte(CoderResult.malformedForLength(1))
                   } else if (length == 2) {
                     decode2(leading, b2)
-                  } else if (in.hasRemaining) {
+                  } else if (in.hasRemaining()) {
                     val b3 = in.get()
                     if (isInvalidNextByte(b3)) {
                       DecodedMultiByte(CoderResult.malformedForLength(2))
                     } else if (length == 3) {
                       decode3(leading, b2, b3)
-                    } else if (in.hasRemaining) {
+                    } else if (in.hasRemaining()) {
                       val b4 = in.get()
                       if (isInvalidNextByte(b4))
                         DecodedMultiByte(CoderResult.malformedForLength(3))
@@ -241,17 +240,17 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
                 fail(decoded.failure)
               } else if (decoded.low == 0) {
                 // not a surrogate pair
-                if (!out.hasRemaining)
+                if (!out.hasRemaining()) {
                   fail(CoderResult.OVERFLOW)
-                else {
+                } else {
                   out.put(decoded.high)
                   loop()
                 }
               } else {
                 // a surrogate pair
-                if (out.remaining < 2)
+                if (out.remaining() < 2) {
                   fail(CoderResult.OVERFLOW)
-                else {
+                } else {
                   out.put(decoded.high)
                   out.put(decoded.low)
                   loop()
@@ -298,7 +297,7 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
     /** Requires the input bytes to be a valid byte sequence. */
     @inline private def decode4(b1: Int, b2: Int, b3: Int, b4: Int): DecodedMultiByte = {
       val codePoint = (((b1 & 0x7) << 18) | ((b2 & 0x3f) << 12) |
-          ((b3 & 0x3f) << 6) | (b4 & 0x3f))
+        ((b3 & 0x3f) << 6) | (b4 & 0x3f))
       // By construction, 0 <= codePoint <= 0x1fffff
       if (codePoint < 0x10000 || codePoint > MAX_CODE_POINT) {
         // It should have been encoded with 1, 2, or 3 bytes
@@ -315,22 +314,22 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
     }
   }
 
-  private class Encoder extends CharsetEncoder(UTF_8, 1.1f, 4.0f) {
+  private class Encoder extends CharsetEncoder(UTF_8, 1.1f, 3.0f) {
     def encodeLoop(in: CharBuffer, out: ByteBuffer): CoderResult = {
-      if (in.hasArray && out.hasArray)
+      if (in.hasArray() && out.hasArray())
         encodeLoopArray(in, out)
       else
         encodeLoopNoArray(in, out)
     }
 
     private def encodeLoopArray(in: CharBuffer, out: ByteBuffer): CoderResult = {
-      val inArray = in.array
-      val inOffset = in.arrayOffset
+      val inArray = in.array()
+      val inOffset = in.arrayOffset()
       val inStart = in.position() + inOffset
       val inEnd = in.limit() + inOffset
 
-      val outArray = out.array
-      val outOffset = out.arrayOffset
+      val outArray = out.array()
+      val outOffset = out.arrayOffset()
       val outStart = out.position() + outOffset
       val outEnd = out.limit() + outOffset
 
@@ -351,50 +350,50 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
 
           if (c1 < 0x80) {
             // Encoding in one byte
-            if (outPos == outEnd)
+            if (outPos == outEnd) {
               finalize(CoderResult.OVERFLOW)
-            else {
+            } else {
               outArray(outPos) = c1.toByte
-              loop(inPos+1, outPos+1)
+              loop(inPos + 1, outPos + 1)
             }
           } else if (c1 < 0x800) {
             // Encoding in 2 bytes (by construction, not a surrogate)
-            if (outPos + 2 > outEnd)
+            if (outPos + 2 > outEnd) {
               finalize(CoderResult.OVERFLOW)
-            else {
+            } else {
               outArray(outPos) = ((c1 >> 6) | 0xc0).toByte
-              outArray(outPos+1) = ((c1 & 0x3f) | 0x80).toByte
-              loop(inPos+1, outPos+2)
+              outArray(outPos + 1) = ((c1 & 0x3f) | 0x80).toByte
+              loop(inPos + 1, outPos + 2)
             }
           } else if (!isSurrogate(c1)) {
             // Not a surrogate, encoding in 3 bytes
-            if (outPos + 3 > outEnd)
+            if (outPos + 3 > outEnd) {
               finalize(CoderResult.OVERFLOW)
-            else {
+            } else {
               outArray(outPos) = ((c1 >> 12) | 0xe0).toByte
-              outArray(outPos+1) = (((c1 >> 6) & 0x3f) | 0x80).toByte
-              outArray(outPos+2) = ((c1 & 0x3f) | 0x80).toByte
-              loop(inPos+1, outPos+3)
+              outArray(outPos + 1) = (((c1 >> 6) & 0x3f) | 0x80).toByte
+              outArray(outPos + 2) = ((c1 & 0x3f) | 0x80).toByte
+              loop(inPos + 1, outPos + 3)
             }
           } else if (isHighSurrogate(c1)) {
             // Should have a low surrogate that follows
-            if (inPos + 1 == inEnd)
+            if (inPos + 1 == inEnd) {
               finalize(CoderResult.UNDERFLOW)
-            else {
-              val c2 = inArray(inPos+1)
+            } else {
+              val c2 = inArray(inPos + 1)
               if (!isLowSurrogate(c2)) {
                 finalize(CoderResult.malformedForLength(1))
               } else {
                 // Surrogate pair, encoding in 4 bytes
-                if (outPos + 4 > outEnd)
+                if (outPos + 4 > outEnd) {
                   finalize(CoderResult.OVERFLOW)
-                else {
+                } else {
                   val cp = toCodePoint(c1, c2)
                   outArray(outPos) = ((cp >> 18) | 0xf0).toByte
-                  outArray(outPos+1) = (((cp >> 12) & 0x3f) | 0x80).toByte
-                  outArray(outPos+2) = (((cp >> 6) & 0x3f) | 0x80).toByte
-                  outArray(outPos+3) = ((cp & 0x3f) | 0x80).toByte
-                  loop(inPos+2, outPos+4)
+                  outArray(outPos + 1) = (((cp >> 12) & 0x3f) | 0x80).toByte
+                  outArray(outPos + 2) = (((cp >> 6) & 0x3f) | 0x80).toByte
+                  outArray(outPos + 3) = ((cp & 0x3f) | 0x80).toByte
+                  loop(inPos + 2, outPos + 4)
                 }
               }
             }
@@ -417,33 +416,33 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
           result
         }
 
-        if (!in.hasRemaining) {
+        if (!in.hasRemaining()) {
           CoderResult.UNDERFLOW
         } else {
           val c1 = in.get()
 
           if (c1 < 0x80) {
             // Encoding in one byte
-            if (!out.hasRemaining)
+            if (!out.hasRemaining()) {
               finalize(1, CoderResult.OVERFLOW)
-            else {
+            } else {
               out.put(c1.toByte)
               loop()
             }
           } else if (c1 < 0x800) {
             // Encoding in 2 bytes (by construction, not a surrogate)
-            if (out.remaining < 2)
+            if (out.remaining() < 2) {
               finalize(1, CoderResult.OVERFLOW)
-            else {
+            } else {
               out.put(((c1 >> 6) | 0xc0).toByte)
               out.put(((c1 & 0x3f) | 0x80).toByte)
               loop()
             }
           } else if (!isSurrogate(c1)) {
             // Not a surrogate, encoding in 3 bytes
-            if (out.remaining < 3)
+            if (out.remaining() < 3) {
               finalize(1, CoderResult.OVERFLOW)
-            else {
+            } else {
               out.put(((c1 >> 12) | 0xe0).toByte)
               out.put((((c1 >> 6) & 0x3f) | 0x80).toByte)
               out.put(((c1 & 0x3f) | 0x80).toByte)
@@ -451,17 +450,17 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
             }
           } else if (isHighSurrogate(c1)) {
             // Should have a low surrogate that follows
-            if (!in.hasRemaining)
+            if (!in.hasRemaining()) {
               finalize(1, CoderResult.UNDERFLOW)
-            else {
+            } else {
               val c2 = in.get()
               if (!isLowSurrogate(c2)) {
                 finalize(2, CoderResult.malformedForLength(1))
               } else {
                 // Surrogate pair, encoding in 4 bytes
-                if (out.remaining < 4)
+                if (out.remaining() < 4) {
                   finalize(2, CoderResult.OVERFLOW)
-                else {
+                } else {
                   val cp = toCodePoint(c1, c2)
                   out.put(((cp >> 18) | 0xf0).toByte)
                   out.put((((cp >> 12) & 0x3f) | 0x80).toByte)
@@ -482,7 +481,7 @@ private[charset] object UTF_8 extends Charset("UTF-8", Array(
   }
 
   private final val SurrogateMask = 0xf800 // 11111 0 00  00000000
-  private final val SurrogateID   = 0xd800 // 11011 0 00  00000000
+  private final val SurrogateID = 0xd800 // 11011 0 00  00000000
 
   @inline private def isSurrogate(c: Char): Boolean =
     (c & SurrogateMask) == SurrogateID

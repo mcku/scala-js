@@ -96,13 +96,15 @@ private[nio] final class TypedArrayShortBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Short], offset: Int, length: Int): Unit =
+      dst: Array[Short], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Short], offset: Int, length: Int): Unit =
+      src: Array[Short], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }
 
 private[nio] object TypedArrayShortBuffer {
@@ -128,6 +130,6 @@ private[nio] object TypedArrayShortBuffer {
   def fromTypedArrayByteBuffer(byteBuffer: TypedArrayByteBuffer): ShortBuffer =
     GenTypedArrayBuffer.generic_fromTypedArrayByteBuffer(byteBuffer)
 
-  def wrap(array: Int16Array): ShortBuffer =
+  def wrapInt16Array(array: Int16Array): ShortBuffer =
     new TypedArrayShortBuffer(array, 0, array.length, false)
 }

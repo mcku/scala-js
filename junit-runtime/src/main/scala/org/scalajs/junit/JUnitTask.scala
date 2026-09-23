@@ -13,7 +13,14 @@
 package org.scalajs.junit
 
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
+
+/* Use the queue execution context (based on JS promises) explicitly:
+ * We do not have anything better at our disposal and it is accceptable in
+ * terms of fairness: We only use it for test dispatching and orchestation.
+ * The real async work is done in Bootstrapper#invokeTest which does not take
+ * an (implicit) ExecutionContext parameter.
+ */
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 import scala.util.{Try, Success, Failure}
 
@@ -28,9 +35,10 @@ import sbt.testing._
  * under the hood and stay consistent with JVM JUnit.
  */
 private[junit] final class JUnitTask(val taskDef: TaskDef,
-    runSettings: RunSettings) extends Task {
+    runSettings: RunSettings)
+    extends Task {
 
-  def tags: Array[String] = Array.empty
+  def tags(): Array[String] = Array.empty
 
   def execute(eventHandler: EventHandler, loggers: Array[Logger],
       continuation: Array[Task] => Unit): Unit = {
@@ -76,7 +84,7 @@ private[junit] final class JUnitTask(val taskDef: TaskDef,
     } { _ =>
       catchAll(bootstrapper.beforeClass())
     } { _ =>
-      runTests(bootstrapper.tests.toList)
+      runTests(bootstrapper.tests().toList)
     } { _ =>
       catchAll(bootstrapper.afterClass())
     }
@@ -84,16 +92,7 @@ private[junit] final class JUnitTask(val taskDef: TaskDef,
     for {
       (errors, timeInSeconds) <- result
     } yield {
-      errors match {
-        case e :: Nil if isAssumptionViolation(e) =>
-          reporter.reportIgnored(None)
-          ignored += 1
-
-        case es =>
-          failed += es.size
-          reporter.reportErrors("Test ", None, timeInSeconds, es)
-      }
-
+      failed += reportExecutionErrors(reporter, None, timeInSeconds, errors)
       reporter.reportRunFinished(failed, ignored, total, timeInSeconds)
     }
   }
@@ -120,22 +119,14 @@ private[junit] final class JUnitTask(val taskDef: TaskDef,
     for {
       (errors, timeInSeconds) <- result
     } yield {
-      val failed = errors match {
-        case e :: Nil if isAssumptionViolation(e) =>
-          reporter.reportAssumptionViolation(test.name, timeInSeconds, e)
-          0
-
-        case es =>
-          reporter.reportErrors("Test ", Some(test.name), timeInSeconds, es)
-          es.size
-      }
-
+      val failed = reportExecutionErrors(reporter, Some(test.name), timeInSeconds, errors)
       reporter.reportTestFinished(test.name, errors.isEmpty, timeInSeconds)
 
       // Scala.js-specific: timeouts are warnings only, after the fact
       val timeout = test.annotation.timeout
       if (timeout != 0 && timeout <= timeInSeconds) {
-        reporter.log(_.warn, "Timeout: took " + timeInSeconds + " sec, expected " +
+        reporter.log(_.warn,
+            "Timeout: took " + timeInSeconds + " sec, expected " +
             (timeout.toDouble / 1000) + " sec")
       }
 
@@ -143,9 +134,36 @@ private[junit] final class JUnitTask(val taskDef: TaskDef,
     }
   }
 
+  private def reportExecutionErrors(reporter: Reporter, method: Option[String],
+      timeInSeconds: Double, errors: List[Throwable]): Int = {
+    import org.junit.internal.AssumptionViolatedException
+    import org.junit.TestCouldNotBeSkippedException
+
+    errors match {
+      case Nil =>
+        // fast path
+        0
+
+      case (e: AssumptionViolatedException) :: Nil =>
+        reporter.reportAssumptionViolation(method, timeInSeconds, e)
+        0
+
+      case _ =>
+        val errorsPatchedForAssumptionViolations = errors.map {
+          case error: AssumptionViolatedException =>
+            new TestCouldNotBeSkippedException(error)
+          case error =>
+            error
+        }
+        reporter.reportErrors("Test ", method, timeInSeconds,
+            errorsPatchedForAssumptionViolations)
+        errorsPatchedForAssumptionViolations.size
+    }
+  }
+
   private def loadBootstrapper(reporter: Reporter): Option[Bootstrapper] = {
     val bootstrapperName =
-      taskDef.fullyQualifiedName + "$scalajs$junit$bootstrapper$"
+      taskDef.fullyQualifiedName() + "$scalajs$junit$bootstrapper$"
 
     try {
       val b = Reflect
@@ -214,11 +232,6 @@ private[junit] final class JUnitTask(val taskDef: TaskDef,
       val timeInSeconds = (System.nanoTime - startTime).toDouble / 1000000000
       (es, timeInSeconds)
     }
-  }
-
-  private def isAssumptionViolation(ex: Throwable): Boolean = {
-    ex.isInstanceOf[org.junit.AssumptionViolatedException] ||
-    ex.isInstanceOf[org.junit.internal.AssumptionViolatedException]
   }
 
   private def catchAll[T](body: => T): Try[T] = {

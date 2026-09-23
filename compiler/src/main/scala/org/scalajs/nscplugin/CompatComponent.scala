@@ -25,109 +25,79 @@ import scala.tools.nsc._
  *  @author Sébastien Doeraene
  */
 trait CompatComponent {
-  import CompatComponent.{infiniteLoop, noImplClasses}
+  import CompatComponent.infiniteLoop
 
   val global: Global
 
   import global._
 
   implicit final class SymbolCompat(self: Symbol) {
-    def originalOwner: Symbol =
-      global.originalOwner.getOrElse(self, self.rawowner)
-
-    def implClass: Symbol = NoSymbol
-
-    def isTraitOrInterface: Boolean = self.isTrait || self.isInterface
+    def isScala3Defined: Boolean = false
   }
 
   implicit final class GlobalCompat(
       self: CompatComponent.this.global.type) {
 
-    object originalOwner {
-      def getOrElse(sym: Symbol, orElse: => Symbol): Symbol = infiniteLoop()
+    // Added in Scala 2.13.2 for configurable warnings
+    object runReporting {
+      def warning(pos: Position, msg: String, cat: Any, site: Symbol): Unit =
+        reporter.warning(pos, msg)
     }
   }
 
-  private implicit final class FlagsCompat(self: Flags.type) {
-    def IMPLCLASS: Long = infiniteLoop()
+  implicit final class TyperCompat(self: analyzer.Typer) {
+    // Added in Scala 2.13.5 to make it clearer what is allowed since 2.13.4
+    def checkClassOrModuleType(tpt: Tree): Boolean =
+      self.checkClassType(tpt)
+
+    def checkClassType(tpt: Tree): Boolean =
+      infiniteLoop()
   }
 
-  lazy val scalaUsesImplClasses: Boolean =
-    definitions.SeqClass.implClass != NoSymbol // a trait we know has an impl class
-
-  def isImplClass(sym: Symbol): Boolean =
-    scalaUsesImplClasses && sym.hasFlag(Flags.IMPLCLASS)
-
-  implicit final class StdTermNamesCompat(self: global.nme.type) {
-    def IMPL_CLASS_SUFFIX: String = noImplClasses()
-
-    def isImplClassName(name: Name): Boolean = false
+  // DottyEnumSingleton was introduced in 2.13.6 to identify Scala 3 `enum` singleton cases.
+  object AttachmentsCompatDef {
+    object DottyEnumSingleton extends PlainAttachment
   }
 
-  implicit final class StdTypeNamesCompat(self: global.tpnme.type) {
-    def IMPL_CLASS_SUFFIX: String = noImplClasses()
-
-    def interfaceName(implname: Name): TypeName = noImplClasses()
-  }
-
-  // SAMFunction was introduced in 2.12 for LMF-capable SAM types
-
-  object SAMFunctionAttachCompatDef {
-    case class SAMFunction(samTp: Type, sam: Symbol, synthCls: Symbol)
-        extends PlainAttachment
-  }
-
-  object SAMFunctionAttachCompat {
-    import SAMFunctionAttachCompatDef._
+  object AttachmentsCompat {
+    import AttachmentsCompatDef._
 
     object Inner {
       import global._
 
-      type SAMFunctionAlias = SAMFunction
-      val SAMFunctionAlias = SAMFunction
+      val DottyEnumSingletonAlias = DottyEnumSingleton
     }
   }
 
-  type SAMFunctionCompat = SAMFunctionAttachCompat.Inner.SAMFunctionAlias
-  lazy val SAMFunctionCompat = SAMFunctionAttachCompat.Inner.SAMFunctionAlias
-
-  implicit final class SAMFunctionCompatOps(self: SAMFunctionCompat) {
-    // Introduced in 2.12.5 to synthesize bridges in LMF classes
-    def synthCls: Symbol = NoSymbol
-  }
+  lazy val DottyEnumSingletonCompat = AttachmentsCompat.Inner.DottyEnumSingletonAlias
 
   /* global.genBCode.bTypes.initializeCoreBTypes()
-   *
-   * This one has a very particular history:
-   * - in 2.11.{0-1}, genBCode does not have a bTypes member
-   * - In 2.11.{2-5}, there is genBCode.bTypes, but it has no
-   *   initializeCoreBTypes (it was actually typo'ed as intializeCoreBTypes!)
-   * - In 2.11.6+, including 2.12, we finally have
-   *   genBCode.bTypes.initializeCoreBTypes
-   * - Since 2.12, it is mandatory to call that method from GenJSCode.run()
+   * Early 2.12.x versions require that this method be called from
+   * GenJSCode.run(), but it disappeared later in the 2.12.x series.
    */
 
-  object LowPrioGenBCodeCompat {
-    object genBCode {
-      object bTypes {
-        def initializeCoreBTypes(): Unit = ()
+  implicit class BTypesCompat(bTypes: genBCode.bTypes.type) {
+    def initializeCoreBTypes(): Unit = ()
+  }
+
+  // WarningCategory was added in Scala 2.13.2 for configurable warnings
+
+  object WarningCategoryCompat {
+    object Reporting {
+      object WarningCategory {
+        val Deprecation: Any = null
+        val Other: Any = null
       }
     }
   }
 
-  def initializeCoreBTypesCompat(): Unit = {
-    import LowPrioGenBCodeCompat.genBCode._
+  // Of type Reporting.WarningCategory.type, but we cannot explicit write it
+  val WarningCategory = {
+    import WarningCategoryCompat._
 
     {
-      import genBCode._
-
-      import LowPrioGenBCodeCompat.genBCode.bTypes._
-
-      {
-        import bTypes._
-
-        initializeCoreBTypes()
-      }
+      import scala.tools.nsc._
+      Reporting.WarningCategory
     }
   }
 }
@@ -135,7 +105,4 @@ trait CompatComponent {
 object CompatComponent {
   private def infiniteLoop(): Nothing =
     throw new AssertionError("Infinite loop in Compat")
-
-  private def noImplClasses(): Nothing =
-    throw new AssertionError("No impl classes in this version")
 }

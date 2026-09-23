@@ -13,11 +13,10 @@
 package org.scalajs.nscplugin.test
 
 import org.scalajs.nscplugin.test.util._
+import org.scalajs.nscplugin.test.util.VersionDependentUtils.methodSig
 
 import org.junit.Test
 import org.junit.Ignore
-
-// scalastyle:off line.size.limit
 
 class NonNativeJSTypeTest extends DirectTest with TestHelpers {
 
@@ -33,7 +32,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
     class A extends js.Any
     """ hasErrors
     """
-      |newSource1.scala:5: error: A non-native JS class cannot directly extend AnyRef. It must extend a JS class (native or not).
+      |newSource1.scala:5: error: Non-native JS classes and objects cannot directly extend AnyRef. They must extend a JS class (native or not).
       |    class A extends js.Any
       |          ^
     """
@@ -42,7 +41,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
     object A extends js.Any
     """ hasErrors
     """
-      |newSource1.scala:5: error: A non-native JS object cannot directly extend AnyRef. It must extend a JS class (native or not).
+      |newSource1.scala:5: error: Non-native JS classes and objects cannot directly extend AnyRef. They must extend a JS class (native or not).
       |    object A extends js.Any
       |           ^
     """
@@ -65,31 +64,213 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
     }
     """ hasErrors
     """
-      |newSource1.scala:8: error: A non-native JS class cannot directly extend a native JS trait.
+      |newSource1.scala:8: error: Non-native JS types cannot directly extend native JS traits.
       |    class A extends NativeTrait
       |          ^
-      |newSource1.scala:10: error: A non-native JS trait cannot directly extend a native JS trait.
+      |newSource1.scala:10: error: Non-native JS types cannot directly extend native JS traits.
       |    trait B extends NativeTrait
       |          ^
-      |newSource1.scala:12: error: A non-native JS object cannot directly extend a native JS trait.
+      |newSource1.scala:12: error: Non-native JS types cannot directly extend native JS traits.
       |    object C extends NativeTrait
       |           ^
-      |newSource1.scala:15: error: A non-native JS class cannot directly extend a native JS trait.
+      |newSource1.scala:15: error: Non-native JS types cannot directly extend native JS traits.
       |      val x = new NativeTrait {}
       |                  ^
     """
   }
 
   @Test
-  def noApplyMethod: Unit = {
+  def noConcreteApplyMethod: Unit = {
     """
     class A extends js.Object {
       def apply(arg: Int): Int = arg
     }
     """ hasErrors
     """
-      |newSource1.scala:6: error: A non-native JS class cannot declare a method named `apply` without `@JSName`
+      |newSource1.scala:6: error: A non-native JS class cannot declare a concrete method named `apply` without `@JSName`
       |      def apply(arg: Int): Int = arg
+      |          ^
+    """
+
+    """
+    trait B extends js.Object {
+      def apply(arg: Int): Int
+    }
+
+    class A extends B {
+      def apply(arg: Int): Int = arg
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:6: error: A non-native JS type can only declare an abstract method named `apply` without `@JSName` if it is the SAM of a trait that extends js.Function
+      |      def apply(arg: Int): Int
+      |          ^
+      |newSource1.scala:10: error: A non-native JS class cannot declare a concrete method named `apply` without `@JSName`
+      |      def apply(arg: Int): Int = arg
+      |          ^
+    """
+
+    """
+    abstract class B extends js.Object {
+      def apply(arg: Int): Int
+    }
+
+    class A extends B {
+      def apply(arg: Int): Int = arg
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:6: error: A non-native JS type can only declare an abstract method named `apply` without `@JSName` if it is the SAM of a trait that extends js.Function
+      |      def apply(arg: Int): Int
+      |          ^
+      |newSource1.scala:10: error: A non-native JS class cannot declare a concrete method named `apply` without `@JSName`
+      |      def apply(arg: Int): Int = arg
+      |          ^
+    """
+
+    """
+    object Enclosing {
+      val f = new js.Object {
+        def apply(arg: Int): Int = arg
+      }
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:7: error: A non-native JS class cannot declare a concrete method named `apply` without `@JSName`
+      |        def apply(arg: Int): Int = arg
+      |            ^
+    """
+
+    """
+    object Enclosing {
+      val f = new js.Function {
+        def apply(arg: Int): Int = arg
+      }
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:7: error: A non-native JS class cannot declare a concrete method named `apply` without `@JSName`
+      |        def apply(arg: Int): Int = arg
+      |            ^
+    """
+
+    """
+    object Enclosing {
+      val f = new js.Function1[Int, Int] {
+        def apply(arg: Int): Int = arg
+      }
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:7: error: A non-native JS class cannot declare a concrete method named `apply` without `@JSName`
+      |        def apply(arg: Int): Int = arg
+      |            ^
+    """
+  }
+
+  @Test
+  def noUnaryOp: Unit = {
+    """
+    class A extends js.Object {
+      def unary_+ : Int = 1
+      def unary_-() : Int = 1
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:6: warning: Method 'unary_+' should have an explicit @JSName or @JSOperator annotation because its name is one of the JavaScript operators
+      |      def unary_+ : Int = 1
+      |          ^
+      |newSource1.scala:6: error: A non-native JS class cannot declare a method named like a unary operation without `@JSName`
+      |      def unary_+ : Int = 1
+      |          ^
+      |newSource1.scala:7: warning: Method 'unary_-' should have an explicit @JSName or @JSOperator annotation because its name is one of the JavaScript operators
+      |      def unary_-() : Int = 1
+      |          ^
+      |newSource1.scala:7: error: A non-native JS class cannot declare a method named like a unary operation without `@JSName`
+      |      def unary_-() : Int = 1
+      |          ^
+    """
+
+    """
+    class A extends js.Object {
+      def unary_+(x: Int): Int = 2
+
+      @JSName("unary_-")
+      def unary_-() : Int = 1
+    }
+    """.succeeds()
+  }
+
+  @Test
+  def noBinaryOp: Unit = {
+    """
+    class A extends js.Object {
+      def +(x: Int): Int = x
+      def &&(x: String): String = x
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:6: warning: Method '+' should have an explicit @JSName or @JSOperator annotation because its name is one of the JavaScript operators
+      |      def +(x: Int): Int = x
+      |          ^
+      |newSource1.scala:6: error: A non-native JS class cannot declare a method named like a binary operation without `@JSName`
+      |      def +(x: Int): Int = x
+      |          ^
+      |newSource1.scala:7: warning: Method '&&' should have an explicit @JSName or @JSOperator annotation because its name is one of the JavaScript operators
+      |      def &&(x: String): String = x
+      |          ^
+      |newSource1.scala:7: error: A non-native JS class cannot declare a method named like a binary operation without `@JSName`
+      |      def &&(x: String): String = x
+      |          ^
+    """
+
+    """
+    class A extends js.Object {
+      def + : Int = 2
+
+      def -(x: Int, y: Int): Int = 7
+
+      @JSName("&&")
+      def &&(x: String): String = x
+    }
+    """ hasWarns
+    """
+      |newSource1.scala:6: warning: Method '+' should have an explicit @JSName or @JSOperator annotation because its name is one of the JavaScript operators
+      |      def + : Int = 2
+      |          ^
+      |newSource1.scala:8: warning: Method '-' should have an explicit @JSName or @JSOperator annotation because its name is one of the JavaScript operators
+      |      def -(x: Int, y: Int): Int = 7
+      |          ^
+    """
+  }
+
+  @Test // #4281
+  def noExtendJSFunctionAnon: Unit = {
+    """
+    @js.native
+    @JSGlobal("bad")
+    abstract class BadFunction extends js.Function1[Int, String]
+
+    object Test {
+      new BadFunction {
+        def apply(x: Int): String = "f"
+      }
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:11: error: A non-native JS class cannot declare a concrete method named `apply` without `@JSName`
+      |        def apply(x: Int): String = "f"
+      |            ^
+    """
+
+    """
+    class $anonfun extends js.Function1[Int, String] {
+      def apply(x: Int): String = "f"
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:6: error: A non-native JS class cannot declare a concrete method named `apply` without `@JSName`
+      |      def apply(x: Int): String = "f"
       |          ^
     """
   }
@@ -134,10 +315,10 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       def bar(): Int = 24
     }
     """ hasErrors
-    """
+    s"""
       |newSource1.scala:9: error: Cannot disambiguate overloads for method bar with types
-      |  ()Int
-      |  ()Int
+      |  ${methodSig("()", "Int")}
+      |  ${methodSig("()", "Int")}
       |      def bar(): Int = 24
       |          ^
     """
@@ -150,10 +331,10 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       def foo(): Int = 42
     }
     """ hasErrors
-    """
+    s"""
       |newSource1.scala:9: error: Cannot disambiguate overloads for method bar with types
-      |  ()Int
-      |  ()Int
+      |  ${methodSig("()", "Int")}
+      |  ${methodSig("()", "Int")}
       |      def foo(): Int = 42
       |          ^
     """
@@ -168,10 +349,10 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       def bar(): Int = 24
     }
     """ hasErrors
-    """
+    s"""
       |newSource1.scala:11: error: Cannot disambiguate overloads for method bar with types
-      |  ()Int
-      |  ()Int
+      |  ${methodSig("()", "Int")}
+      |  ${methodSig("()", "Int")}
       |      def bar(): Int = 24
       |          ^
     """
@@ -188,10 +369,10 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       def bar(): Int = 24
     }
     """ hasErrors
-    """
+    s"""
       |newSource1.scala:13: error: Cannot disambiguate overloads for method bar with types
-      |  ()Int
-      |  ()Int
+      |  ${methodSig("()", "Int")}
+      |  ${methodSig("()", "Int")}
       |      def bar(): Int = 24
       |          ^
     """
@@ -210,10 +391,10 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       def foo(): Int = 42
     }
     """ hasErrors
-    """
+    s"""
       |newSource1.scala:14: error: Cannot disambiguate overloads for method foo with types
-      |  (x: Int)Int
-      |  (x: Int)Int
+      |  ${methodSig("(x: Int)", "Int")}
+      |  ${methodSig("(x: Int)", "Int")}
       |    class Bar extends Foo {
       |          ^
     """
@@ -397,7 +578,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
 
       class C private[Enclosing] () extends js.Object
     }
-    """.succeeds
+    """.succeeds()
 
     """
     object Enclosing {
@@ -405,7 +586,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
         final private[Enclosing] def foo(i: Int): Int = i
       }
     }
-    """.succeeds
+    """.succeeds()
 
     """
     object Enclosing {
@@ -414,7 +595,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
         private[this] def bar(i: Int): Int = i + 1
       }
     }
-    """.succeeds
+    """.succeeds()
 
     """
     object Enclosing {
@@ -422,7 +603,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
         final private[Enclosing] def foo(i: Int): Int = i
       }
     }
-    """.succeeds
+    """.succeeds()
 
     """
     object Enclosing {
@@ -431,7 +612,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
         private[this] def bar(i: Int): Int = i + 1
       }
     }
-    """.succeeds
+    """.succeeds()
 
     """
     object Enclosing {
@@ -559,7 +740,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       @JSName("apply")
       def apply: Int = 42
     }
-    """.succeeds
+    """.succeeds()
 
     // val apply
 
@@ -579,7 +760,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       @JSName("apply")
       val apply: Int = 42
     }
-    """.succeeds
+    """.succeeds()
 
     // var apply
 
@@ -599,7 +780,7 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       @JSName("apply")
       var apply: Int = 42
     }
-    """.succeeds
+    """.succeeds()
   }
 
   @Test
@@ -643,6 +824,14 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
     trait A extends js.Object {
       def foo(x: Int): Int = x + 1
       def bar[A](x: A): A = x
+
+      object InnerScalaObject
+      object InnerJSObject extends js.Object
+      @js.native object InnerNativeJSObject extends js.Object
+
+      class InnerScalaClass
+      class InnerJSClass extends js.Object
+      @js.native class InnerNativeJSClass extends js.Object
     }
     """ hasErrors
     """
@@ -652,20 +841,58 @@ class NonNativeJSTypeTest extends DirectTest with TestHelpers {
       |newSource1.scala:7: error: In non-native JS traits, defs with parentheses must be abstract.
       |      def bar[A](x: A): A = x
       |                            ^
+      |newSource1.scala:9: error: Non-native JS traits cannot contain inner classes or objects
+      |      object InnerScalaObject
+      |             ^
+      |newSource1.scala:10: error: Non-native JS traits cannot contain inner classes or objects
+      |      object InnerJSObject extends js.Object
+      |             ^
+      |newSource1.scala:11: error: non-native JS classes, traits and objects may not have native JS members
+      |      @js.native object InnerNativeJSObject extends js.Object
+      |                        ^
+      |newSource1.scala:13: error: Non-native JS traits cannot contain inner classes or objects
+      |      class InnerScalaClass
+      |            ^
+      |newSource1.scala:14: error: Non-native JS traits cannot contain inner classes or objects
+      |      class InnerJSClass extends js.Object
+      |            ^
+      |newSource1.scala:15: error: non-native JS classes, traits and objects may not have native JS members
+      |      @js.native class InnerNativeJSClass extends js.Object
+      |                       ^
     """
   }
 
-  @Test
-  def noCallOtherConstructorsWithLeftOutDefaultParams: Unit = {
+  @Test // #4511
+  def noConflictingProperties: Unit = {
     """
-    class A(x: Int, y: String = "default") extends js.Object {
-      def this() = this(12)
+    class A extends js.Object {
+      def a: Unit = ()
+
+      @JSName("a")
+      def b: Unit = ()
     }
     """ hasErrors
-    """
-      |newSource1.scala:5: error: Implementation restriction: in a JS class, a secondary constructor calling another constructor with default parameters must provide the values of all parameters.
-      |    class A(x: Int, y: String = "default") extends js.Object {
+    s"""
+      |newSource1.scala:9: error: Cannot disambiguate overloads for getter a with types
+      |  ${methodSig("()", "Unit")}
+      |  ${methodSig("()", "Unit")}
+      |      def b: Unit = ()
       |          ^
+    """
+
+    """
+    class A extends js.Object {
+      class B extends js.Object
+
+      object B
+    }
+    """ hasErrors
+    s"""
+      |newSource1.scala:8: error: Cannot disambiguate overloads for getter B with types
+      |  ${methodSig("()", "A$B.type")}
+      |  ${methodSig("()", "Object")}
+      |      object B
+      |             ^
     """
   }
 

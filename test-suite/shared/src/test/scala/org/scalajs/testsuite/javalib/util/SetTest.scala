@@ -12,37 +12,22 @@
 
 package org.scalajs.testsuite.javalib.util
 
-import scala.language.implicitConversions
-
 import org.junit.Test
 import org.junit.Assert._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.{assertThrows, _}
 
 import java.{util => ju, lang => jl}
 
-import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
+
+import Utils._
 
 trait SetTest extends CollectionTest {
 
   def factory: SetFactory
 
-  def testSetApi(): Unit = {
-    testCollectionApi()
-    shouldCheckSetSize()
-    shouldStoreIntegers_Set()
-    shouldStoreObjectsWithSameHashCodeButDifferentTypes()
-    shouldStoreDoublesAlsoInCornerCases()
-    shouldStoreCustomObjects_Set()
-    shouldRemoveStoredElements_Set()
-    shouldBeClearedWithOneOperation_Set()
-    shouldCheckContainedElemsPresence()
-    shouldPutAWholeCollectionInto()
-    shouldIterateOverElements()
-  }
-
-  @Test def shouldCheckSetSize(): Unit = {
+  @Test def size(): Unit = {
     val hs = factory.empty[String]
 
     assertEquals(0, hs.size())
@@ -52,7 +37,7 @@ trait SetTest extends CollectionTest {
     assertEquals(2, hs.size())
   }
 
-  @Test def shouldStoreIntegers_Set(): Unit = {
+  @Test def addInt(): Unit = {
     val hs = factory.empty[Int]
 
     assertTrue(hs.add(100))
@@ -61,7 +46,7 @@ trait SetTest extends CollectionTest {
     assertEquals(100, hs.iterator.next())
   }
 
-  @Test def shouldStoreObjectsWithSameHashCodeButDifferentTypes(): Unit = {
+  @Test def addAnyRefCustomObjectsWithSameHashCode(): Unit = {
     val hs = factory.empty[AnyRef]
     trait A extends Comparable[A] {
       def compareTo(o: A): Int = toString.compareTo(o.toString)
@@ -78,7 +63,7 @@ trait SetTest extends CollectionTest {
     assertEquals(2, hs.size())
   }
 
-  @Test def shouldStoreDoublesAlsoInCornerCases(): Unit = {
+  @Test def addDoubleCornerCases(): Unit = {
     val hs = factory.empty[Double]
 
     assertTrue(hs.add(11111.0))
@@ -113,7 +98,7 @@ trait SetTest extends CollectionTest {
     assertTrue(hs.contains(-0.0))
   }
 
-  @Test def shouldStoreCustomObjects_Set(): Unit = {
+  @Test def addCustomClass(): Unit = {
     case class TestObj(num: Int) extends jl.Comparable[TestObj] {
       override def compareTo(o: TestObj): Int = o.num - num
     }
@@ -126,7 +111,7 @@ trait SetTest extends CollectionTest {
     assertEquals(100, hs.iterator.next().num)
   }
 
-  @Test def shouldRemoveStoredElements_Set(): Unit = {
+  @Test def removeRemoveAllRetainAll(): Unit = {
     val hs = factory.empty[String]
 
     assertEquals(0, hs.size())
@@ -144,21 +129,19 @@ trait SetTest extends CollectionTest {
     assertTrue(hs.add("ONE"))
     assertTrue(hs.add("TWO"))
     assertEquals(2, hs.size())
-    val l1 = List[String]("ONE", "TWO")
-    assertTrue(hs.removeAll(l1.asJavaCollection))
+    assertTrue(hs.removeAll(TrivialImmutableCollection("ONE", "TWO")))
     assertEquals(0, hs.size())
 
     assertTrue(hs.add("ONE"))
     assertTrue(hs.add("TWO"))
     assertEquals(2, hs.size())
-    val l2 = List[String]("ONE", "THREE")
-    assertTrue(hs.retainAll(l2.asJavaCollection))
+    assertTrue(hs.retainAll(TrivialImmutableCollection("ONE", "THREE")))
     assertEquals(1, hs.size())
     assertTrue(hs.contains("ONE"))
     assertFalse(hs.contains("TWO"))
   }
 
-  @Test def shouldBeClearedWithOneOperation_Set(): Unit = {
+  @Test def clearSet(): Unit = {
     val hs = factory.empty[String]
 
     assertTrue(hs.add("ONE"))
@@ -170,7 +153,7 @@ trait SetTest extends CollectionTest {
     assertTrue(hs.isEmpty)
   }
 
-  @Test def shouldCheckContainedElemsPresence(): Unit = {
+  @Test def contains(): Unit = {
     val hs = factory.empty[String]
 
     assertTrue(hs.add("ONE"))
@@ -181,60 +164,42 @@ trait SetTest extends CollectionTest {
       assertTrue(hs.add(null))
       assertTrue(hs.contains(null))
     } else {
-      expectThrows(classOf[Exception], hs.add(null))
+      assertThrowsNPEIfCompliant(hs.add(null))
     }
   }
 
-  @Test def shouldPutAWholeCollectionInto(): Unit = {
+  @Test def addAllCollectionStringSet(): Unit = {
     val hs = factory.empty[String]
 
+    val l = TrivialImmutableCollection("ONE", "TWO", null)
+
     if (factory.allowsNullElement) {
-      val l = List[String]("ONE", "TWO", (null: String))
-      assertTrue(hs.addAll(l.asJavaCollection))
+      assertTrue(hs.addAll(l))
       assertEquals(3, hs.size)
       assertTrue(hs.contains("ONE"))
       assertTrue(hs.contains("TWO"))
       assertTrue(hs.contains(null))
     } else {
-      expectThrows(classOf[Exception], {
-        val l = List[String]("ONE", "TWO", (null: String))
-        hs.addAll(l.asJavaCollection)
-      })
+      assertThrowsNPEIfCompliant(hs.addAll(l))
     }
   }
 
-  @Test def shouldIterateOverElements(): Unit = {
+  @Test def iterator(): Unit = {
     val hs = factory.empty[String]
 
     val l = {
       if (factory.allowsNullElement)
-        List[String]("ONE", "TWO", (null: String))
+        List("ONE", "TWO", null)
       else
-        List[String]("ONE", "TWO", "THREE")
+        List("ONE", "TWO", "THREE")
     }
-    assertTrue(hs.addAll(l.asJavaCollection))
+    assertTrue(hs.addAll(TrivialImmutableCollection(l: _*)))
     assertEquals(3, hs.size)
 
-    val iter = hs.iterator()
-    val result = {
-      for (i <- 0 until 3) yield {
-        assertTrue(iter.hasNext())
-        iter.next()
-      }
-    }
-    assertFalse(iter.hasNext())
-    assertTrue(result.asJava.containsAll(l.asJava))
-    assertTrue(l.asJava.containsAll(result.asJava))
+    assertIteratorSameElementsAsSet(l: _*)(hs.iterator())
   }
-}
-
-object SetFactory {
-  def allFactories: Iterator[SetFactory] =
-    AbstractSetFactory.allFactories ++ SortedSetFactory.allFactories ++ NavigableSetFactory.allFactories
 }
 
 trait SetFactory extends CollectionFactory {
   def empty[E: ClassTag]: ju.Set[E]
-
-  def allowsNullElement: Boolean
 }

@@ -12,6 +12,8 @@
 
 package scala.scalajs.js
 
+import scala.language.implicitConversions
+
 import scala.scalajs.js
 import scala.scalajs.js.annotation._
 
@@ -22,10 +24,9 @@ import scala.collection.generic.CanBuildFrom
 
 /** Wrapper to use a js.Dictionary as a scala.mutable.Map */
 @inline
-class WrappedDictionary[A](val dict: js.Dictionary[A])
-    extends mutable.AbstractMap[String, A]
-       with mutable.Map[String, A]
-       with mutable.MapLike[String, A, js.WrappedDictionary[A]] {
+final class WrappedDictionary[A](private val dict: js.Dictionary[A])
+    extends mutable.AbstractMap[String, A] with mutable.Map[String, A]
+    with mutable.MapLike[String, A, js.WrappedDictionary[A]] {
 
   import WrappedDictionary._
 
@@ -41,6 +42,23 @@ class WrappedDictionary[A](val dict: js.Dictionary[A])
       rawApply(key)
     else
       throw new NoSuchElementException("key not found: " + key)
+  }
+
+  override def getOrElse[V1 >: A](key: String, default: => V1): V1 = {
+    if (contains(key))
+      rawApply(key)
+    else
+      default
+  }
+
+  override def getOrElseUpdate(key: String, op: => A): A = {
+    if (contains(key)) {
+      rawApply(key)
+    } else {
+      val v = op
+      update(key, v)
+      v
+    }
   }
 
   @inline
@@ -85,9 +103,10 @@ object WrappedDictionary {
   // it requires support for any type of key
 
   private object Cache {
-    val safeHasOwnProperty =
+    val safeHasOwnProperty = {
       js.Dynamic.global.Object.prototype.hasOwnProperty
         .asInstanceOf[js.ThisFunction1[js.Dictionary[_], String, Boolean]]
+    }
   }
 
   @inline
@@ -96,6 +115,7 @@ object WrappedDictionary {
 
   @js.native
   private trait DictionaryRawApply[A] extends js.Object {
+
     /** Reads a field of this object by its name.
      *
      *  This must not be called if the dictionary does not contain the key.
@@ -109,12 +129,13 @@ object WrappedDictionary {
   }
 
   private final class DictionaryIterator[+A](
-      dict: js.Dictionary[A]) extends scala.collection.Iterator[(String, A)] {
+      dict: js.Dictionary[A])
+      extends scala.collection.Iterator[(String, A)] {
 
     private[this] val keys = js.Object.keys(dict.asInstanceOf[js.Object])
     private[this] var index: Int = 0
 
-    def hasNext(): Boolean = index < keys.length
+    def hasNext: Boolean = index < keys.length
 
     def next(): (String, A) = {
       val key = keys(index)
@@ -126,7 +147,8 @@ object WrappedDictionary {
   def empty[A]: js.WrappedDictionary[A] =
     new js.WrappedDictionary(js.Dictionary.empty)
 
-  implicit def canBuildFrom[A]: CanBuildFrom[js.WrappedDictionary[_], (String, A), js.WrappedDictionary[A]] = {
+  implicit def canBuildFrom[
+      A]: CanBuildFrom[js.WrappedDictionary[_], (String, A), js.WrappedDictionary[A]] = {
     new CanBuildFrom[js.WrappedDictionary[_], (String, A), js.WrappedDictionary[A]] {
       def apply(from: js.WrappedDictionary[_]): Builder[(String, A), js.WrappedDictionary[A]] =
         new WrappedDictionaryBuilder[A]
@@ -151,5 +173,8 @@ object WrappedDictionary {
     def result(): js.WrappedDictionary[A] =
       new js.WrappedDictionary(dict)
   }
+
+  implicit def toJSDictionary[A](wrappedDict: js.WrappedDictionary[A]): js.Dictionary[A] =
+    wrappedDict.dict
 
 }

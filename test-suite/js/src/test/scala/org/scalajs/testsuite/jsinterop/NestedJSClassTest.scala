@@ -15,13 +15,15 @@ package org.scalajs.testsuite.jsinterop
 import scala.scalajs.js
 import scala.scalajs.js.annotation._
 
+import java.util.function.Supplier
+
 import org.junit.Assert._
 import org.junit.Test
 
 class NestedJSClassTest {
   import NestedJSClassTest._
 
-  @Test def innerJSClass_basics(): Unit = {
+  @Test def innerJSClassBasics(): Unit = {
     val container1 = new ScalaClassContainer("hello")
     val innerJSClass = container1.getInnerJSClass
     assertSame(innerJSClass, container1.getInnerJSClass)
@@ -54,7 +56,7 @@ class NestedJSClassTest {
     assertFalse(js.special.instanceof(inner3, innerJSClass))
   }
 
-  @Test def localJSClass_basics(): Unit = {
+  @Test def localJSClassBasics(): Unit = {
     val container1 = new ScalaClassContainer("hello")
     val localJSClass1 = container1.makeLocalJSClass("wide1")
     assertEquals("function", js.typeOf(localJSClass1))
@@ -80,7 +82,7 @@ class NestedJSClassTest {
     assertFalse(inner3.isInstanceOf[container1.InnerJSClass])
   }
 
-  @Test def innerJSClass_basicsInsideTrait(): Unit = {
+  @Test def innerJSClassBasicsInsideTrait(): Unit = {
     val container1 = new ScalaTraitContainerSubclass("hello")
     val innerJSClass = container1.getInnerJSClass
     assertSame(innerJSClass, container1.getInnerJSClass)
@@ -113,7 +115,7 @@ class NestedJSClassTest {
     assertFalse(js.special.instanceof(inner3, innerJSClass))
   }
 
-  @Test def localJSClass_basicsInsideTrait(): Unit = {
+  @Test def localJSClassBasicsInsideTrait(): Unit = {
     val container1 = new ScalaTraitContainerSubclass("hello")
     val localJSClass1 = container1.makeLocalJSClass("wide1")
     assertEquals("function", js.typeOf(localJSClass1))
@@ -139,7 +141,7 @@ class NestedJSClassTest {
     assertFalse(inner3.isInstanceOf[container1.InnerJSClass])
   }
 
-  @Test def innerJSObject_basics(): Unit = {
+  @Test def innerJSObjectBasics(): Unit = {
     val container1 = new ScalaClassContainerWithObject("hello")
     val inner1 = container1.InnerJSObject
     assertSame(inner1, container1.InnerJSObject)
@@ -160,7 +162,7 @@ class NestedJSClassTest {
     assertFalse(inner2.isInstanceOf[container1.InnerJSObject.type])
   }
 
-  @Test def localJSObject_basics(): Unit = {
+  @Test def localJSObjectBasics(): Unit = {
     val container1 = new ScalaClassContainerWithObject("hello")
     val inner1 = container1.makeLocalJSObject("world1")
 
@@ -336,7 +338,7 @@ class NestedJSClassTest {
     assertTrue(localJSObject.isInstanceOf[parentsContainer.GenericJSSuperClass[_, _]])
   }
 
-  @Test def innerJSClass_basicsInsideJSClass(): Unit = {
+  @Test def innerJSClassBasicsInsideJSClass(): Unit = {
     val container1 = new JSClassContainer("hello")
     val innerJSClass = container1.getInnerJSClass
     assertSame(innerJSClass, container1.getInnerJSClass)
@@ -355,6 +357,10 @@ class NestedJSClassTest {
     assertTrue(inner2.isInstanceOf[container1.InnerJSClass])
     assertTrue(js.special.instanceof(inner2, innerJSClass))
 
+    assertTrue(js.isUndefined(container1.asInstanceOf[js.Dynamic].InnerScalaClass))
+    val scalaInner = new container1.InnerScalaClass(543)
+    assertEquals(543, scalaInner.zzz)
+
     val container2 = new JSClassContainer("hi")
     val innerJSClass2 = container2.getInnerJSClass
     assertNotSame(innerJSClass, innerJSClass2)
@@ -369,7 +375,7 @@ class NestedJSClassTest {
     assertFalse(js.special.instanceof(inner3, innerJSClass))
   }
 
-  @Test def innerJSClass_accessibleFromJS_ifInsideJSClass(): Unit = {
+  @Test def innerJSClassAccessibleFromJSIfInsideJSClass(): Unit = {
     val container1 = new JSClassContainer("hello")
     val innerJSClass = container1.asInstanceOf[js.Dynamic].getInnerJSClass
     assertSame(innerJSClass, container1.getInnerJSClass)
@@ -394,6 +400,121 @@ class NestedJSClassTest {
 
     assertFalse(inner3.isInstanceOf[container1.InnerJSClass])
     assertFalse(js.special.instanceof(inner3, innerJSClass))
+  }
+
+  @Test def innerJSClassObjectAccessibleFromJSIfInsideTopJSObject_Issue4086(): Unit = {
+    val container = NestedJSClassTest_TopLevelJSObject_Issue4086.asInstanceOf[js.Dynamic]
+
+    assertEquals("object", js.typeOf(container.InnerScalaObject))
+    assertEquals("the InnerScalaObject of issue 4086", container.InnerScalaObject.toString())
+    assertSame(
+        NestedJSClassTest_TopLevelJSObject_Issue4086.InnerScalaObject, container.InnerScalaObject)
+
+    assertEquals("object", js.typeOf(container.InnerJSObject))
+    assertEquals("the InnerJSObject of issue 4086", container.InnerJSObject.toString())
+    assertSame(NestedJSClassTest_TopLevelJSObject_Issue4086.InnerJSObject, container.InnerJSObject)
+
+    assertTrue(js.isUndefined(container.InnerScalaClass))
+    val innerScalaObj = new NestedJSClassTest_TopLevelJSObject_Issue4086.InnerScalaClass(543)
+    assertEquals(543, innerScalaObj.x)
+
+    val cls = container.InnerJSClass
+    assertEquals("function", js.typeOf(cls))
+    assertSame(js.constructorOf[NestedJSClassTest_TopLevelJSObject_Issue4086.InnerJSClass], cls)
+    val obj = js.Dynamic.newInstance(cls)(5)
+    assertEquals(5, obj.x)
+    assertEquals("InnerJSClass(5) of issue 4086", obj.toString())
+  }
+
+  @Test def defaultCtorParamsInnerJSClassScalaContainer_Issue4465(): Unit = {
+    val container = new ScalaClassContainer("container")
+
+    val inner = new container.InnerJSClassDefaultParams_Issue4465()()
+    assertEquals("container inner inner foo", inner.foo())
+
+    assertEquals(1, container.moduleSideEffect)
+
+    // Check that we do not create two companion modules.
+    new container.InnerJSClassDefaultParams_Issue4465()()
+    assertEquals(1, container.moduleSideEffect)
+
+    // Check constructor delegation.
+    val inner2 = new container.InnerJSClassDefaultParams_Issue4465(1)
+    assertEquals("container 1 1 foo", inner2.foo())
+  }
+
+  @Test def defaultCtorParamsInnerJSClassTraitContainer_Issue4465(): Unit = {
+    val container = new ScalaTraitContainerSubclass("container")
+
+    val inner = new container.InnerJSClassDefaultParams_Issue4465()()
+    assertEquals("container inner inner foo", inner.foo())
+
+    assertEquals(1, container.moduleSideEffect)
+
+    // Check that we do not create two companion modules.
+    new container.InnerJSClassDefaultParams_Issue4465()()
+    assertEquals(1, container.moduleSideEffect)
+
+    // Check constructor delegation.
+    val inner2 = new container.InnerJSClassDefaultParams_Issue4465(1)
+    assertEquals("container 1 1 foo", inner2.foo())
+  }
+
+  @Test def defaultCtorParamsInnerJSClassJSContainer_Issue4465(): Unit = {
+    val container = new JSClassContainer("container")
+
+    // Typed
+    val inner = new container.InnerJSClassDefaultParams_Issue4465()()
+    assertEquals("container inner inner foo", inner.foo())
+
+    assertEquals(1, container.moduleSideEffect)
+
+    // Dynamic
+    val dynContainer = container.asInstanceOf[js.Dynamic]
+    val dynInner = js.Dynamic.newInstance(dynContainer.InnerJSClassDefaultParams_Issue4465)()
+    assertEquals("container inner inner foo", dynInner.foo())
+
+    // Check that we do not create two companion modules.
+    assertEquals(1, container.moduleSideEffect)
+
+    // Check constructor delegation.
+    val inner2 = new container.InnerJSClassDefaultParams_Issue4465(1)
+    assertEquals("container 1 1 foo", inner2.foo())
+  }
+
+  @Test def defaultCtorParamsInnerJSClassPrivateCompanion_Issue4526(): Unit = {
+    val container = new ScalaClassContainer("container")
+
+    val inner = new container.InnerJSClassDefaultParamsPrivateCompanion_Issue4526()
+    assertEquals("container inner foo", inner.foo())
+  }
+
+  @Test def doublyNestedInnerObject_Issue4114(): Unit = {
+    val outer1 = new DoublyNestedInnerObject_Issue4114().asInstanceOf[js.Dynamic]
+    val outer2 = new DoublyNestedInnerObject_Issue4114().asInstanceOf[js.Dynamic]
+
+    outer2.middle.inner.x = 10
+
+    assertEquals("object", js.typeOf(outer1.middle))
+    assertEquals(1, outer1.middle.inner.x)
+    assertEquals(10, outer2.middle.inner.x)
+  }
+
+  @Test def triplyNestedObject_Issue4114(): Unit = {
+    val obj = TriplyNestedObject_Issue4114.asInstanceOf[js.Dynamic]
+
+    assertEquals("object", js.typeOf(obj.middle))
+    assertEquals("object", js.typeOf(obj.middle.inner))
+    assertEquals(1, obj.middle.inner.x)
+
+    obj.middle.inner.x = 10
+
+    assertEquals(10, obj.middle.inner.x)
+  }
+
+  @Test def triplyNestedClassSuperDispatch_Issue4114(): Unit = {
+    val x = new TriplyNestedClass_Issue4114().asInstanceOf[js.Dynamic]
+    assertEquals(3, x.foo(3))
   }
 
   @Test def localJSClassCapturesCharThatMustBeBoxed(): Unit = {
@@ -453,6 +574,116 @@ class NestedJSClassTest {
     assertNull(list.tail.tail.tail)
   }
 
+  @Test
+  def jsClassInsideAnonymousClass(): Unit = {
+    val supplier = new Supplier[js.Dynamic] {
+      class InsideAnonymousClass extends js.Object {
+        def x: Int = 1
+      }
+
+      def get(): js.Dynamic =
+        new InsideAnonymousClass().asInstanceOf[js.Dynamic]
+    }
+
+    val obj = supplier.get()
+
+    assertEquals(1, obj.x)
+    assertFalse(obj.asInstanceOf[js.Object].hasOwnProperty("x"))
+    assertSame(obj.constructor, supplier.get().constructor)
+    assertNotSame(obj.constructor, js.constructorOf[js.Object])
+  }
+
+  @Test
+  def localJSClassInsideAnonymousClass(): Unit = {
+    val supplier = new Supplier[js.Dynamic] {
+      def get(): js.Dynamic = {
+        class LocalInsideAnonymousClass extends js.Object {
+          def x: Int = 1
+        }
+
+        new LocalInsideAnonymousClass().asInstanceOf[js.Dynamic]
+      }
+    }
+
+    val obj = supplier.get()
+
+    assertEquals(1, obj.x)
+    assertFalse(obj.asInstanceOf[js.Object].hasOwnProperty("x"))
+    assertNotSame(obj.constructor, supplier.get().constructor)
+    assertNotSame(obj.constructor, js.constructorOf[js.Object])
+  }
+
+  @Test
+  def localJSClassInsideAnonymousScalaFunction(): Unit = {
+    val fun = { () =>
+      class LocalInsideAnonFun extends js.Object {
+        def x: Int = 1
+      }
+
+      new LocalInsideAnonFun().asInstanceOf[js.Dynamic]
+    }
+
+    val obj = fun()
+
+    assertEquals(1, obj.x)
+    assertFalse(obj.asInstanceOf[js.Object].hasOwnProperty("x"))
+    assertNotSame(obj.constructor, fun().constructor)
+    assertNotSame(obj.constructor, js.constructorOf[js.Object])
+  }
+
+  @Test
+  def localJSClassInsideAnonymousJSFunction(): Unit = {
+    val fun: js.Function0[js.Dynamic] = { () =>
+      class LocalInsideAnonFun extends js.Object {
+        def x: Int = 1
+      }
+
+      new LocalInsideAnonFun().asInstanceOf[js.Dynamic]
+    }
+
+    val obj = fun()
+
+    assertEquals(1, obj.x)
+    assertFalse(obj.asInstanceOf[js.Object].hasOwnProperty("x"))
+    assertNotSame(obj.constructor, fun().constructor)
+    assertNotSame(obj.constructor, js.constructorOf[js.Object])
+  }
+
+  @Test
+  def extendInnerJSClassInClass_Issue4402_Issue4801(): Unit = {
+    val msg = "hello world"
+
+    val outer = js.Dynamic.literal(
+      InnerClass = js.constructorOf[DynamicInnerClass_Issue4402]
+    ).asInstanceOf[OuterNativeClass_Issue4402]
+
+    class Subclass(arg: String) extends outer.InnerClass(arg) {
+      override def methodSuper_Issue4801(x: Int): String =
+        super.methodSuper_Issue4801(x) + " overridden"
+    }
+
+    val obj = new Subclass(msg)
+    assertEquals(msg, obj.message)
+    assertEquals(msg + "3 overridden", obj.methodSuper_Issue4801(3))
+  }
+
+  @Test
+  def extendInnerJSClassInTrait_Issue4402_Issue4801(): Unit = {
+    val msg = "hello world"
+
+    val outer = js.Dynamic.literal(
+      InnerClass = js.constructorOf[DynamicInnerClass_Issue4402]
+    ).asInstanceOf[OuterNativeTrait_Issue4402]
+
+    class Subclass(arg: String) extends outer.InnerClass(arg) {
+      override def methodSuper_Issue4801(x: Int): String =
+        super.methodSuper_Issue4801(x) + " overridden"
+    }
+
+    val obj = new Subclass(msg)
+    assertEquals(msg, obj.message)
+    assertEquals(msg + "3 overridden", obj.methodSuper_Issue4801(3))
+  }
 }
 
 object NestedJSClassTest {
@@ -481,6 +712,30 @@ object NestedJSClassTest {
 
       js.constructorOf[LocalJSClass]
     }
+
+    var moduleSideEffect = 0
+
+    class InnerJSClassDefaultParams_Issue4465(withDefault: String = "inner")(
+        dependentDefault: String = withDefault)
+        extends js.Object {
+      def this(x: Int) = this(x.toString)()
+
+      def foo(methodDefault: String = "foo"): String =
+        s"$xxx $withDefault $dependentDefault $methodDefault"
+    }
+
+    object InnerJSClassDefaultParams_Issue4465 {
+      moduleSideEffect += 1
+    }
+
+    class InnerJSClassDefaultParamsPrivateCompanion_Issue4526(
+        withDefault: String = "inner")
+        extends js.Object {
+      def foo(methodDefault: String = "foo"): String =
+        s"$xxx $withDefault $methodDefault"
+    }
+
+    private object InnerJSClassDefaultParamsPrivateCompanion_Issue4526
   }
 
   trait ScalaTraitContainer {
@@ -503,6 +758,21 @@ object NestedJSClassTest {
       }
 
       js.constructorOf[LocalJSClass]
+    }
+
+    var moduleSideEffect = 0
+
+    class InnerJSClassDefaultParams_Issue4465(withDefault: String = "inner")(
+        dependentDefault: String = withDefault)
+        extends js.Object {
+      def this(x: Int) = this(x.toString)()
+
+      def foo(methodDefault: String = "foo"): String =
+        s"$xxx $withDefault $dependentDefault $methodDefault"
+    }
+
+    object InnerJSClassDefaultParams_Issue4465 {
+      moduleSideEffect += 1
     }
   }
 
@@ -560,8 +830,7 @@ object NestedJSClassTest {
   }
 
   class GenericJSSuperClassContainer {
-    class GenericJSSuperClass[A, B <: List[Seq[A]]](val a: A, val b: B)
-        extends js.Object
+    class GenericJSSuperClass[A, B <: List[Seq[A]]](val a: A, val b: B) extends js.Object
   }
 
   class ScalaClassContainerWithTypeParameters[A](val a: A,
@@ -576,12 +845,10 @@ object NestedJSClassTest {
       js.constructorOf[GenericJSLocalClass[_]]
     }
 
-    object GenericJSInnerObject
-        extends parents.GenericJSSuperClass[A, List[List[A]]](a, Nil)
+    object GenericJSInnerObject extends parents.GenericJSSuperClass[A, List[List[A]]](a, Nil)
 
     def makeGenericJSInnerObject[B <: List[Seq[A]]](b: B): js.Dynamic = {
-      object GenericJSInnerObject
-          extends parents.GenericJSSuperClass[A, B](a, b)
+      object GenericJSInnerObject extends parents.GenericJSSuperClass[A, B](a, b)
 
       GenericJSInnerObject.asInstanceOf[js.Dynamic]
     }
@@ -596,6 +863,92 @@ object NestedJSClassTest {
 
     def getInnerJSClass: js.Dynamic =
       js.constructorOf[InnerJSClass]
+
+    // Not visible from JS, but can be instantiated from Scala.js code
+    class InnerScalaClass(val zzz: Int)
+
+    var moduleSideEffect = 0
+
+    class InnerJSClassDefaultParams_Issue4465(withDefault: String = "inner")(
+        dependentDefault: String = withDefault)
+        extends js.Object {
+      def this(x: Int) = this(x.toString)()
+
+      def foo(methodDefault: String = "foo"): String =
+        s"$xxx $withDefault $dependentDefault $methodDefault"
+    }
+
+    @JSName("InnerJSClassDefaultParamsOtherName_Issue4465")
+    object InnerJSClassDefaultParams_Issue4465 {
+      moduleSideEffect += 1
+    }
   }
 
+  class DoublyNestedInnerObject_Issue4114 extends js.Object {
+    object middle extends js.Object {
+      object inner extends js.Object {
+        var x = 1
+      }
+    }
+  }
+
+  object TriplyNestedObject_Issue4114 extends js.Object {
+    object middle extends js.Object {
+      object inner extends js.Object {
+        var x = 1
+      }
+
+      class InnerClass extends js.Object {
+        def foo(x: Int): Int = x
+      }
+    }
+  }
+
+  class TriplyNestedClass_Issue4114 extends TriplyNestedObject_Issue4114.middle.InnerClass {
+    def foo(x: String): String = x
+  }
+
+  class DynamicInnerClass_Issue4402(arg: String) extends js.Object {
+    val message: String = arg
+
+    def methodSuper_Issue4801(x: Int): String = arg + x
+  }
+
+  @js.native
+  @JSGlobal("OuterNativeClass_Issue4402") // this does not actually exist; we just cast to this class
+  class OuterNativeClass_Issue4402 extends js.Object {
+    @js.native
+    class InnerClass(arg: String) extends js.Object {
+      def message: String = js.native
+
+      def methodSuper_Issue4801(x: Int): String = js.native
+    }
+  }
+
+  @js.native
+  trait OuterNativeTrait_Issue4402 extends js.Object {
+    @js.native
+    class InnerClass(arg: String) extends js.Object {
+      def message: String = js.native
+
+      def methodSuper_Issue4801(x: Int): String = js.native
+    }
+  }
+}
+
+object NestedJSClassTest_TopLevelJSObject_Issue4086 extends js.Object {
+  object InnerScalaObject {
+    override def toString(): String = "the InnerScalaObject of issue 4086"
+  }
+
+  object InnerJSObject extends js.Object {
+    override def toString(): String = "the InnerJSObject of issue 4086"
+  }
+
+  // Not visible from JS, but can be instantiated from Scala.js code
+  class InnerScalaClass(val x: Int)
+
+  class InnerJSClass(val x: Int) extends js.Object {
+    override def toString(): String = s"InnerJSClass($x) of issue 4086"
+  }
 }

@@ -12,89 +12,138 @@
 
 package org.scalajs.linker.backend.emitter
 
+import org.scalajs.ir.Names._
+import org.scalajs.ir.Types._
+import org.scalajs.ir.WellKnownNames._
+
 private[linker] object LongImpl {
-  final val RuntimeLongClass = "sjsr_RuntimeLong"
-  final val RuntimeLongModuleClass = "sjsr_RuntimeLong$"
+  final val RuntimeLongClass = ClassName("org.scalajs.linker.runtime.RuntimeLong")
+  final val RuntimeLongModClass = ClassName("org.scalajs.linker.runtime.RuntimeLong$")
 
-  final val lo = "lo__I"
-  final val hi = "hi__I"
+  private final val TwoIntRefs = IntRef :: IntRef :: Nil
+  private final val ThreeIntRefs = IntRef :: TwoIntRefs
+  private final val FourIntRefs = IntRef :: ThreeIntRefs
 
-  private final val SigUnary   = "__sjsr_RuntimeLong"
-  private final val SigBinary  = "__sjsr_RuntimeLong__sjsr_RuntimeLong"
-  private final val SigShift   = "__I__sjsr_RuntimeLong"
-  private final val SigCompare = "__sjsr_RuntimeLong__Z"
+  final val pack = MethodName("pack", TwoIntRefs, LongRef)
 
-  final val UNARY_- = "unary$und$minus" + SigUnary
-  final val UNARY_~ = "unary$und$tilde" + SigUnary
+  def unaryOp(name: String): MethodName =
+    MethodName(name, TwoIntRefs, LongRef)
 
-  final val + = "$$plus"    + SigBinary
-  final val - = "$$minus"   + SigBinary
-  final val * = "$$times"   + SigBinary
-  final val / = "$$div"     + SigBinary
-  final val % = "$$percent" + SigBinary
+  def binaryOp(name: String): MethodName =
+    MethodName(name, FourIntRefs, LongRef)
 
-  final val | = "$$bar" + SigBinary
-  final val & = "$$amp" + SigBinary
-  final val ^ = "$$up"  + SigBinary
+  def shiftOp(name: String): MethodName =
+    MethodName(name, ThreeIntRefs, LongRef)
 
-  final val <<  = "$$less$less"               + SigShift
-  final val >>> = "$$greater$greater$greater" + SigShift
-  final val >>  = "$$greater$greater"         + SigShift
+  def compareOp(name: String): MethodName =
+    MethodName(name, FourIntRefs, BooleanRef)
 
-  final val === = "equals"       + SigCompare
-  final val !== = "notEquals"    + SigCompare
-  final val <   = "$$less"       + SigCompare
-  final val <=  = "$$less$eq"    + SigCompare
-  final val >   = "$$greater"    + SigCompare
-  final val >=  = "$$greater$eq" + SigCompare
+  // Operator methods
 
-  final val toInt    = "toInt"    + "__I"
-  final val toDouble = "toDouble" + "__D"
+  final val add = binaryOp("add")
+  final val sub = binaryOp("sub")
+  final val mul = binaryOp("mul")
+  final val divide = binaryOp("divide")
+  final val remainder = binaryOp("remainder")
 
-  final val byteValue   = "byteValue__B"
-  final val shortValue  = "shortValue__S"
-  final val intValue    = "intValue__I"
-  final val longValue   = "longValue__J"
-  final val floatValue  = "floatValue__F"
-  final val doubleValue = "doubleValue__D"
+  final val divideUnsigned = binaryOp("divideUnsigned")
+  final val remainderUnsigned = binaryOp("remainderUnsigned")
 
-  final val equals_    = "equals__O__Z"
-  final val hashCode_  = "hashCode__I"
-  final val compareTo  = "compareTo__jl_Long__I"
-  final val compareToO = "compareTo__O__I"
+  final val or = binaryOp("or")
+  final val and = binaryOp("and")
+  final val xor = binaryOp("xor")
 
-  private val OperatorMethods = Set(
-      UNARY_-, UNARY_~, this.+, this.-, *, /, %, |, &, ^, <<, >>>, >>,
-      ===, !==, <, <=, >, >=, toInt, toDouble)
+  final val shl = shiftOp("shl")
+  final val shr = shiftOp("shr")
+  final val sar = shiftOp("sar")
 
-  private val BoxedLongMethods = Set(
-      byteValue, shortValue, intValue, longValue, floatValue, doubleValue,
-      equals_, hashCode_, compareTo, compareToO)
+  final val equals_ = compareOp("equals")
+  final val notEquals = compareOp("notEquals")
+  final val lt = compareOp("lt")
+  final val le = compareOp("le")
+  final val gt = compareOp("gt")
+  final val ge = compareOp("ge")
+  final val ltu = compareOp("ltu")
+  final val leu = compareOp("leu")
+  final val gtu = compareOp("gtu")
+  final val geu = compareOp("geu")
 
-  val AllMethods = OperatorMethods ++ BoxedLongMethods
+  final val toInt = MethodName("toInt", TwoIntRefs, IntRef)
+  final val toFloat = MethodName("toFloat", TwoIntRefs, FloatRef)
+  final val toDouble = MethodName("toDouble", TwoIntRefs, DoubleRef)
+  final val bitsToDouble = MethodName("bitsToDouble", List(IntRef, IntRef, ObjectRef), DoubleRef)
+  final val clz = MethodName("clz", TwoIntRefs, IntRef)
+
+  final val fromInt = MethodName("fromInt", List(IntRef), LongRef)
+  final val fromUnsignedInt = MethodName("fromUnsignedInt", List(IntRef), LongRef)
+  final val fromDouble = MethodName("fromDouble", List(DoubleRef), LongRef)
+  final val fromDoubleBits = MethodName("fromDoubleBits", List(DoubleRef, ObjectRef), LongRef)
+
+  final val toString_ = MethodName("toString", TwoIntRefs, ClassRef(BoxedStringClass))
+
+  val OperatorMethods = Set(
+      add, sub, mul,
+      divide, remainder, divideUnsigned, remainderUnsigned,
+      or, and, xor, shl, shr, sar,
+      equals_, notEquals, lt, le, gt, ge, ltu, leu, gtu, geu,
+      toInt, toFloat, toDouble, bitsToDouble, clz,
+      fromInt, fromUnsignedInt, fromDouble, fromDoubleBits,
+      toString_)
 
   // Methods used for intrinsics
 
-  final val divideUnsigned    = "divideUnsigned__sjsr_RuntimeLong__sjsr_RuntimeLong"
-  final val remainderUnsigned = "remainderUnsigned__sjsr_RuntimeLong__sjsr_RuntimeLong"
+  final val compare = MethodName("compare", FourIntRefs, IntRef)
+
+  final val abs = MethodName("abs", TwoIntRefs, LongRef)
+  final val multiplyFull = MethodName("multiplyFull", TwoIntRefs, LongRef)
+
+  final val divModByConstantSmall = {
+    MethodName("divModByConstantSmall",
+        List(LongRef, IntRef, BooleanRef, DoubleRef, BooleanRef), LongRef)
+  }
+
+  final val divModByConstantMedium = {
+    MethodName("divModByConstantMedium",
+        List(LongRef, IntRef, BooleanRef, DoubleRef, BooleanRef), LongRef)
+  }
+
+  final val divModByConstantLarge = {
+    MethodName("divModByConstantLarge",
+        List(LongRef, LongRef, BooleanRef, DoubleRef, BooleanRef), LongRef)
+  }
+
+  final val unsignedDivModByConstantSmall = {
+    MethodName("unsignedDivModByConstantSmall",
+        List(LongRef, IntRef, DoubleRef, BooleanRef), LongRef)
+  }
+
+  final val unsignedDivModByConstantMedium = {
+    MethodName("unsignedDivModByConstantMedium",
+        List(LongRef, IntRef, DoubleRef, BooleanRef), LongRef)
+  }
+
+  final val unsignedDivModByConstantLarge = {
+    MethodName("unsignedDivModByConstantLarge",
+        List(LongRef, LongRef, DoubleRef, BooleanRef), LongRef)
+  }
+
+  final val unsignedDivModByConstantHuge = {
+    MethodName("unsignedDivModByConstantHuge",
+        List(LongRef, LongRef, BooleanRef), LongRef)
+  }
 
   val AllIntrinsicMethods = Set(
-      divideUnsigned, remainderUnsigned)
-
-  // Constructors
-
-  final val initFromParts = "init___I__I"
-
-  val AllConstructors = Set(
-      initFromParts)
-
-  // Methods on the companion
-
-  final val fromInt    = "fromInt__I__sjsr_RuntimeLong"
-  final val fromDouble = "fromDouble__D__sjsr_RuntimeLong"
-
-  val AllModuleMethods = Set(
-      fromInt, fromDouble)
+    compare,
+    abs,
+    multiplyFull,
+    divModByConstantSmall,
+    divModByConstantMedium,
+    divModByConstantLarge,
+    unsignedDivModByConstantSmall,
+    unsignedDivModByConstantMedium,
+    unsignedDivModByConstantLarge,
+    unsignedDivModByConstantHuge
+  )
 
   // Extract the parts to give to the initFromParts constructor
 

@@ -12,8 +12,6 @@
 
 package org.scalajs.testsuite.compiler
 
-import scala.language.implicitConversions
-
 import scala.scalajs.js
 import scala.scalajs.js.annotation._
 
@@ -21,8 +19,8 @@ import org.junit.Test
 import org.junit.Assert._
 import org.junit.Assume._
 
-import org.scalajs.testsuite.utils.AssertThrows._
-import org.scalajs.testsuite.utils.JSUtils
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.JSAssert._
 import org.scalajs.testsuite.utils.Platform._
 
 /*
@@ -32,17 +30,10 @@ import org.scalajs.testsuite.utils.Platform._
 class InteroperabilityTest {
   import InteroperabilityTest._
 
-  implicit def jsArray2Array[T](a: js.Array[T]): Array[AnyRef] =
-    a.map(_.asInstanceOf[AnyRef]).toArray
+  def assertArrayDynEquals(expected: js.Array[Any], actual: js.Dynamic): Unit =
+    assertJSArrayEquals(expected, actual.asInstanceOf[js.Array[Any]])
 
-  implicit def array2Array[T](a: Array[T]): Array[AnyRef] =
-    a.map(_.asInstanceOf[AnyRef])
-
-  def assertArrayDynEquals[T](expected: Array[T], actual: js.Dynamic): Unit = {
-    assertArrayEquals(expected, jsArray2Array(actual.asInstanceOf[js.Array[Any]]))
-  }
-
-  @Test def should_support_backquotes_to_escape_Scala_fields(): Unit = {
+  @Test def backquotesToEscapeScalaFields(): Unit = {
     val obj = js.eval("""
       var interoperabilityTestFieldEscape = {
         def: 0,
@@ -57,7 +48,7 @@ class InteroperabilityTest {
     assertEquals(42, obj.`val`(42))
   }
 
-  @Test def should_support_atJSName_to_specify_the_JavaScript_name_for_fields(): Unit = {
+  @Test def testJSNameToSpecifyTheJavaScriptNameForFields(): Unit = {
     val obj = js.eval("""
       var interoperabilityTestJSName = {
         def: 42,
@@ -70,7 +61,7 @@ class InteroperabilityTest {
     assertEquals(7357, obj.value(7357))
   }
 
-  @Test def should_translate_explicit_getter_and_setter_names_to_field_access(): Unit = {
+  @Test def explicitGetterAndSetterNamesToFieldAccess(): Unit = {
     val obj = js.eval("""
       var interoperabilityTestProperty = { a: 1 };
       interoperabilityTestProperty;
@@ -81,7 +72,7 @@ class InteroperabilityTest {
     assertEquals(100, obj.a)
   }
 
-  @Test def should_support_atJSName_together_with_field_access(): Unit = {
+  @Test def testJSNameTogetherWithFieldAccess(): Unit = {
     val obj = js.eval("""
       var interoperabilityTestProperty = { b: 1 };
       interoperabilityTestProperty;
@@ -93,7 +84,7 @@ class InteroperabilityTest {
     assertEquals(100, obj.b)
   }
 
-  @Test def should_support_atJSBracketAccess_to_specify_access_using_square_bracket_subscription(): Unit = {
+  @Test def testJSBracketAccessToSpecifyAccessUsingSquareBracketSubscription(): Unit = {
     val obj = js.eval("""
       var interoperabilityTestJSBracketAccess = [ 0, 1, 7357 ];
       interoperabilityTestJSBracketAccess;
@@ -104,7 +95,7 @@ class InteroperabilityTest {
     assertEquals(42, obj(2))
   }
 
-  @Test def should_allow_instanciation_of_JS_classes_inheriting_from_js_Object(): Unit = {
+  @Test def instantiationOfJSClassesInheritingFromJSObject(): Unit = {
     js.eval("""
       var InteroperabilityTestInherit = {
         Pattern: function(x) {
@@ -121,11 +112,11 @@ class InteroperabilityTest {
 
     val obj = new InteroperabilityTestPattern("Scala.js")
     assertEquals(42, obj.field)
-    assertEquals("42", obj.method)
-    assertEquals("Scala.js", obj.getConstructorParam)
+    assertEquals("42", obj.method())
+    assertEquals("Scala.js", obj.getConstructorParam())
   }
 
-  @Test def should_acces_top_level_JS_objects_via_Scala_objects_inheriting_from_js_Object(): Unit = {
+  @Test def accessTopLevelJSObjectsViaScalaObjectsInheritingFromJSObject(): Unit = {
     js.eval("""
       var InteroperabilityTestTopLevelObject = function(value) {
         return {
@@ -141,10 +132,10 @@ class InteroperabilityTest {
     val TopLevel = InteroperabilityTestTopLevel
     val obj = TopLevel("7357")
     assertEquals("7357", obj.value)
-    assertEquals(7357, obj.valueAsInt)
+    assertEquals(7357, obj.valueAsInt())
   }
 
-  @Test def should_access_native_JS_classes_and_objects_nested_in_JS_objects(): Unit = {
+  @Test def accessNativeJSClassesAndObjectsNestedInJSObjects(): Unit = {
     js.eval("""
       var InteroperabilityTestContainerObject = {
         ContainedClass: function(x) {
@@ -240,7 +231,7 @@ class InteroperabilityTest {
     assertEquals("abc def 10", obj6.foo("def "))
   }
 
-  @Test def should_access_native_JS_classes_and_objects_nested_in_atJSNamed_JS_objects(): Unit = {
+  @Test def accessNativeJSClassesAndObjectsNestedInAtJSNamedJSObjects(): Unit = {
     js.eval("""
       var InteroperabilityTestContainerObjectRenamed = {
         ContainedClass: function(x) {
@@ -274,7 +265,7 @@ class InteroperabilityTest {
     assertEquals(4242, obj4.x)
   }
 
-  @Test def should_allow_to_call_JS_methods_with_variadic_parameters(): Unit = {
+  @Test def callJSMethodsWithVariadicParameters(): Unit = {
     val obj = js.eval("""
       var obj = {
         foo: function() {
@@ -290,19 +281,19 @@ class InteroperabilityTest {
     val elems = Seq[js.Any]("plop", 42, 51)
 
     val dyn = obj.asInstanceOf[js.Dynamic]
-    assertArrayDynEquals(Array(), dyn.foo())
-    assertArrayDynEquals(Array(3, 6), dyn.foo(3, 6))
-    assertArrayDynEquals(Array("hello", false), dyn.foo("hello", false))
-    assertArrayDynEquals(Array("plop", 42, 51), dyn.applyDynamic("foo")(elems: _*))
+    assertArrayDynEquals(js.Array(), dyn.foo())
+    assertArrayDynEquals(js.Array(3, 6), dyn.foo(3, 6))
+    assertArrayDynEquals(js.Array("hello", false), dyn.foo("hello", false))
+    assertArrayDynEquals(js.Array("plop", 42, 51), dyn.applyDynamic("foo")(elems: _*))
 
     val stat = obj.asInstanceOf[InteroperabilityTestVariadicMethod]
-    assertArrayEquals(Array(), stat.foo())
-    assertArrayEquals(Array(3, 6), stat.foo(3, 6))
-    assertArrayEquals(Array("hello", false), stat.foo("hello", false))
-    assertArrayEquals(Array("plop", 42, 51), stat.foo(elems: _*))
+    assertJSArrayEquals(js.Array[Any](), stat.foo())
+    assertJSArrayEquals(js.Array[Any](3, 6), stat.foo(3, 6))
+    assertJSArrayEquals(js.Array("hello", false), stat.foo("hello", false))
+    assertJSArrayEquals(js.Array("plop", 42, 51), stat.foo(elems: _*))
   }
 
-  @Test def call_polytype_nullary_method_issue_2445(): Unit = {
+  @Test def callPolytypeNullaryMethod_Issue2445(): Unit = {
     val obj = js.eval("""
       var obj = {
         emptyArray: []
@@ -330,7 +321,7 @@ class InteroperabilityTest {
     assertEquals(0, c.length)
   }
 
-  @Test def should_allow_to_call_JS_constructors_with_variadic_parameters(): Unit = {
+  @Test def callJSConstructorsWithVariadicParameters(): Unit = {
     import js.Dynamic.{newInstance => jsnew}
 
     js.eval("""
@@ -347,26 +338,39 @@ class InteroperabilityTest {
     val ctor = js.Dynamic.global.InteroperabilityTestVariadicCtor
 
     val args0 = jsnew(ctor)().args
-    assertArrayDynEquals(Array(), args0)
+    assertArrayDynEquals(js.Array(), args0)
     val args1 = jsnew(ctor)(3, 6).args
-    assertArrayDynEquals(Array(3, 6), args1)
+    assertArrayDynEquals(js.Array(3, 6), args1)
     val args2 = jsnew(ctor)("hello", false).args
-    assertArrayDynEquals(Array("hello", false), args2)
+    assertArrayDynEquals(js.Array("hello", false), args2)
     val args3 = jsnew(ctor)(elems: _*).args
-    assertArrayDynEquals(Array("plop", 42, 51), args3)
+    assertArrayDynEquals(js.Array("plop", 42, 51), args3)
 
     import org.scalajs.testsuite.compiler.{InteroperabilityTestVariadicCtor => C}
-    assertArrayEquals(Array(), new C().args)
-    assertArrayEquals(Array(3, 6), new C(3, 6).args)
-    assertArrayEquals(Array("hello", false), new C("hello", false).args)
-    assertArrayEquals(Array("plop", 42, 51), new C(elems: _*).args)
+    assertJSArrayEquals(js.Array[Any](), new C().args)
+    assertJSArrayEquals(js.Array[Any](3, 6), new C(3, 6).args)
+    assertJSArrayEquals(js.Array("hello", false), new C("hello", false).args)
+    assertJSArrayEquals(js.Array("plop", 42, 51), new C(elems: _*).args)
   }
 
-  @Test def should_acces_top_level_JS_objects_via_Scala_object_with_annot_JSGlobalScope(): Unit = {
+  @Test def callJSConstructorsWithVarArgsWhenConstructIsRequired_Issue4362(): Unit = {
+    assumeTrue("requires the spread operator", assumeES2015)
+
+    @noinline def args(): Seq[Any] = Seq(1234)
+
+    val dateObj = new InteroperabilityTestJSDateWithVarArgsConstructor(args(): _*)
+    assertEquals(1234.0, dateObj.getTime(), 0.0)
+  }
+
+  @Test def accessTopLevelJSObjectsViaScalaObjectWithAnnotJSGlobalScope(): Unit = {
     js.eval("""
       var interoperabilityTestGlobalScopeValue = "7357";
       var interoperabilityTestGlobalScopeValueAsInt = function() {
         return parseInt(interoperabilityTestGlobalScopeValue);
+      };
+      var InteroperabilityTestGlobalScopeObject = {foo: 456};
+      var InteroperabilityTestGlobalScopeClass = function() {
+        this.bar = 654;
       };
     """)
 
@@ -374,17 +378,145 @@ class InteroperabilityTest {
     import org.scalajs.testsuite.compiler.{InteroperabilityTestGlobalScope => Global}
 
     assertEquals("7357", Global.interoperabilityTestGlobalScopeValue)
-    assertEquals(7357, Global.interoperabilityTestGlobalScopeValueAsInt)
+    assertEquals(7357, Global.interoperabilityTestGlobalScopeValueAsInt())
 
     Global.interoperabilityTestGlobalScopeValue = "42"
-    assertEquals(42, Global.interoperabilityTestGlobalScopeValueAsInt)
+    assertEquals(42, Global.interoperabilityTestGlobalScopeValueAsInt())
+
+    assertEquals("object", js.typeOf(Global.InteroperabilityTestGlobalScopeObject))
+    assertEquals(456, Global.InteroperabilityTestGlobalScopeObject.foo)
+
+    assertEquals("function",
+        js.typeOf(js.constructorOf[Global.InteroperabilityTestGlobalScopeClassRenamed]))
+    val obj = new Global.InteroperabilityTestGlobalScopeClassRenamed
+    assertEquals(654, obj.bar)
   }
 
-  @Test def should_protect_receiver_of_JS_apply_if_its_a_select_issue_804(): Unit = {
+  @Test def accessTopLevelJSVarsAndFunctionsViaScalaObjectWithNativeValsAndDefs(): Unit = {
+    js.eval("""
+      var interoperabilityTestGlobalValDefConstant = 654321;
+      var interoperabilityTestGlobalValDefVariable = 7357;
+      var interoperabilityTestGlobalValDefGetVariable = function() {
+        return interoperabilityTestGlobalValDefVariable;
+      }
+      var interoperabilityTestGlobalValDefSetVariable = function(x) {
+        interoperabilityTestGlobalValDefVariable = x;
+      }
+      var interoperabilityTestGlobalValDefFunction = function(x) {
+        return interoperabilityTestGlobalValDefVariable + x;
+      };
+      var interoperabilityTestGlobalValDefFunctionWithDefaultParam = function(x, y) {
+        return (x || 20) + (y || 5);
+      };
+    """)
+
+    // Use alias for convenience: see end of file for definition
+    import org.scalajs.testsuite.compiler.{InteroperabilityTestGlobalValsAndDefs => Global}
+
+    assertEquals(654321, Global.interoperabilityTestGlobalValDefConstant)
+
+    assertEquals(7357, Global.interoperabilityTestGlobalValDefVariable)
+    assertEquals(7357, Global.interoperabilityTestGlobalValDefGetVariable())
+    assertEquals(7360, Global.interoperabilityTestGlobalValDefFunction(3))
+
+    Global.interoperabilityTestGlobalValDefSetVariable(123)
+    assertEquals(123, Global.interoperabilityTestGlobalValDefGetVariable())
+    assertEquals(126, Global.interoperabilityTestGlobalValDefFunction(3))
+    Global.interoperabilityTestGlobalValDefSetVariable(7357)
+
+    assertEquals(18, Global.interoperabilityTestGlobalValDefFunctionWithDefaultParam(10, 8))
+    assertEquals(15, Global.interoperabilityTestGlobalValDefFunctionWithDefaultParam(10))
+    assertEquals(25, Global.interoperabilityTestGlobalValDefFunctionWithDefaultParam())
+    assertEquals(23, Global.interoperabilityTestGlobalValDefFunctionWithDefaultParam(y = 3))
+
+    // Renamed
+
+    assertEquals(654321, Global.interoperabilityTestGlobalValDefConstantRenamed)
+
+    assertEquals(7357, Global.interoperabilityTestGlobalValDefVariableRenamed)
+    assertEquals(7357, Global.interoperabilityTestGlobalValDefGetVariableRenamed())
+    assertEquals(7360, Global.interoperabilityTestGlobalValDefFunctionRenamed(3))
+
+    Global.interoperabilityTestGlobalValDefSetVariableRenamed(123)
+    assertEquals(123, Global.interoperabilityTestGlobalValDefGetVariableRenamed())
+    assertEquals(126, Global.interoperabilityTestGlobalValDefFunctionRenamed(3))
+    Global.interoperabilityTestGlobalValDefSetVariableRenamed(7357)
+
+    assertEquals(18, Global.interoperabilityTestGlobalValDefFunctionWithDefaultParamRenamed(10, 8))
+    assertEquals(15, Global.interoperabilityTestGlobalValDefFunctionWithDefaultParamRenamed(10))
+    assertEquals(25, Global.interoperabilityTestGlobalValDefFunctionWithDefaultParamRenamed())
+    assertEquals(23, Global.interoperabilityTestGlobalValDefFunctionWithDefaultParamRenamed(y = 3))
+  }
+
+  @Test def accessTopLevelJSVarsAndFunctionsViaPackageObjectWithNativeValsAndDefs(): Unit = {
+    js.eval("""
+      var interoperabilityTestGlobalValDefConstantInPackageObject = 654321;
+      var interoperabilityTestGlobalValDefVariableInPackageObject = 7357;
+      var interoperabilityTestGlobalValDefGetVariableInPackageObject = function() {
+        return interoperabilityTestGlobalValDefVariableInPackageObject;
+      }
+      var interoperabilityTestGlobalValDefSetVariableInPackageObject = function(x) {
+        interoperabilityTestGlobalValDefVariableInPackageObject = x;
+      }
+      var interoperabilityTestGlobalValDefFunctionInPackageObject = function(x) {
+        return interoperabilityTestGlobalValDefVariableInPackageObject + x;
+      };
+      var interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObject = function(x, y) {
+        return (x || 20) + (y || 5);
+      };
+    """)
+
+    // Use alias for convenience: see end of file for definition
+    import org.scalajs.testsuite.compiler.{
+      interoperabilitytestglobalvalsanddefspackageobject => pack
+    }
+
+    assertEquals(654321, pack.interoperabilityTestGlobalValDefConstantInPackageObject)
+
+    assertEquals(7357, pack.interoperabilityTestGlobalValDefVariableInPackageObject)
+    assertEquals(7357, pack.interoperabilityTestGlobalValDefGetVariableInPackageObject())
+    assertEquals(7360, pack.interoperabilityTestGlobalValDefFunctionInPackageObject(3))
+
+    pack.interoperabilityTestGlobalValDefSetVariableInPackageObject(123)
+    assertEquals(123, pack.interoperabilityTestGlobalValDefGetVariableInPackageObject())
+    assertEquals(126, pack.interoperabilityTestGlobalValDefFunctionInPackageObject(3))
+    pack.interoperabilityTestGlobalValDefSetVariableInPackageObject(7357)
+
+    assertEquals(
+        18, pack.interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObject(10, 8))
+    assertEquals(15, pack.interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObject(10))
+    assertEquals(25, pack.interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObject())
+    assertEquals(
+        23, pack.interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObject(y = 3))
+
+    // Renamed
+
+    assertEquals(654321, pack.interoperabilityTestGlobalValDefConstantInPackageObjectRenamed)
+
+    assertEquals(7357, pack.interoperabilityTestGlobalValDefVariableInPackageObjectRenamed)
+    assertEquals(7357, pack.interoperabilityTestGlobalValDefGetVariableInPackageObjectRenamed())
+    assertEquals(7360, pack.interoperabilityTestGlobalValDefFunctionInPackageObjectRenamed(3))
+
+    pack.interoperabilityTestGlobalValDefSetVariableInPackageObjectRenamed(123)
+    assertEquals(123, pack.interoperabilityTestGlobalValDefGetVariableInPackageObjectRenamed())
+    assertEquals(126, pack.interoperabilityTestGlobalValDefFunctionInPackageObjectRenamed(3))
+    pack.interoperabilityTestGlobalValDefSetVariableInPackageObjectRenamed(7357)
+
+    assertEquals(18,
+        pack.interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObjectRenamed(10, 8))
+    assertEquals(
+        15, pack.interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObjectRenamed(10))
+    assertEquals(
+        25, pack.interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObjectRenamed())
+    assertEquals(23,
+        pack.interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObjectRenamed(y = 3))
+  }
+
+  @Test def protectReceiverOfJSApplyIfItsSelect_Issue804(): Unit = {
     val obj = js.eval("""
       var interoperabilityTestJSFunctionFieldApply = {
-        member: 0xbad,
-        check: function(x) { return this.member ? this.member : x; }
+        toString: function() { return "bad" },
+        check: function(x) { "use strict"; return this ? this.toString() : x; }
       };
       interoperabilityTestJSFunctionFieldApply;
     """).asInstanceOf[InteroperabilityTestJSFunctionFieldApply]
@@ -394,88 +526,59 @@ class InteroperabilityTest {
     val check = obj.check
     assertEquals(0x600d, check(0x600d))
 
-    class InScalaSelect(check: js.Function1[Int, Int]) {
-      @JSExport
-      val member: Int = 0xbad2
+    class InScalaSelect(check: js.Function1[Int, Any]) {
+      override def toString(): String = "bad"
       def test(): Unit = assertEquals(5894, check(5894))
     }
     new InScalaSelect(check).test()
   }
 
-  @Test def should_properly_handle_default_parameters(): Unit = {
+  @Test def handleDefaultParameters(): Unit = {
     val obj = js.eval("""
       var interoperabilityTestDefaultParam = {
-        fun: function() { return arguments; }
+        fun: function() { return Array.prototype.slice.call(arguments); }
       };
       interoperabilityTestDefaultParam;
     """).asInstanceOf[InteroperabilityTestDefaultParam]
 
-    // Helpers
-    val keys = js.Dynamic.global.Object.keys
-    val undef = js.undefined
+    assertJSArrayEquals[Any](js.Array(1), obj.simple(1))
+    assertJSArrayEquals[Any](js.Array(1, 5), obj.simple(1, 5))
 
-    assertEquals(1, keys(obj.simple(1)).length)
-    assertEquals(1, obj.simple(1)("0"))
+    assertJSArrayEquals[Any](js.Array(js.undefined, 5), obj.named(y = 5))
+    assertJSArrayEquals[Any](js.Array(5), obj.named(x = 5))
 
-    assertEquals(2, keys(obj.simple(1, 5)).length)
-    assertEquals(1, obj.simple(1, 5)("0"))
-    assertEquals(5, obj.simple(1, 5)("1"))
+    assertJSArrayEquals[Any](js.Array(js.undefined, 1, 2, 3, 4), obj.multi()(1, 2, 3, 4)())
+    assertJSArrayEquals[Any](js.Array(2, 5), obj.multi(2)()(5))
 
-    assertEquals(2, keys(obj.named(y = 5)).length)
-    assertEquals(undef, obj.named(y = 5)("0"))
-    assertEquals(5, obj.named(y = 5)("1"))
-
-    assertEquals(1, keys(obj.named(x = 5)).length)
-    assertEquals(5, obj.named(x = 5)("0"))
-
-    assertEquals(5, keys(obj.multi()(1,2,3,4)()).length)
-    assertEquals(undef, obj.multi()(1,2,3,4)()("0"))
-    assertEquals(1, obj.multi()(1,2,3,4)()("1"))
-    assertEquals(2, obj.multi()(1,2,3,4)()("2"))
-    assertEquals(3, obj.multi()(1,2,3,4)()("3"))
-    assertEquals(4, obj.multi()(1,2,3,4)()("4"))
-
-    assertEquals(2, keys(obj.multi(2)()(5)).length)
-    assertEquals(2, obj.multi(2)()(5)("0"))
-    assertEquals(5, obj.multi(2)()(5)("1"))
+    // #4684 Default params with Unit type
+    assertJSArrayEquals[Any](js.Array(()), obj.unitParam(()))
+    assertJSArrayEquals[Any](js.Array((), ()), obj.unitParam((), ()))
   }
 
-  @Test def should_properly_handle_default_parameters_for_constructors_issue_791(): Unit = {
+  @Test def defaultParametersForConstructors_Issue791(): Unit = {
     js.eval("""
       var InteroperabilityTestCtor = function(x,y) {
         this.values = Array(x || 6, y || 8)
       }
     """);
 
-    assertArrayEquals(Array(6, 8), new InteroperabilityTestCtor().values)
-    assertArrayEquals(Array(6, 7), new InteroperabilityTestCtor(y = 7).values)
-    assertArrayEquals(Array(3, 8), new InteroperabilityTestCtor(3).values)
-    assertArrayEquals(Array(10, 2), new InteroperabilityTestCtor(10, 2).values)
+    import InteroperabilityTestScalaObjectContainer._
+
+    assertJSArrayEquals(js.Array(6, 8), new InteroperabilityTestCtor().values)
+    assertJSArrayEquals(js.Array(6, 7), new InteroperabilityTestCtor(y = 7).values)
+    assertJSArrayEquals(js.Array(3, 8), new InteroperabilityTestCtor(3).values)
+    assertJSArrayEquals(js.Array(10, 2), new InteroperabilityTestCtor(10, 2).values)
   }
 
-  @Test def should_generate_exports_for_methods_inherited_from_traits_issue_178(): Unit = {
-    import js.annotation.JSExport
-
-    trait Foo {
-      @JSExport
-      def theValue: Int = 1
-    }
-    class Bar extends Foo
-
-    val x = (new Bar).asInstanceOf[js.Dynamic]
-
-    // Call the export by using js.Dynamic
-    val theValue = x.theValue
-    assertEquals(1, theValue)
-  }
-
-  @Test def should_allow_constructor_params_that_are_vals_vars_in_facades_issue_1277(): Unit = {
+  @Test def constructorParamsThatAreValsVarsInFacades_Issue1277(): Unit = {
     js.eval("""
         var InteroparabilityCtorInlineValue = function(x,y) {
           this.x = x;
           this.y = y;
         }
     """)
+
+    import InteroperabilityTestScalaObjectContainer._
 
     val obj = new InteroparabilityCtorInlineValue(10, -1)
 
@@ -488,29 +591,37 @@ class InteroperabilityTest {
     assertEquals(100, obj.y)
   }
 
-  @Test def should_unbox_Chars_received_from_calling_a_JS_interop_method(): Unit = {
+  @Test def unboxCharsReceivedFromCallingJSInteropMethod(): Unit = {
     val obj = js.eval("""
       var obj = {
-        get: function(JSUtils) { return JSUtils.stringToChar('e'); }
+        anyAsChar: function(x) { return x; }
       };
       obj;
     """).asInstanceOf[InteroperabilityTestCharResult]
 
-    assertEquals('e'.toInt, obj.get(JSUtils).toInt)
+    @noinline def eCharAsAny: Any = Character.valueOf('e')
+    val c: Char = obj.anyAsChar(eCharAsAny)
+
+    /* Do not use `assertEquals` otherwise it would re-box the Char, defeating
+     * the purpose of this test.
+     */
+    assertTrue('e' == c)
   }
 
-  @Test def should_box_Chars_given_to_a_JS_interop_method(): Unit = {
+  @Test def boxCharsGivenToJSInteropMethod(): Unit = {
     val obj = js.eval("""
       var obj = {
-        twice: function(JSUtils, c) { c = JSUtils.charToString(c); return c+c; }
+        charAsAny: function(c) { return c; }
       };
       obj;
     """).asInstanceOf[InteroperabilityTestCharParam]
 
-    assertEquals("xx", obj.twice(JSUtils, 'x'))
+    val any: Any = obj.charAsAny('x')
+    assertTrue(any.isInstanceOf[Character])
+    assertEquals('x', any)
   }
 
-  @Test def should_unbox_value_classes_received_from_calling_a_JS_interop_method(): Unit = {
+  @Test def unboxValueClassReceivedFromCallingJSInteropMethod(): Unit = {
     val obj = js.eval("""
       var obj = {
         test: function(vc) { return vc; }
@@ -522,19 +633,21 @@ class InteroperabilityTest {
     assertEquals(5, r.i)
   }
 
-  @Test def should_box_value_classes_given_to_a_JS_interop_method(): Unit = {
+  @Test def boxValueClassesGivenToJSInteropMethod(): Unit = {
     val obj = js.eval("""
       var obj = {
-        stringOf: function(vc) { return vc.toString(); }
+        test: function(vc) { return vc; }
       };
       obj;
     """).asInstanceOf[InteroperabilityTestValueClassParam]
 
     val vc = new SomeValueClass(7)
-    assertEquals("SomeValueClass(7)", obj.stringOf(vc))
+    val r = obj.test(vc)
+    assertTrue(r.isInstanceOf[SomeValueClass])
+    assertEquals(7, r.asInstanceOf[SomeValueClass].i)
   }
 
-  @Test def should_not_unbox_values_received_from_JS_method_in_statement_position(): Unit = {
+  @Test def doNotUnboxValuesReceivedFromJSMethodInStatementPosition(): Unit = {
     /* To test this, we verify that a purposefully ill-typed facade does not
      * throw a ClassCastException when called in statement position.
      */
@@ -549,7 +662,7 @@ class InteroperabilityTest {
       assertThrows(classOf[Exception], obj.test()) // in expression position, should throw
   }
 
-  @Test def should_asInstanceOf_values_received_from_calling_a_JS_interop_method(): Unit = {
+  @Test def asInstanceOfValuesReceivedFromCallingJSInteropMethod(): Unit = {
     assumeTrue("Assumed compliant asInstanceOf", hasCompliantAsInstanceOfs)
     val obj = js.eval("""
       var obj = {
@@ -575,7 +688,7 @@ class InteroperabilityTest {
     obj.testAny() // should not throw
   }
 
-  @Test def should_access_global_scope_for_object(): Unit = {
+  @Test def accessGlobalScopeForObject(): Unit = {
     assumeTrue("Assuming execution in Node.js", executingInNodeJS)
 
     nodejs_runInThisContext("""
@@ -584,11 +697,13 @@ class InteroperabilityTest {
       };
     """)
 
+    import InteroperabilityTestScalaObjectContainer._
+
     assertEquals("object", js.typeOf(InteroperabilityTestConstObject))
     assertEquals(42, InteroperabilityTestConstObject.x)
   }
 
-  @Test def should_access_global_scope_for_class(): Unit = {
+  @Test def accessGlobalScopeForClass(): Unit = {
     assumeTrue("Assuming execution in Node.js", executingInNodeJS)
 
     nodejs_runInThisContext("""
@@ -599,13 +714,15 @@ class InteroperabilityTest {
       };
     """)
 
+    import InteroperabilityTestScalaObjectContainer._
+
     assertEquals("function",
         js.typeOf(js.constructorOf[InteroperabilityTestConstClass]))
     val obj = new InteroperabilityTestConstClass(5)
     assertEquals(5, obj.x)
   }
 
-  @Test def should_access_global_scope_for_JSGlobalScope_members(): Unit = {
+  @Test def accessGlobalScopeForJSGlobalScopeMembers(): Unit = {
     assumeTrue("Assuming execution in Node.js", executingInNodeJS)
 
     nodejs_runInThisContext("""
@@ -616,6 +733,7 @@ class InteroperabilityTest {
       });
     """)
 
+    import InteroperabilityTestScalaObjectContainer._
     import InteroperabilityTestLetConstGlobals._
 
     assertEquals("number", js.typeOf(InteroperabilityTestLetConstGlobals_value))
@@ -627,6 +745,22 @@ class InteroperabilityTest {
     assertEquals("world", InteroperabilityTestLetConstGlobals_variable)
 
     assertEquals(6, InteroperabilityTestLetConstGlobals_method(5))
+  }
+
+  @Test def accessGlobalThis(): Unit = {
+    import InteroperabilityTestScalaObjectContainer._
+    assumeTrue(isNoModule)
+    assertSame(js.Math, GlobalScope.globalThis.asInstanceOf[js.Dynamic].Math)
+    assertSame(js.Math, GlobalScope.`this`.asInstanceOf[js.Dynamic].Math)
+    assertSame(js.Math, js.Dynamic.global.`this`.Math)
+  }
+
+  @Test def accessGlobalThisESModule(): Unit = {
+    import InteroperabilityTestScalaObjectContainer._
+    assumeTrue(isESModule)
+    assertSame(js.undefined, GlobalScope.globalThis)
+    assertSame(js.undefined, GlobalScope.`this`)
+    assertSame(js.undefined, js.Dynamic.global.`this`)
   }
 
 }
@@ -644,6 +778,7 @@ object InteroperabilityTest {
   trait InteroperabilityTestJSName extends js.Object {
     @JSName("val")
     def value(): Int = js.native
+
     @JSName("val")
     def value(n: Int): Int = js.native
   }
@@ -658,8 +793,10 @@ object InteroperabilityTest {
   trait InteroperabilityTestPropertyNamed extends js.Object {
     @JSName("b")
     def a_=(x: Int): Unit = js.native
+
     @JSName("b")
     def a: Int = js.native
+
     def b: Int = js.native
   }
 
@@ -667,13 +804,14 @@ object InteroperabilityTest {
   trait InteroperabilityTestJSBracketAccess extends js.Object {
     @JSBracketAccess
     def apply(index: Int): Int = js.native
+
     @JSBracketAccess
     def update(index: Int, v: Int): Unit = js.native
   }
 
   @js.native
   trait InteroperabilityTestJSFunctionFieldApply extends js.Object {
-    val check: js.Function1[Int, Int] = js.native
+    val check: js.Function1[Int, Any] = js.native
   }
 
   /** Trait with different method signatures, all forwarded to the same JS
@@ -682,21 +820,26 @@ object InteroperabilityTest {
   @js.native
   trait InteroperabilityTestDefaultParam extends js.Object {
     @JSName("fun")
-    def simple(x: Int, y: Int = 5): js.Dictionary[Any] = js.native
+    def simple(x: Int, y: Int = 5): js.Array[Any] = js.native
+
     @JSName("fun")
-    def named(x: Int = 1, y: Int = 1, z: Int = 1): js.Dictionary[Any] = js.native
+    def named(x: Int = 1, y: Int = 1, z: Int = 1): js.Array[Any] = js.native
+
     @JSName("fun")
-    def multi(x: Int = 1)(ys: Int*)(z: Int = 1): js.Dictionary[Any] = js.native
+    def multi(x: Int = 1)(ys: Int*)(z: Int = 1): js.Array[Any] = js.native
+
+    @JSName("fun")
+    def unitParam(x: Unit, y: Unit = ()): js.Array[Any] = js.native
   }
 
   @js.native
   trait InteroperabilityTestCharResult extends js.Object {
-    def get(jsUtils: JSUtils.type): Char = js.native
+    def anyAsChar(x: Any): Char = js.native
   }
 
   @js.native
   trait InteroperabilityTestCharParam extends js.Object {
-    def twice(jsUtils: JSUtils.type, c: Char): String = js.native
+    def charAsAny(c: Char): Any = js.native
   }
 
   @js.native
@@ -706,7 +849,7 @@ object InteroperabilityTest {
 
   @js.native
   trait InteroperabilityTestValueClassParam extends js.Object {
-    def stringOf(vc: SomeValueClass): String = js.native
+    def test(vc: SomeValueClass): Any = js.native
   }
 
   @js.native
@@ -873,40 +1016,182 @@ class InteroperabilityTestVariadicCtor(inargs: Any*) extends js.Object {
 }
 
 @js.native
+@JSGlobal("Date")
+class InteroperabilityTestJSDateWithVarArgsConstructor(args: Any*) extends js.Object {
+  def getTime(): Double = js.native
+}
+
+@js.native
 @JSGlobalScope
 object InteroperabilityTestGlobalScope extends js.Object {
   var interoperabilityTestGlobalScopeValue: String = js.native
   def interoperabilityTestGlobalScopeValueAsInt(): Int = js.native
+
+  @js.native
+  object InteroperabilityTestGlobalScopeObject extends js.Object {
+    val foo: Int = js.native
+  }
+
+  @js.native
+  @JSName("InteroperabilityTestGlobalScopeClass")
+  class InteroperabilityTestGlobalScopeClassRenamed extends js.Object {
+    val bar: Int = js.native
+  }
+}
+
+object InteroperabilityTestGlobalValsAndDefs {
+  @js.native
+  @JSGlobal
+  val interoperabilityTestGlobalValDefConstant: Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefConstant")
+  val interoperabilityTestGlobalValDefConstantRenamed: Int = js.native
+
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefVariable: Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefVariable")
+  def interoperabilityTestGlobalValDefVariableRenamed: Int = js.native
+
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefGetVariable(): Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefGetVariable")
+  def interoperabilityTestGlobalValDefGetVariableRenamed(): Int = js.native
+
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefSetVariable(x: Int): Unit = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefSetVariable")
+  def interoperabilityTestGlobalValDefSetVariableRenamed(x: Int): Unit = js.native
+
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefFunction(x: Int): Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefFunction")
+  def interoperabilityTestGlobalValDefFunctionRenamed(x: Int): Int = js.native
+
+  /* In this facade, 50 is not the actual default value for `y`.
+   * We intentionally use a different value to check that it is ignored.
+   * See #4554.
+   * The default value `= js.native` of `x` is a test for #4553.
+   */
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefFunctionWithDefaultParam(x: Int = js.native,
+      y: Int = 50): Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefFunctionWithDefaultParam")
+  def interoperabilityTestGlobalValDefFunctionWithDefaultParamRenamed(x: Int = js.native,
+      y: Int = 50): Int = js.native
+}
+
+package object interoperabilitytestglobalvalsanddefspackageobject {
+  @js.native
+  @JSGlobal
+  val interoperabilityTestGlobalValDefConstantInPackageObject: Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefConstantInPackageObject")
+  val interoperabilityTestGlobalValDefConstantInPackageObjectRenamed: Int = js.native
+
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefVariableInPackageObject: Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefVariableInPackageObject")
+  def interoperabilityTestGlobalValDefVariableInPackageObjectRenamed: Int = js.native
+
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefGetVariableInPackageObject(): Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefGetVariableInPackageObject")
+  def interoperabilityTestGlobalValDefGetVariableInPackageObjectRenamed(): Int = js.native
+
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefSetVariableInPackageObject(x: Int): Unit = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefSetVariableInPackageObject")
+  def interoperabilityTestGlobalValDefSetVariableInPackageObjectRenamed(x: Int): Unit = js.native
+
+  @js.native
+  @JSGlobal
+  def interoperabilityTestGlobalValDefFunctionInPackageObject(x: Int): Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefFunctionInPackageObject")
+  def interoperabilityTestGlobalValDefFunctionInPackageObjectRenamed(x: Int): Int = js.native
+
+  /* In this facade, 50 is not the actual default value for `y`.
+   * We intentionally use a different value to check that it is ignored.
+   * See #4554.
+   * The default value `= js.native` of `x` is a test for #4553.
+   */
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObject")
+  def interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObject(
+      x: Int = js.native, y: Int = 50): Int = js.native
+
+  @js.native
+  @JSGlobal("interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObject")
+  def interoperabilityTestGlobalValDefFunctionWithDefaultParamInPackageObjectRenamed(
+      x: Int = js.native, y: Int = 50): Int = js.native
 }
 
 class SomeValueClass(val i: Int) extends AnyVal {
   override def toString(): String = s"SomeValueClass($i)"
 }
 
-@js.native
-@JSGlobal
-class InteroperabilityTestCtor(x: Int = 5, y: Int = ???) extends js.Object {
-  def values: js.Array[Int] = js.native
-}
+object InteroperabilityTestScalaObjectContainer {
+  @js.native
+  @JSGlobal
+  class InteroperabilityTestCtor(x: Int = 5, y: Int = ???) extends js.Object {
+    def values: js.Array[Int] = js.native
+  }
 
-@js.native
-@JSGlobal
-class InteroparabilityCtorInlineValue(val x: Int, var y: Int) extends js.Object
+  @js.native
+  @JSGlobal
+  class InteroparabilityCtorInlineValue(val x: Int, var y: Int) extends js.Object
 
-@js.native
-@JSGlobal
-object InteroperabilityTestConstObject extends js.Object {
-  val x: Int = js.native
-}
+  @js.native
+  @JSGlobal
+  object InteroperabilityTestConstObject extends js.Object {
+    val x: Int = js.native
+  }
 
-@js.native
-@JSGlobal
-class InteroperabilityTestConstClass(val x: Int) extends js.Object
+  @js.native
+  @JSGlobal
+  class InteroperabilityTestConstClass(val x: Int) extends js.Object
 
-@js.native
-@JSGlobalScope
-object InteroperabilityTestLetConstGlobals extends js.Any {
-  val InteroperabilityTestLetConstGlobals_value: Int = js.native
-  var InteroperabilityTestLetConstGlobals_variable: String = js.native
-  def InteroperabilityTestLetConstGlobals_method(x: Int): Int = js.native
+  @js.native
+  @JSGlobalScope
+  object InteroperabilityTestLetConstGlobals extends js.Any {
+    val InteroperabilityTestLetConstGlobals_value: Int = js.native
+    var InteroperabilityTestLetConstGlobals_variable: String = js.native
+    def InteroperabilityTestLetConstGlobals_method(x: Int): Int = js.native
+  }
+
+  @js.native
+  @JSGlobalScope
+  object GlobalScope extends js.Any {
+    def `this`: Any = js.native
+
+    @JSName("this")
+    def globalThis: Any = js.native
+  }
 }

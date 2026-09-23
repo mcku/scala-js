@@ -12,15 +12,10 @@
 
 package org.scalajs.junit.plugin
 
-import scala.language.reflectiveCalls
-
 import scala.annotation.tailrec
 
-import scala.reflect.internal.Flags
 import scala.tools.nsc._
-import scala.tools.nsc.plugins.{
-  Plugin => NscPlugin, PluginComponent => NscPluginComponent
-}
+import scala.tools.nsc.plugins.{Plugin => NscPlugin, PluginComponent => NscPluginComponent}
 
 /** The Scala.js JUnit plugin replaces reflection based test lookup.
  *
@@ -40,9 +35,7 @@ class ScalaJSJUnitPlugin(val global: Global) extends NscPlugin {
 
   val description: String = "Makes JUnit test classes invokable in Scala.js"
 
-  object ScalaJSJUnitPluginComponent
-      extends plugins.PluginComponent with transform.Transform
-      with CompatComponent {
+  object ScalaJSJUnitPluginComponent extends plugins.PluginComponent with transform.Transform {
 
     val global: Global = ScalaJSJUnitPlugin.this.global
     import global._
@@ -136,14 +129,16 @@ class ScalaJSJUnitPlugin(val global: Global) extends NscPlugin {
         val testMethods = annotatedMethods(testClass, JUnitAnnots.Test)
 
         val defs = List(
-            genConstructor(bootSym),
-            genCallOnModule(bootSym, Names.beforeClass, testClass.companionModule, JUnitAnnots.BeforeClass),
-            genCallOnModule(bootSym, Names.afterClass, testClass.companionModule, JUnitAnnots.AfterClass),
-            genCallOnParam(bootSym, Names.before, testClass, JUnitAnnots.Before),
-            genCallOnParam(bootSym, Names.after, testClass, JUnitAnnots.After),
-            genTests(bootSym, testMethods),
-            genInvokeTest(bootSym, testClass, testMethods),
-            genNewInstance(bootSym, testClass)
+          genConstructor(bootSym),
+          genCallOnModule(
+              bootSym, Names.beforeClass, testClass.companionModule, JUnitAnnots.BeforeClass),
+          genCallOnModule(
+              bootSym, Names.afterClass, testClass.companionModule, JUnitAnnots.AfterClass),
+          genCallOnParam(bootSym, Names.before, testClass, JUnitAnnots.Before),
+          genCallOnParam(bootSym, Names.after, testClass, JUnitAnnots.After),
+          genTests(bootSym, testMethods),
+          genInvokeTest(bootSym, testClass, testMethods),
+          genNewInstance(bootSym, testClass)
         )
 
         ClassDef(bootSym, defs)
@@ -161,7 +156,8 @@ class ScalaJSJUnitPlugin(val global: Global) extends NscPlugin {
         typer.typedDefDef(newDefDef(sym, rhs)())
       }
 
-      private def genCallOnModule(owner: ClassSymbol, name: TermName, module: Symbol, annot: Symbol): DefDef = {
+      private def genCallOnModule(owner: ClassSymbol, name: TermName, module: Symbol,
+          annot: Symbol): DefDef = {
         val sym = owner.newMethodSymbol(name)
         sym.setInfoAndEnter(MethodType(Nil, definitions.UnitTpe))
 
@@ -172,7 +168,8 @@ class ScalaJSJUnitPlugin(val global: Global) extends NscPlugin {
         typer.typedDefDef(newDefDef(sym, Block(calls: _*))())
       }
 
-      private def genCallOnParam(owner: ClassSymbol, name: TermName, testClass: Symbol, annot: Symbol): DefDef = {
+      private def genCallOnParam(owner: ClassSymbol, name: TermName, testClass: Symbol,
+          annot: Symbol): DefDef = {
         val sym = owner.newMethodSymbol(name)
 
         val instanceParam = sym.newValueParameter(Names.instance).setInfo(ObjectTpe)
@@ -236,8 +233,8 @@ class ScalaJSJUnitPlugin(val global: Global) extends NscPlugin {
             val boxedUnit = gen.mkAttributedRef(definitions.BoxedUnit_UNIT)
             val newSuccess = gen.mkMethodCall(SuccessModule_apply, List(boxedUnit))
             Block(
-                gen.mkMethodCall(instance, sym, Nil, Nil),
-                gen.mkMethodCall(FutureModule_successful, List(newSuccess))
+              gen.mkMethodCall(instance, sym, Nil, Nil),
+              gen.mkMethodCall(FutureModule_successful, List(newSuccess))
             )
 
           case FutureClass =>

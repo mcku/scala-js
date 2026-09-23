@@ -2,25 +2,29 @@
 
 ## Very important notice about the Javalib
 
-Scala.js contains a reimplementation of part of the JDK in Scala.js itself.
+If you haven't read it, ***read the very important notice about the Javalib
+in the [Javalib documentation](./JAVALIB.md)*** .
 
-***To contribute to this code, it is strictly forbidden to even look at the
-source code of the Oracle JDK or OpenJDK!***
+## Formatting
 
-This is for license considerations: these JDKs are under a GPL-based license,
-which is not compatible with our BSD 3-clause license.
+We use `scalafmt`. Any `scalafmt` install will do.
 
-It is also recommended *not to look at any other JDK implementation* (such as
-Apache Harmony), to minimize the chance of copyright debate.
+If you just want to format, do:
+
+```sh
+cs launch scalafmt
+```
+
+You can also use `cs setup` or `cs install scalafmt` to get a bare `scalafmt` executable.
 
 ## Building
 
 Scala.js is entirely built with [sbt](https://www.scala-sbt.org/), and also
 requires [Node.js](https://nodejs.org/en/) to be installed. For complete
-support, Node.js >= 10.0.0 is required.
+support, Node.js >= 24.0.0 is required.
 
 The first time, or in the rare events where `package.json` changes
-([history](https://github.com/scala-js/scala-js/commits/master/package.json)),
+([history](https://github.com/scala-js/scala-js/commits/main/package.json)),
 you need to run
 
     $ npm install
@@ -34,12 +38,12 @@ Otherwise, everything happens within sbt.
 
 Run the normal test suite using the entire Scala.js toolchain using
 
-    > testSuite/test
+    > testSuite2_12/test
 
 In order to test the tests themselves, run the cross-compiling tests on the JVM
 with:
 
-    > testSuiteJVM/test
+    > testSuiteJVM2_12/test
 
 If you have changed the IR or the compiler, you typically need to
 
@@ -47,8 +51,8 @@ If you have changed the IR or the compiler, you typically need to
 
 before testing anew.
 
-If you have changed the IR, the linker, the JS environments, the test adapter
-or the sbt plugin, you typically need to
+If you have changed the logging API, the linker interface, the JS environments,
+the test adapter or the sbt plugin, you typically need to
 
     > reload
 
@@ -58,25 +62,25 @@ To test in fullOpt stage:
 
 There are also a few additional tests in a separate testing project:
 
-    > testSuiteEx/test
+    > testSuiteEx2_12/test
 
 The compiler tests (mostly verifying expected compile error messages) can be
 run with
 
-    > compiler/test
+    > compiler2_12/test
 
 The full partest suite (tests of the Scala language, ported in Scala.js) are
 run with:
 
-    > partestSuite/test
+    > partestSuite2_12/test
 
 or, more typically,
 
-    > partestSuite/testOnly -- --fastOpt
+    > partestSuite2_12/testOnly -- --fastOpt
 
 The JUnit tests from scala/scala can be run with
 
-    > scalaTestSuite/test
+    > scalaTestSuite2_12/test
 
 ## Metals-based IDEs
 
@@ -101,6 +105,12 @@ You will still have to fix a few things:
 * Uncheck the "Allow output directories per source directory" in Build path
 * Add transitive project dependencies in Build path
 
+## Preparing a Pull Request
+
+One common build failure is code styling. Reproduce results locally with:
+
+   $ sbt scalastyleCheck
+
 ## Organization of the repository
 
 The repository is organized as follows:
@@ -109,8 +119,8 @@ The repository is organized as follows:
 
 * `ir/` The Intermediate Representation, produced by the compiler and consumed by the linker
 * `compiler/` The scalac compiler plugin
-* `io/` Virtual I/O abstractions
-* `logging/` A tiny logging API
+* `linker-private-library/` Some Scala.js files whose compiled .sjsir files are used as resources of the linker (2.12 only)
+* `linker-interface/` The linker interface, without its implementation
 * `linker/` The linker, optimizer, verifier, etc.: everything that happens at link time
 
 ### Library
@@ -123,26 +133,16 @@ The repository is organized as follows:
 
 All of these are packaged in `scalajs-library.jar`.
 
-### JS environments
-
-The JS environments are JVM libraries that abstract the details of using a
-JavaScript engine to run JS code.
-
-* `js-envs/` The generic definitions of JavaScript environments and runners
-* `nodejs-env/` The Node.js environment
-
-Other JS environments are developed in separate repositories under the
-`scala-js` organization.
-
 ### Testing infrastructure
 
 There is a generic infrastructure that maps the sbt-testing-interface API
 across the JVM/JS boundary, so that Scala.js testing frameworks can be piloted
 from JVM processes such as sbt.
 
-* `test-interface/` JS side of the bridge, as well as the JS definition of the
-  sbt-testing-interface API
+* `test-interface/` the JS definition of the sbt-testing-interface API
+* `test-bridge/` JS side of the bridge
 * `test-adapter/` JVM side of the bridge
+* `test-common/` Code common between `test-bridge` and `test-adapter`
 
 This repository also contains a specific implementation of JUnit:
 
@@ -172,7 +172,7 @@ The helloworld and reversi also have HTML pages to run them in real browsers.
 
 The build itself contains the entire sbt plugin (and all its dependencies) as
 part of its sources.
-If you change any of the IR, virtual IO, logging API, linker, JS environments,
+If you change any of the linker interface, linker,
 test adapter, or the sbt plugin itself, chances are you need to `reload` the
 build for your changes to take effect.
 
@@ -182,7 +182,10 @@ To publish your changes locally to be used in a separate project, use the
 following incantations.
 `SCALA_VERSION` refers to the Scala version used by the separate project.
 
-    > ++SCALA_VERSION
-    > ;compiler/publishLocal;library/publishLocal;testInterface/publishLocal;testBridge/publishLocal;jUnitRuntime/publishLocal;jUnitPlugin/publishLocal
-    > ++2.12.8
-    > ;ir/publishLocal;io/publishLocal;logging/publishLocal;linker/publishLocal;jsEnvs/publishLocal;jsEnvsTestKit/publishLocal;nodeJSEnv/publishLocal;testAdapter/publishLocal;sbtPlugin/publishLocal
+    > ;ir2_12/publishLocal;linkerInterface2_12/publishLocal;linker2_12/publishLocal;testAdapter2_12/publishLocal;sbtPlugin2_12/publishLocal;javalib/publishLocal;javalibintf/publishLocal
+    > ;library2_12/publishLocal;testInterface2_12/publishLocal;testBridge2_12/publishLocal;jUnitRuntime2_12/publishLocal;jUnitPlugin2_12/publishLocal;scalalib2_12/publishLocal
+    > ;ir3/publishLocal;linkerInterface3/publishLocal;linker3/publishLocal;testAdapter3/publishLocal;sbtPlugin3/publishLocal
+    > ++SCALA_VERSION compiler2_12/publishLocal
+
+If using a non-2.12.x version for the Scala version, the `2_12` suffixes must be adapted in the second and third command (not in the first command).
+The third line is required if you want to publish the sbt 2 plugin.

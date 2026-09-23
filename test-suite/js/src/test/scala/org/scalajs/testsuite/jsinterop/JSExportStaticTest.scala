@@ -15,7 +15,7 @@ package org.scalajs.testsuite.jsinterop
 import scala.scalajs.js
 import js.annotation._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
 import org.scalajs.testsuite.utils.Platform._
 
 import org.junit.Assert._
@@ -25,13 +25,13 @@ import org.junit.Test
 class JSExportStaticTest {
   // Methods
 
-  @Test def toplevel_basic_static_method_export(): Unit = {
+  @Test def toplevelBasicStaticMethodExport(): Unit = {
     val statics = js.constructorOf[TopLevelStaticExportMethods]
 
     assertEquals(1, statics.basic())
   }
 
-  @Test def toplevel_overloaded_static_method_export(): Unit = {
+  @Test def toplevelOverloadedStaticMethodExport(): Unit = {
     val statics = js.constructorOf[TopLevelStaticExportMethods]
 
     assertEquals("Hello World", statics.overload("World"))
@@ -40,13 +40,13 @@ class JSExportStaticTest {
     assertEquals(10, statics.overload(1, 2, 3, 4))
   }
 
-  @Test def toplevel_renamed_static_method_export(): Unit = {
+  @Test def toplevelRenamedStaticMethodExport(): Unit = {
     val statics = js.constructorOf[TopLevelStaticExportMethods]
 
     assertEquals(11, statics.renamed(8))
   }
 
-  @Test def toplevel_renamed_overloaded_static_method_export(): Unit = {
+  @Test def toplevelRenamedOverloadedStaticMethodExport(): Unit = {
     val statics = js.constructorOf[TopLevelStaticExportMethods]
 
     assertEquals("Hello World", statics.renamedOverload("World"))
@@ -55,13 +55,13 @@ class JSExportStaticTest {
     assertEquals(10, statics.renamedOverload(1, 2, 3, 4))
   }
 
-  @Test def toplevel_static_method_export_constructor(): Unit = {
+  @Test def toplevelStaticMethodExportConstructor(): Unit = {
     val statics = js.constructorOf[TopLevelStaticExportMethods]
 
     assertEquals(24, statics.constructor(12))
   }
 
-  @Test def toplevel_static_method_export_uses_unique_object(): Unit = {
+  @Test def toplevelStaticMethodExportUsesUniqueObject(): Unit = {
     val statics = js.constructorOf[TopLevelStaticExportMethods]
 
     statics.setMyVar(3)
@@ -70,7 +70,7 @@ class JSExportStaticTest {
     assertEquals(7, TopLevelStaticExportMethods.myVar)
   }
 
-  @Test def toplevel_static_method_export_also_exists_in_member(): Unit = {
+  @Test def toplevelStaticMethodExportAlsoExistsInMember(): Unit = {
     val statics = js.constructorOf[TopLevelStaticExportMethods]
     assertEquals(15, statics.alsoExistsAsMember(3))
 
@@ -78,13 +78,13 @@ class JSExportStaticTest {
     assertEquals(6, obj.alsoExistsAsMember(3))
   }
 
-  @Test def nested_basic_static_method_export(): Unit = {
+  @Test def nestedBasicStaticMethodExport(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportMethods]
 
     assertEquals(1, statics.basic())
   }
 
-  @Test def nested_overloaded_static_method_export(): Unit = {
+  @Test def nestedOverloadedStaticMethodExport(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportMethods]
 
     assertEquals("Hello World", statics.overload("World"))
@@ -93,13 +93,13 @@ class JSExportStaticTest {
     assertEquals(10, statics.overload(1, 2, 3, 4))
   }
 
-  @Test def nested_renamed_static_method_export(): Unit = {
+  @Test def nestedRenamedStaticMethodExport(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportMethods]
 
     assertEquals(11, statics.renamed(8))
   }
 
-  @Test def nested_renamed_overloaded_static_method_export(): Unit = {
+  @Test def nestedRenamedOverloadedStaticMethodExport(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportMethods]
 
     assertEquals("Hello World", statics.renamedOverload("World"))
@@ -108,13 +108,13 @@ class JSExportStaticTest {
     assertEquals(10, statics.renamedOverload(1, 2, 3, 4))
   }
 
-  @Test def nested_static_method_export_constructor(): Unit = {
+  @Test def nestedStaticMethodExportConstructor(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportMethods]
 
     assertEquals(24, statics.constructor(12))
   }
 
-  @Test def nested_static_method_export_uses_unique_object(): Unit = {
+  @Test def nestedStaticMethodExportUsesUniqueObject(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportMethods]
 
     statics.setMyVar(3)
@@ -123,7 +123,7 @@ class JSExportStaticTest {
     assertEquals(7, JSExportStaticTest.StaticExportMethods.myVar)
   }
 
-  @Test def nested_static_method_export_also_exists_in_member(): Unit = {
+  @Test def nestedStaticMethodExportAlsoExistsInMember(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportMethods]
     assertEquals(15, statics.alsoExistsAsMember(3))
 
@@ -133,13 +133,13 @@ class JSExportStaticTest {
 
   // Properties
 
-  @Test def basic_static_prop_readonly(): Unit = {
+  @Test def basicStaticPropReadonly(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportProperties]
 
     assertEquals(1, statics.basicReadOnly)
   }
 
-  @Test def basic_static_prop_readwrite(): Unit = {
+  @Test def basicStaticPropReadwrite(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportProperties]
 
     assertEquals(5, statics.basicReadWrite)
@@ -147,7 +147,7 @@ class JSExportStaticTest {
     assertEquals(15, statics.basicReadWrite)
   }
 
-  @Test def static_prop_set_wrong_type_throws_classcastexception(): Unit = {
+  @Test def staticPropSetWrongTypeThrowsClassCastException(): Unit = {
     assumeTrue("assuming compliant asInstanceOfs", hasCompliantAsInstanceOfs)
 
     val statics = js.constructorOf[JSExportStaticTest.StaticExportProperties]
@@ -157,7 +157,7 @@ class JSExportStaticTest {
     })
   }
 
-  @Test def overloaded_static_prop_setter(): Unit = {
+  @Test def overloadedStaticPropSetter(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportProperties]
 
     assertEquals("got: ", statics.overloadedSetter)
@@ -167,7 +167,7 @@ class JSExportStaticTest {
     assertEquals("got: foo10", statics.overloadedSetter)
   }
 
-  @Test def overloaded_static_prop_renamed(): Unit = {
+  @Test def overloadedStaticPropRenamed(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportProperties]
 
     assertEquals(5, statics.renamed)
@@ -177,13 +177,13 @@ class JSExportStaticTest {
     assertEquals(21, statics.renamed)
   }
 
-  @Test def static_prop_constructor(): Unit = {
+  @Test def staticPropConstructor(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportProperties]
 
     assertEquals(102, statics.constructor)
   }
 
-  @Test def static_prop_also_exists_in_member(): Unit = {
+  @Test def staticPropAlsoExistsInMember(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportProperties]
     assertEquals("also a member", statics.alsoExistsAsMember)
 
@@ -193,7 +193,7 @@ class JSExportStaticTest {
 
   // Fields
 
-  @Test def basic_field(): Unit = {
+  @Test def basicField(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportFields]
 
     // Initialization
@@ -215,7 +215,7 @@ class JSExportStaticTest {
     JSExportStaticTest.StaticExportFields.basicVar = "hello"
   }
 
-  @Test def read_tampered_var_causes_class_cast_exception(): Unit = {
+  @Test def readTamperedVarCausesClassCastException(): Unit = {
     assumeTrue("assuming compliant asInstanceOfs", hasCompliantAsInstanceOfs)
 
     val statics = js.constructorOf[JSExportStaticTest.StaticExportFields]
@@ -230,7 +230,7 @@ class JSExportStaticTest {
     JSExportStaticTest.StaticExportFields.basicVar = "hello"
   }
 
-  @Test def renamed_field(): Unit = {
+  @Test def renamedField(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportFields]
 
     // Initialization
@@ -253,7 +253,7 @@ class JSExportStaticTest {
     JSExportStaticTest.StaticExportFields.renamedBasicVar = "world"
   }
 
-  @Test def uninitialized_fields(): Unit = {
+  @Test def uninitializedFields(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportFields]
 
     assertEquals(0, JSExportStaticTest.StaticExportFields.uninitializedVarInt)
@@ -268,12 +268,43 @@ class JSExportStaticTest {
     assertEquals('\u0000', statics.uninitializedVarChar)
   }
 
-  @Test def field_also_exists_in_member(): Unit = {
+  @Test def fieldAlsoExistsInMember(): Unit = {
     val statics = js.constructorOf[JSExportStaticTest.StaticExportFields]
     assertEquals("hello", statics.alsoExistsAsMember)
 
     val obj = new JSExportStaticTest.StaticExportFields
     assertEquals(5, obj.alsoExistsAsMember)
+  }
+
+  // Inherited members
+
+  @Test def testInheritedMembersInECMAScript2015(): Unit = {
+    assumeTrue("Requires ECMAScript 2015 semantics", useECMAScript2015Semantics)
+
+    val parent = js.constructorOf[JSExportStaticTest.StaticExportsParent]
+    val child = js.constructorOf[JSExportStaticTest.StaticExportsChild]
+
+    assertEquals(5, child.inheritedVal)
+
+    assertEquals("hello", child.inheritedVar)
+    parent.inheritedVar = "world"
+    assertEquals("world", child.inheritedVar)
+    child.inheritedVar = "overwritten"
+    assertEquals("overwritten", child.inheritedVar)
+    assertEquals("world", parent.inheritedVar)
+    parent.inheritedVar = "another"
+    assertEquals("overwritten", child.inheritedVar)
+
+    assertEquals(42, child.inheritedProperty)
+    parent.inheritedProperty = 53
+    assertEquals(53, child.inheritedProperty)
+    child.inheritedProperty = 23
+    assertEquals(23, child.inheritedProperty)
+    assertEquals(23, parent.inheritedProperty)
+    parent.inheritedProperty = 123
+    assertEquals(123, child.inheritedProperty)
+
+    assertEquals(6, child.inheritedMethod(5))
   }
 
 }
@@ -423,4 +454,27 @@ object JSExportStaticTest {
     @JSExportStatic
     val alsoExistsAsMember: String = "hello"
   }
+
+  class StaticExportsParent extends js.Object
+
+  object StaticExportsParent {
+    @JSExportStatic
+    val inheritedVal: Int = 5
+
+    @JSExportStatic
+    var inheritedVar: String = "hello"
+
+    private var propVar: Int = 42
+
+    @JSExportStatic
+    def inheritedProperty: Int = propVar
+
+    @JSExportStatic
+    def inheritedProperty_=(v: Int): Unit = propVar = v
+
+    @JSExportStatic
+    def inheritedMethod(x: Int): Int = x + 1
+  }
+
+  class StaticExportsChild extends StaticExportsParent
 }

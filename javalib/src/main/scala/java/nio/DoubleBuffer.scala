@@ -17,8 +17,10 @@ import scala.scalajs.js.typedarray._
 object DoubleBuffer {
   private final val HashSeed = 2140173175 // "java.nio.DoubleBuffer".##
 
-  def allocate(capacity: Int): DoubleBuffer =
+  def allocate(capacity: Int): DoubleBuffer = {
+    BoundsChecks.checkCapacity(capacity)
     wrap(new Array[Double](capacity))
+  }
 
   def wrap(array: Array[Double], offset: Int, length: Int): DoubleBuffer =
     HeapDoubleBuffer.wrap(array, 0, array.length, offset, length, false)
@@ -28,8 +30,8 @@ object DoubleBuffer {
 
   // Extended API
 
-  def wrap(array: Float64Array): DoubleBuffer =
-    TypedArrayDoubleBuffer.wrap(array)
+  def wrapFloat64Array(array: Float64Array): DoubleBuffer =
+    TypedArrayDoubleBuffer.wrapFloat64Array(array)
 }
 
 abstract class DoubleBuffer private[nio] (
@@ -136,7 +138,7 @@ abstract class DoubleBuffer private[nio] (
 
   @noinline
   def compareTo(that: DoubleBuffer): Int =
-    GenBuffer(this).generic_compareTo(that)(_.compareTo(_))
+    GenBuffer(this).generic_compareTo(that)(java.lang.Double.compare(_, _))
 
   def order(): ByteOrder
 
@@ -148,11 +150,13 @@ abstract class DoubleBuffer private[nio] (
 
   @inline
   private[nio] def load(startIndex: Int,
-      dst: Array[Double], offset: Int, length: Int): Unit =
+      dst: Array[Double], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   private[nio] def store(startIndex: Int,
-      src: Array[Double], offset: Int, length: Int): Unit =
+      src: Array[Double], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }

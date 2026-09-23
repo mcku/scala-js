@@ -12,8 +12,10 @@
 
 package java.nio.charset
 
+import java.lang.Utils._
 import java.nio.{ByteBuffer, CharBuffer}
 import java.util.{Collections, HashSet, Arrays}
+import java.util.ScalaOps._
 
 import scala.scalajs.js
 
@@ -29,16 +31,16 @@ abstract class Charset protected (canonicalName: String,
   final def aliases(): java.util.Set[String] = aliasesSet
 
   override final def equals(that: Any): Boolean = that match {
-    case that: Charset => this.name == that.name
+    case that: Charset => this.name() == that.name()
     case _             => false
   }
 
   override final def toString(): String = name()
 
-  override final def hashCode(): Int = name.##
+  override final def hashCode(): Int = name().hashCode()
 
   override final def compareTo(that: Charset): Int =
-    name.compareToIgnoreCase(that.name)
+    name().compareToIgnoreCase(that.name())
 
   def contains(cs: Charset): Boolean
 
@@ -49,14 +51,14 @@ abstract class Charset protected (canonicalName: String,
 
   private lazy val cachedDecoder = {
     this.newDecoder()
-        .onMalformedInput(CodingErrorAction.REPLACE)
-        .onUnmappableCharacter(CodingErrorAction.REPLACE)
+      .onMalformedInput(CodingErrorAction.REPLACE)
+      .onUnmappableCharacter(CodingErrorAction.REPLACE)
   }
 
   private lazy val cachedEncoder = {
     this.newEncoder()
-        .onMalformedInput(CodingErrorAction.REPLACE)
-        .onUnmappableCharacter(CodingErrorAction.REPLACE)
+      .onMalformedInput(CodingErrorAction.REPLACE)
+      .onUnmappableCharacter(CodingErrorAction.REPLACE)
   }
 
   final def decode(bb: ByteBuffer): CharBuffer =
@@ -68,7 +70,7 @@ abstract class Charset protected (canonicalName: String,
   final def encode(str: String): ByteBuffer =
     encode(CharBuffer.wrap(str))
 
-  def displayName(): String = name
+  def displayName(): String = name()
 }
 
 object Charset {
@@ -77,20 +79,37 @@ object Charset {
   def defaultCharset(): Charset =
     UTF_8
 
-  def forName(charsetName: String): Charset =
-    CharsetMap.getOrElse(charsetName.toLowerCase,
-        throw new UnsupportedCharsetException(charsetName))
+  def forName(charsetName: String): Charset = {
+    dictGetOrElse(CharsetMap, charsetName.toLowerCase()) { () =>
+      throw new UnsupportedCharsetException(charsetName)
+    }
+  }
 
   def isSupported(charsetName: String): Boolean =
-    CharsetMap.contains(charsetName.toLowerCase)
+    dictContains(CharsetMap, charsetName.toLowerCase())
+
+  def availableCharsets(): java.util.SortedMap[String, Charset] =
+    availableCharsetsResult
+
+  private lazy val availableCharsetsResult = {
+    val m = new java.util.TreeMap[String, Charset](String.CASE_INSENSITIVE_ORDER)
+    forArrayElems(allSJSCharsets) { c =>
+      m.put(c.name(), c)
+    }
+    Collections.unmodifiableSortedMap(m)
+  }
 
   private lazy val CharsetMap = {
-    val m = js.Dictionary.empty[Charset]
-    for (c <- js.Array(US_ASCII, ISO_8859_1, UTF_8, UTF_16BE, UTF_16LE, UTF_16)) {
-      m(c.name.toLowerCase) = c
-      for (alias <- c._aliases)
-        m(alias.toLowerCase) = c
+    val m = dictEmpty[Charset]()
+    forArrayElems(allSJSCharsets) { c =>
+      dictSet(m, c.name().toLowerCase(), c)
+      val aliases = c._aliases
+      for (i <- 0 until aliases.length)
+        dictSet(m, aliases(i).toLowerCase(), c)
     }
     m
   }
+
+  private def allSJSCharsets =
+    js.Array(US_ASCII, ISO_8859_1, UTF_8, UTF_16BE, UTF_16LE, UTF_16)
 }

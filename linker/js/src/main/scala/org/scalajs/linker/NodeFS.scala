@@ -52,23 +52,53 @@ private[linker] object NodeFS {
     def isDirectory(): Boolean
   }
 
-  @JSImport("fs", JSImport.Namespace)
+  @JSImport("fs")
   @js.native
-  object FS extends js.Object {
-    def open(path: String, flags: String, callback: CB[Int]): Unit = js.native
-    def close(fd: Int, callback: CB[Unit]): Unit = js.native
+  def open(path: String, flags: String, callback: CB[Int]): Unit = js.native
 
-    def read(fd: Int, buffer: TypedArray[_, _], offset: Int, length: Int, position: Int,
-        callback: CB[Int]): Unit = js.native
+  @JSImport("fs")
+  @js.native
+  def close(fd: Int, callback: CB[Unit]): Unit = js.native
 
-    def write(fd: Int, buffer: TypedArray[_, _], offset: Int, length: Int,
-        position: js.UndefOr[Int], callback: CB[Int]): Int = js.native
+  @JSImport("fs")
+  @js.native
+  def read(fd: Int, buffer: TypedArray[_, _], offset: Int, length: Int, position: Int,
+      callback: CB[Int]): Unit = js.native
 
-    def readdir(path: String, opts: ReadDirOpt.type,
-        cb: CB[js.Array[Dirent]]): Unit = js.native
+  @JSImport("fs")
+  @js.native
+  def writeFile(path: String, data: TypedArray[_, _], callback: CB[Unit]): Unit = js.native
 
-    def readFile(path: String, cb: CB[Uint8Array]): Unit = js.native
+  @JSImport("fs")
+  @js.native
+  def readdir(path: String, opts: ReadDirOpt.type,
+      cb: CB[js.Array[Dirent]]): Unit = js.native
 
-    def stat(path: String, cb: CB[Stats]): Unit = js.native
-  }
+  @JSImport("fs")
+  @js.native
+  def readdir(path: String, cb: CB[js.Array[String]]): Unit = js.native
+
+  @JSImport("fs")
+  @js.native
+  def readFile(path: String, cb: CB[Uint8Array]): Unit = js.native
+
+  @JSImport("fs")
+  @js.native
+  def stat(path: String, cb: CB[Stats]): Unit = js.native
+
+  @JSImport("fs")
+  @js.native
+  def unlink(path: String, cb: CB[Unit]): Unit = js.native
+
+  @JSImport("path")
+  @js.native
+  def join(paths: String*): String = js.native
+
+  @JSImport("path")
+  @js.native
+  def basename(path: String): String = js.native
+
+  @JSImport("path")
+  @js.native
+  def dirname(path: String): String = js.native
 }

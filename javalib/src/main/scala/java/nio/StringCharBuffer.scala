@@ -25,13 +25,13 @@ private[nio] final class StringCharBuffer private (
   def isDirect(): Boolean = false
 
   def slice(): CharBuffer = {
-    val cap = remaining
+    val cap = remaining()
     new StringCharBuffer(cap, _csq, _csqOffset + position(), 0, cap)
   }
 
   def duplicate(): CharBuffer = {
-    val result = new StringCharBuffer(capacity, _csq, _csqOffset,
-        position, limit)
+    val result = new StringCharBuffer(capacity(), _csq, _csqOffset,
+        position(), limit())
     result._mark = this._mark
     result
   }
@@ -39,9 +39,8 @@ private[nio] final class StringCharBuffer private (
   def asReadOnlyBuffer(): CharBuffer = duplicate()
 
   def subSequence(start: Int, end: Int): CharBuffer = {
-    if (start < 0 || end < start || end > remaining)
-      throw new IndexOutOfBoundsException
-    new StringCharBuffer(capacity, _csq, _csqOffset,
+    BoundsChecks.checkStartEnd(start, end, remaining())
+    new StringCharBuffer(capacity(), _csq, _csqOffset,
         position() + start, position() + end)
   }
 
@@ -88,23 +87,22 @@ private[nio] final class StringCharBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Char], offset: Int, length: Int): Unit =
+      dst: Array[Char], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Char], offset: Int, length: Int): Unit =
+      src: Array[Char], offset: Int, length: Int): Unit = {
     throw new ReadOnlyBufferException
+  }
 }
 
 private[nio] object StringCharBuffer {
   private[nio] def wrap(csq: CharSequence, csqOffset: Int, capacity: Int,
       initialPosition: Int, initialLength: Int): CharBuffer = {
-    if (csqOffset < 0 || capacity < 0 || csqOffset+capacity > csq.length)
-      throw new IndexOutOfBoundsException
-    val initialLimit = initialPosition + initialLength
-    if (initialPosition < 0 || initialLength < 0 || initialLimit > capacity)
-      throw new IndexOutOfBoundsException
+    BoundsChecks.checkOffsetCount(csqOffset, capacity, csq.length())
+    val initialLimit = BoundsChecks.checkOffsetCount(initialPosition, initialLength, capacity)
     new StringCharBuffer(capacity, csq, csqOffset,
         initialPosition, initialLimit)
   }

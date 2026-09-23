@@ -10,12 +10,10 @@
  * additional information regarding copyright ownership.
  */
 
-// scalastyle:off line.size.limit
 /*
  * Ported by Alistair Johnson from
  * https://github.com/gwtproject/gwt/blob/master/user/test/com/google/gwt/emultest/java/math/BigIntegerHashCodeTest.java
  */
-// scalastyle:on line.size.limit
 
 package org.scalajs.testsuite.javalib.math
 
@@ -38,7 +36,7 @@ class BigIntegerHashCodeTest {
     }
   }
 
-  @Test def hashCodeIssue2159(): Unit = {
+  @Test def hashCode_Issue2159(): Unit = {
     val a = 936417286865811553L
     val b = 1136802186495971562L
     val c = BigInteger.valueOf(a).add(BigInteger.valueOf(b))

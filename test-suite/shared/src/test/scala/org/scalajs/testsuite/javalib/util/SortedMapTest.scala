@@ -23,45 +23,88 @@ trait SortedMapTest extends MapTest {
 
   def factory: SortedMapFactory
 
-  def testSortedMapApi(): Unit = {
-    testMapApi()
-    should_always_be_sorted()
-    should_return_the_firstKey()
-    should_return_the_lastKey()
-    should_return_a_proper_headMap()
-    should_return_a_proper_tailMap()
-    should_return_a_proper_subMap()
+  @Test def sorted(): Unit = {
+    val m = factory.empty[Int, String]
+    m.putAll(TrivialImmutableMap(1 -> "a", 5 -> "b", 2 -> "c", 3 -> "d", 4 -> "e"))
+
+    assertArrayEquals(Array[AnyRef]("a", "c", "d", "e", "b"), m.values().toArray)
   }
 
-  // TODO: implement tests (when we port the first SortedMap)
-
-  @Test def should_always_be_sorted(): Unit = {
-
+  @Test def firstKey(): Unit = {
+    val m = factory.empty[Int, String]
+    m.put(1000, "a")
+    m.put(10, "b")
+    assertEquals(10, m.firstKey())
   }
 
-  @Test def should_return_the_firstKey(): Unit = {
-
+  @Test def lastKey(): Unit = {
+    val m = factory.empty[Int, String]
+    m.put(1000, "a")
+    m.put(10, "b")
+    assertEquals(1000, m.lastKey())
   }
 
-  @Test def should_return_the_lastKey(): Unit = {
+  val elems = TrivialImmutableMap(1 -> "a", 5 -> "e", 2 -> "b", 3 -> "c", 4 -> "d")
 
+  @Test def headMap(): Unit = {
+    val m = factory.empty[Int, String]
+
+    m.putAll(elems)
+
+    val sm = m.headMap(3)
+    assertEquals(2, sm.size())
+    assertTrue(sm.containsKey(1))
+    assertTrue(sm.containsKey(2))
+
+    assertEquals("a", sm.remove(1))
+    assertFalse(m.containsKey(1))
+
+    assertEquals("b", sm.remove(2))
+    assertFalse(m.containsKey(2))
+
+    assertTrue(sm.isEmpty())
+    assertEquals(3, m.size)
   }
 
-  @Test def should_return_a_proper_headMap(): Unit = {
+  @Test def tailMap(): Unit = {
+    val m = factory.empty[Int, String]
 
+    m.putAll(elems)
+
+    val sm = m.tailMap(4)
+    assertEquals(2, sm.size())
+    assertTrue(sm.containsKey(4))
+    assertTrue(sm.containsKey(5))
+
+    assertEquals("d", sm.remove(4))
+    assertFalse(m.containsKey(4))
+
+    assertEquals("e", sm.remove(5))
+    assertFalse(m.containsKey(5))
+
+    assertTrue(sm.isEmpty())
+    assertEquals(3, m.size)
   }
 
-  @Test def should_return_a_proper_tailMap(): Unit = {
+  @Test def subMap(): Unit = {
+    val m = factory.empty[Int, String]
 
+    m.putAll(elems)
+
+    val sm = m.subMap(2, 4)
+    assertEquals(2, sm.size())
+    assertTrue(sm.containsKey(2))
+    assertTrue(sm.containsKey(3))
+
+    assertEquals("b", sm.remove(2))
+    assertFalse(m.containsKey(2))
+
+    assertEquals("c", sm.remove(3))
+    assertFalse(m.containsKey(3))
+
+    assertTrue(sm.isEmpty())
+    assertEquals(3, m.size)
   }
-
-  @Test def should_return_a_proper_subMap(): Unit = {
-
-  }
-}
-
-object SortedMapFactory {
-  def allFactories: Iterator[SortedMapFactory] = Iterator.empty
 }
 
 trait SortedMapFactory extends MapFactory {

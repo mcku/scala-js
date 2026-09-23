@@ -17,7 +17,7 @@ import org.junit.Assert._
 
 class ThrowablesTest {
 
-  @Test def should_define_all_java_lang_Errors_and_Exceptions(): Unit = {
+  @Test def allJavaLangErrorsAndExceptions(): Unit = {
     new ArithmeticException()
     new ArrayIndexOutOfBoundsException()
     new ArrayStoreException()
@@ -69,17 +69,15 @@ class ThrowablesTest {
     new VirtualMachineError() {}
   }
 
-  @Test def throwable_message_issue_2559(): Unit = {
+  @Test def throwableMessage_Issue2559(): Unit = {
     val t0 = new Throwable
     val t1 = new Throwable("foo")
 
-    def test0(newThrowable: Throwable): Unit = {
+    def test0(newThrowable: Throwable): Unit =
       assertNull(newThrowable.getMessage)
-    }
 
-    def test1(newThrowable: String => Throwable): Unit = {
+    def test1(newThrowable: String => Throwable): Unit =
       assertEquals("foo", newThrowable("foo").getMessage)
-    }
 
     def test2(newThrowable: Throwable => Throwable): Unit = {
       assertEquals(t0.getClass.getName, newThrowable(t0).getMessage)
@@ -100,6 +98,11 @@ class ThrowablesTest {
     test2(new Throwable(_))
     test3(new Throwable(_, _))
 
+    test0(new BootstrapMethodError)
+    test1(new BootstrapMethodError(_))
+    test2(new BootstrapMethodError(_))
+    test3(new BootstrapMethodError(_, _))
+
     test0(new Exception)
     test1(new Exception(_))
     test2(new Exception(_))
@@ -114,6 +117,11 @@ class ThrowablesTest {
     test1(new IllegalStateException(_))
     test2(new IllegalStateException(_))
     test3(new IllegalStateException(_, _))
+
+    test0(new ReflectiveOperationException)
+    test1(new ReflectiveOperationException(_))
+    test2(new ReflectiveOperationException(_))
+    test3(new ReflectiveOperationException(_, _))
 
     test0(new RuntimeException)
     test1(new RuntimeException(_))
@@ -149,9 +157,52 @@ class ThrowablesTest {
     test3(new ExecutionException(_, _))
   }
 
+  @Test def noWritableStackTrace(): Unit = {
+    class NoStackTraceException(msg: String) extends Throwable(msg, null, true, false) {
+
+      override def fillInStackTrace(): Throwable = {
+        fail("NoStackTraceException.fillInStackTrace() must not be called")
+        this
+      }
+    }
+
+    val e = new NoStackTraceException("error")
+    assertEquals(0, e.getStackTrace().length)
+
+    e.setStackTrace(Array(new StackTraceElement("class", "method", "file", 0)))
+    assertEquals(0, e.getStackTrace().length)
+  }
+
+  @Test def suppression(): Unit = {
+    val e = new Exception("error")
+    assertEquals(0, e.getSuppressed().length)
+
+    val suppressed1 = new IllegalArgumentException("suppressed 1")
+    val suppressed2 = new UnsupportedOperationException("suppressed 2")
+
+    // There is no ordering guarantee in suppressed exceptions, so we compare sets
+
+    e.addSuppressed(suppressed1)
+    assertEquals(Set(suppressed1), e.getSuppressed().toSet)
+
+    e.addSuppressed(suppressed2)
+    assertEquals(Set(suppressed1, suppressed2), e.getSuppressed().toSet)
+  }
+
+  @Test def noSuppression(): Unit = {
+    class NoSuppressionException(msg: String) extends Throwable(msg, null, false, true)
+
+    val e = new NoSuppressionException("error")
+    assertEquals(0, e.getSuppressed().length)
+
+    e.addSuppressed(new Exception("suppressed"))
+    assertEquals(0, e.getSuppressed().length)
+  }
+
   @Test def throwableStillHasMethodsOfObject(): Unit = {
     @noinline
-    def callEquals(a: Any, b: Any): Boolean = a.equals(b)
+    def callEquals(a: Any, b: Any): Boolean =
+      a.asInstanceOf[AnyRef].equals(b.asInstanceOf[AnyRef])
 
     val t = new Throwable("foo")
     assertTrue(callEquals(t, t))
@@ -197,9 +248,22 @@ class ThrowablesTest {
     assertMessageNoCause("1.5", new AssertionError(1.5f))
     assertMessageNoCause("2.5", new AssertionError(2.5))
 
-    val th = new RuntimeException("kaboom")
-    val e = new AssertionError(th)
-    assertEquals(th.toString, e.getMessage)
-    assertSame(th, e.getCause)
+    val th1 = new RuntimeException("kaboom")
+    val e1 = new AssertionError(th1)
+    assertEquals(th1.toString, e1.getMessage)
+    assertSame(th1, e1.getCause)
+
+    val th2 = new RuntimeException("kaboom")
+    val e2 = new AssertionError("boom", th2)
+    assertEquals("boom", e2.getMessage)
+    assertSame(th2, e2.getCause)
+  }
+
+  @Test def ioobeConstructorsWithIndex(): Unit = {
+    val e1 = new IndexOutOfBoundsException(542)
+    assertTrue(e1.getMessage(), e1.getMessage().contains("542"))
+
+    val e2 = new IndexOutOfBoundsException(1234L)
+    assertTrue(e2.getMessage(), e2.getMessage().contains("1234"))
   }
 }

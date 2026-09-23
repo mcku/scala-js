@@ -10,31 +10,43 @@
  * additional information regarding copyright ownership.
  */
 
+/*
+  scalafmt: {
+    newlines.configStyle.fallBack.prefer = false
+    runner.optimizer.callSite.minCount = 1000
+  }
+ */
+
 package org.scalajs.sbtplugin
 
 import scala.language.implicitConversions
 
 import sbt._
 import sbt.Keys._
+import xsbti.FileConverter
 
 import org.scalajs.ir.ScalaJSVersions
 
-import org.scalajs.linker._
+import org.scalajs.logging.{Logger => SJSLogger}
+
+import org.scalajs.linker.interface._
 
 import org.scalajs.jsenv.{Input, JSEnv}
 import org.scalajs.jsenv.nodejs.NodeJSEnv
 
+import PluginCompat.DefOps
+
 object ScalaJSPlugin extends AutoPlugin {
   override def requires: Plugins = plugins.JvmPlugin
 
-  object autoImport {
+  object autoImport extends JsonFormats {
     import KeyRanks._
 
     /** The current version of the Scala.js sbt plugin and tool chain. */
     val scalaJSVersion = ScalaJSVersions.current
 
-    /** Declares [[sbt.Tags.Tag Tag]]s which may be used to limit the
-     *  concurrency of build tasks.
+    /** Declares `Tag`s which may be used to limit the concurrency of build
+     *  tasks.
      *
      *  For example, the following snippet can be used to limit the
      *  number of linking tasks which are able to run at once:
@@ -44,7 +56,8 @@ object ScalaJSPlugin extends AutoPlugin {
      *  }}}
      */
     object ScalaJSTags {
-      /** This tag is applied to the [[fastOptJS]] and [[fullOptJS]] tasks. */
+
+      /** This tag is applied to the [[fastLinkJS]] and [[fullLinkJS]] tasks. */
       val Link = Tags.Tag("scalajs-link")
     }
 
@@ -53,27 +66,51 @@ object ScalaJSPlugin extends AutoPlugin {
     val FullOptStage = Stage.FullOpt
 
     // ModuleKind
-    val ModuleKind = org.scalajs.linker.ModuleKind
+    val ModuleKind = org.scalajs.linker.interface.ModuleKind
 
     // All our public-facing keys
 
-    val scalaJSIRCache = SettingKey[IRFileCache.Cache](
-        "scalaJSIRCache",
-        "Scala.js internal: Task to access a cache.", KeyRanks.Invisible)
-
-    /** Persisted instance of the Scala.js linker.
+    /** A cache box for the IR found on a classpath.
      *
-     *  This setting must be scoped per project, configuration, and stage task
-     *  (`fastOptJS` or `fullOptJS`).
+     *  @note
+     *    **Unstable API**: this API is subject to backward incompatible
+     *    changes in future minor versions of Scala.js.
+     */
+    val scalaJSIRCacheBox = SettingKey[CacheBox[IRFileCache.Cache]](
+        "scalaJSIRCacheBox",
+        "Scala.js internal: CacheBox for a cache.", KeyRanks.Invisible)
+
+    /** A cache box for the global IR cache.
+     *
+     *  @note
+     *    **Unstable API**: this API is subject to backward incompatible
+     *    changes in future minor versions of Scala.js.
+     */
+    val scalaJSGlobalIRCacheBox = SettingKey[CacheBox[IRFileCache]](
+        "scalaJSGlobalIRCacheBox",
+        "Scala.js internal: CacheBox for the global cache.", KeyRanks.Invisible)
+
+    val scalaJSGlobalIRCacheConfig = SettingKey[IRFileCacheConfig](
+        "scalaJSGlobalIRCacheConfig",
+        "Configuration for the global IR cache.", CSetting)
+
+    val scalaJSGlobalIRCache = TaskKey[IRFileCache](
+        "scalaJSGlobalIRCache",
+        "Scala.js internal: Access task for a the global IR cache")
+
+    /** Instance of the Scala.js linker.
+     *
+     *  This task must be scoped per project, configuration, and stage task
+     *  (`fastLinkJS` or `fullLinkJS`).
      *
      *  If a task uses the `link` method of the `ClearableLinker`, it must be
      *  protected from running in parallel with any other task doing the same
      *  thing, by tagging the task with the value of [[usesScalaJSLinkerTag]]
      *  in the same scope. The typical shape of such a task will be:
      *  {{{
-     *  myTask in (Compile, fastOptJS) := Def.taskDyn {
-     *    val linker = (scalaJSLinker in (Compile, fastOptJS)).value
-     *    val usesLinkerTag = (usesScalaJSLinkerTag in (Compile, fastOptJS)).value
+     *  Compile / fastLinkJS / myTask := Def.taskDyn {
+     *    val linker = (Compile / fastLinkJS / scalaJSLinker).value
+     *    val usesLinkerTag = (Compile / fastLinkJS / usesScalaJSLinkerTag).value
      *    // Read the `.value` of other settings and tasks here
      *
      *    Def.task {
@@ -82,9 +119,54 @@ object ScalaJSPlugin extends AutoPlugin {
      *    }.tag(usesLinkerTag)
      *  }.value,
      *  }}}
+     *
+     *  Do not set this value. Instead, set [[scalaJSLinkerImpl]]. This will
+     *  automatically set up the correct caching behavior.
+     *
+     *  @note
+     *    **Writing to this key is an unstable API**: the caching contracts
+     *    are subject to backward incompatible changes in future minor versions
+     *    of Scala.js.
      */
-    val scalaJSLinker = SettingKey[ClearableLinker]("scalaJSLinker",
-        "Persisted instance of the Scala.js linker", KeyRanks.Invisible)
+    val scalaJSLinker = TaskKey[ClearableLinker]("scalaJSLinker",
+        "Access task for a Scala.js linker. Use this if you want to use the linker.",
+        KeyRanks.Invisible)
+
+    /** Implementation of the Scala.js linker to use.
+     *
+     *  By default, this is reflectively loading the standard linker
+     *  implementation. Users may set this to provide custom linker
+     *  implementations. In that case, they *must* store the linker impl in
+     *  [[scalaJSLinkerImplBox]].
+     *
+     *  @note
+     *    **Unstable API**: this API is subject to backward incompatible
+     *    changes in future minor versions of Scala.js.
+     */
+    val scalaJSLinkerImpl = TaskKey[LinkerImpl]("scalaJSLinkerImpl",
+        "Implementation of the Scala.js linker to use: By default, this is " +
+        "reflectively loading the standard linker implementation. Users may " +
+        "set this to provide custom linker implementations. In that case, " +
+        "they *must* store the linker impl in scalaJSLinkerImplBox.",
+        KeyRanks.Invisible)
+
+    /** A cache box for the [[scalaJSLinkerImpl]].
+     *
+     *  @note
+     *    **Unstable API**: this API is subject to backward incompatible
+     *    changes in future minor versions of Scala.js.
+     */
+    val scalaJSLinkerImplBox = SettingKey[CacheBox[LinkerImpl]]("scalaJSLinkerImplBox",
+        "CacheBox for scalaJSLinkerImpl", KeyRanks.Invisible)
+
+    /** A cache box for [[scalaJSLinker]].
+     *
+     *  @note
+     *    **Unstable API**: this API is subject to backward incompatible
+     *    changes in future minor versions of Scala.js.
+     */
+    val scalaJSLinkerBox = SettingKey[CacheBox[ClearableLinker]]("scalaJSLinkerBox",
+        "Scala.js internal: CacheBox for a Scala.js linker", KeyRanks.Invisible)
 
     /** A tag to indicate that a task is using the value of [[scalaJSLinker]]
      *  and its `link` method.
@@ -100,10 +182,23 @@ object ScalaJSPlugin extends AutoPlugin {
         KeyRanks.Invisible)
 
     val fastOptJS = TaskKey[Attributed[File]]("fastOptJS",
-        "Quickly link all compiled JavaScript into a single file", APlusTask)
+        "Deprecated: Use fastLinkJS instead", KeyRanks.Invisible)
 
     val fullOptJS = TaskKey[Attributed[File]]("fullOptJS",
-        "Link all compiled JavaScript into a single file and fully optimize", APlusTask)
+        "Deprecated: Use fullLinkJS instead", KeyRanks.Invisible)
+
+    val fastLinkJS = TaskKey[Attributed[Report]]("fastLinkJS",
+        "Quickly link all compiled JavaScript", APlusTask)
+
+    val fullLinkJS = TaskKey[Attributed[Report]]("fullLinkJS",
+        "Link all compiled JavaScript and fully optimize", APlusTask)
+
+    val fastLinkJSOutput = TaskKey[File]("fastLinkJSOutput",
+        "Quickly link all compiled JavaScript and return the output directory", AMinusTask)
+
+    val fullLinkJSOutput = TaskKey[File]("fullLinkJSOutput",
+        "Link all compiled JavaScript with full optimizations and return the output directory",
+        AMinusTask)
 
     val testHtml = TaskKey[Attributed[File]]("testHtml",
         "Create an HTML test runner. Honors `scalaJSStage`.", AMinusTask)
@@ -114,6 +209,11 @@ object ScalaJSPlugin extends AutoPlugin {
     val scalaJSModuleInitializers = TaskKey[Seq[ModuleInitializer]]("scalaJSModuleInitializers",
         "Module initializers of the Scala.js application, to be called when it starts.",
         AMinusTask)
+
+    val scalaJSModuleInitializersFingerprints = TaskKey[Seq[String]](
+        "scalaJSModuleInitializersFingerprints",
+        "An internal task used to track changes to the `scalaJSModuleInitializers` setting",
+        KeyRanks.Invisible)
 
     val scalaJSUseMainModuleInitializer = SettingKey[Boolean]("scalaJSUseMainModuleInitializer",
         "If true, adds the `mainClass` as a module initializer of the Scala.js module",
@@ -129,17 +229,25 @@ object ScalaJSPlugin extends AutoPlugin {
         "`scalaJSUseMainModuleInitializer` is true",
         CTask)
 
-    val scalaJSLinkerConfig = SettingKey[StandardLinker.Config](
+    val scalaJSLinkerConfig = SettingKey[StandardConfig](
         "scalaJSLinkerConfig",
         "Configuration of the Scala.js linker",
         BPlusSetting)
 
+    val scalaJSLinkerConfigFingerprint = TaskKey[String]("scalaJSLinkerConfigFingerprint",
+        "An internal task used to track changes to the `scalaJSLinkerConfig` setting",
+        KeyRanks.Invisible)
+
     val scalaJSStage = SettingKey[Stage]("scalaJSStage",
         "The optimization stage at which run and test are executed", APlusSetting)
 
+    val scalaJSLinkerResult = TaskKey[Attributed[Report]]("scalaJSLinkerResult",
+        "Result of the Scala.js linker. This is the result of fastLinkJS or fullLinkJS, " +
+        "depending on the stage.",
+        DTask)
+
     val scalaJSLinkedFile = TaskKey[Attributed[File]]("scalaJSLinkedFile",
-        "Linked Scala.js file. This is the result of fastOptJS or fullOptJS, " +
-        "depending on the stage.", DTask)
+        "Deprecated: Use scalaJSLinkerResult instead", KeyRanks.Invisible)
 
     val jsEnv = TaskKey[JSEnv]("jsEnv",
         "The JavaScript environment in which to run and test Scala.js applications.",
@@ -155,9 +263,9 @@ object ScalaJSPlugin extends AutoPlugin {
         "Prints the content of a .sjsir file in human readable form.",
         CTask)
 
-    val jsEnvInput = TaskKey[Input](
+    val jsEnvInput = TaskKey[Seq[Input]](
         "jsEnvInput",
-        "The JSEnv.Input to give to the jsEnv for tasks such as `run` and `test`",
+        "The JSEnv.Inputs to give to the jsEnv for tasks such as `run` and `test`",
         BTask)
 
     val scalaJSSourceFiles = AttributeKey[Seq[File]]("scalaJSSourceFiles",
@@ -167,32 +275,123 @@ object ScalaJSPlugin extends AutoPlugin {
     val scalaJSSourceMap = AttributeKey[File]("scalaJSSourceMap",
         "Source map file attached to an Attributed .js file.",
         BSetting)
+
+    @deprecated(
+        "scalaJSModuleKind will not be available in sbt 2.x. " +
+        "Use the linker configuration to determine the module kind instead.",
+        "1.21.0")
+    val scalaJSModuleKind = AttributeKey[ModuleKind]("scalaJSModuleKind",
+        "ModuleKind attached to an Attributed .js file.",
+        BSetting)
+
+    val scalaJSTestHTMLArtifactDirectory = SettingKey[File]("scalaJSTestHTMLArtifactDirectory",
+        "Directory for artifacts produced by testHtml.",
+        BSetting)
+
+    val scalaJSLinkerOutputDirectory = SettingKey[File]("scalaJSLinkerOutputDirectory",
+        "Directory for linker output.",
+        BSetting)
+
+    /** Factory for logger (used to intercept timing in Scala.js core)
+     *
+     *  @note
+     *    **Unstable API**: this API is subject to backward incompatible
+     *    changes in future minor versions of Scala.js.
+     */
+    val scalaJSLoggerFactory = SettingKey[sbt.Logger => SJSLogger]("scalaJSLoggerFactory",
+        "Factory for logger",
+        KeyRanks.Invisible)
   }
 
   import autoImport._
-
-  /** Logs the current statistics about the global IR cache. */
-  def logIRCacheStats(logger: Logger): Unit = {
-    import ScalaJSPluginInternal.globalIRCache
-    logger.debug("Global IR cache stats: " + globalIRCache.stats.logLine)
-  }
 
   override def globalSettings: Seq[Setting[_]] = {
     Seq(
         scalaJSStage := Stage.FastOpt,
 
-        scalaJSLinkerConfig := StandardLinker.Config(),
+        scalaJSLinkerConfig := StandardConfig(),
 
-        jsEnv := new NodeJSEnv(),
+        scalaJSLinkerImpl / dependencyResolution := Def.uncached {
+          val log = streams.value.log
+
+          /* We first try to use the dependencyResolution of the root project
+           * of this build. In a typical build, this will always have a value.
+           * However, if someone does something weird and has a build whose
+           * root project does not have the built-in sbt.plugins.IvyPlugin,
+           * `dependencyResolution` won't be set, and this will be None.
+           */
+          val rootDependencyResolution =
+            (LocalRootProject / dependencyResolution).?.value
+
+          /* In case the above is None, fall back to something reasonable, and
+           * warn.
+           */
+          rootDependencyResolution.getOrElse {
+            log.warn(
+                "Falling back on a default `dependencyResolution` to " +
+                "resolve the Scala.js linker because `dependencyResolution` " +
+                "is not set in the root project of this build.")
+            log.warn(
+                "Consider explicitly setting " +
+                "`Global / scalaJSLinkerImpl / dependencyResolution` " +
+                "instead of relying on the default.")
+
+            PluginCompat.dependencyResolutionValue(dependencyResolution).value
+          }
+        },
+
+        scalaJSLinkerImplBox := new CacheBox,
+
+        scalaJSLinkerImpl / fullClasspath := Def.uncached {
+          implicit val fc: FileConverter = (ThisBuild / fileConverter).value
+          val s = streams.value
+          val log = s.log
+          val retrieveDir = s.cacheDirectory / "scalajs-linker" / scalaJSVersion
+          val lm = (scalaJSLinkerImpl / dependencyResolution).value
+          lm.retrieve(
+              "org.scala-js" % ("scalajs-linker" + PluginCompat.linkerScalaSuffix) % scalaJSVersion,
+              scalaModuleInfo = None, retrieveDir, log)
+            .fold(w => throw w.resolveException, files => PluginCompat.toAttributedFiles(files.toSeq))
+        },
+
+        scalaJSLinkerImpl := Def.uncached {
+          implicit val fc: FileConverter = (ThisBuild / fileConverter).value
+          val linkerImplClasspath = (scalaJSLinkerImpl / fullClasspath).value
+          scalaJSLinkerImplBox.value.ensure {
+            LinkerImpl.reflect(PluginCompat.toFiles(linkerImplClasspath))
+          }
+        },
+
+        scalaJSGlobalIRCacheConfig := IRFileCacheConfig(),
+
+        scalaJSGlobalIRCacheBox := new CacheBox,
+
+        scalaJSGlobalIRCache := Def.uncached {
+          val linkerImpl = scalaJSLinkerImpl.value
+          val config = scalaJSGlobalIRCacheConfig.value
+          scalaJSGlobalIRCacheBox.value
+            .ensure(linkerImpl.irFileCache(config))
+        },
+
+        jsEnv := Def.uncached {
+          new NodeJSEnv()
+        },
+
+        scalaJSLoggerFactory := ((logger: Logger) => Loggers.sbtLogger2ToolsLogger(logger)),
 
         // Clear the IR cache stats every time a sequence of tasks ends
         onComplete := {
           val prev = onComplete.value
+          val globalIRCacheBox = scalaJSGlobalIRCacheBox.value
 
           { () =>
             prev()
             ScalaJSPluginInternal.closeAllTestAdapters()
-            ScalaJSPluginInternal.globalIRCache.clearStats()
+
+            for (irCache <- globalIRCacheBox) {
+              sLog.value.debug("Global IR cache stats: " + irCache.stats.logLine)
+              irCache.clearStats()
+            }
           }
         },
 

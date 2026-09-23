@@ -13,7 +13,8 @@
 package java.util
 
 abstract private[util] class AbstractRandomAccessListIterator[E](private var i: Int,
-    start: Int, protected var end: Int) extends ListIterator[E] with SizeChangeEvent {
+    start: Int, protected var end: Int)
+    extends ListIterator[E] with SizeChangeEvent {
 
   private var last = -1
 
@@ -21,6 +22,9 @@ abstract private[util] class AbstractRandomAccessListIterator[E](private var i: 
     i < end
 
   def next(): E = {
+    if (!hasNext())
+      throw new NoSuchElementException()
+
     last = i
     i += 1
     get(last)
@@ -30,6 +34,9 @@ abstract private[util] class AbstractRandomAccessListIterator[E](private var i: 
     start < i
 
   def previous(): E = {
+    if (!hasPrevious())
+      throw new NoSuchElementException()
+
     i -= 1
     last = i
     get(last)
@@ -39,7 +46,7 @@ abstract private[util] class AbstractRandomAccessListIterator[E](private var i: 
 
   def previousIndex(): Int = i - 1
 
-  def remove(): Unit = {
+  override def remove(): Unit = {
     checkThatHasLast()
     remove(last)
     if (last < i)

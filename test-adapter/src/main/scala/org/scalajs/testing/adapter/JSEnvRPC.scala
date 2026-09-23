@@ -15,14 +15,41 @@ package org.scalajs.testing.adapter
 import scala.concurrent.ExecutionContext
 
 import org.scalajs.jsenv._
+import org.scalajs.logging.Logger
 import org.scalajs.testing.common._
 
 /** RPC Core for use with a [[JSEnv]]. */
 private[adapter] final class JSEnvRPC(
-    jsenv: JSEnv, input: Input, config: RunConfig)(
-    implicit ec: ExecutionContext) extends RPCCore {
+    jsenv: JSEnv, input: Seq[Input], logger: Logger, env: Map[String, String])(
+    implicit ec: ExecutionContext)
+    extends RPCCore {
 
-  private val run = jsenv.startWithCom(input, config, handleMessage)
+  // lazy for initialization checking (cycle through handleMessage -> send -> run)
+  private lazy val run: JSComRun = {
+    /* #4560 Explicitly redirect out/err to System.out/System.err, instead of
+     * relying on `inheritOut` and `inheritErr`, so that streams installed with
+     * `System.setOut` and `System.setErr` are always taken into account.
+     * sbt installs such alternative outputs when it runs in server mode.
+     *
+     * We never wait for these threads to finish. In theory, tasks that use the
+     * test adapter may complete before all output has been transferred to
+     * `System.out` and `System.err`.
+     */
+    val runConfig = RunConfig()
+      .withLogger(logger)
+      .withEnv(env)
+      .withInheritOut(false)
+      .withInheritErr(false)
+      .withOnOutputStream { (out, err) =>
+        out.foreach(o => PipeOutputThread.start(o, System.out))
+        err.foreach(e => PipeOutputThread.start(e, System.err))
+      }
+
+    jsenv.startWithCom(input, runConfig, handleMessage)
+  }
+
+  // Immediately force, though, otherwise the JS env won't start
+  run
 
   /* Once the com closes, ensure all still pending calls are failing.
    * This can be necessary, if the JSEnv terminates unexpectedly.
@@ -34,8 +61,7 @@ private[adapter] final class JSEnvRPC(
    * completed (and it is an explicit guarantee that `handleMessage` is not
    * called anymore after that).
    */
-  run.future.onComplete(
-      t => close(JSEnvRPC.RunTerminatedException(t.failed.toOption)))
+  run.future.onComplete(t => close(JSEnvRPC.RunTerminatedException(t.failed.toOption)))
 
   override protected def send(msg: String): Unit = run.send(msg)
 
@@ -52,6 +78,7 @@ private[adapter] final class JSEnvRPC(
 }
 
 private[adapter] object JSEnvRPC {
+  // TODO Switch back .getOrElse(null) to .orNull when we upgrade Scala 3 to 3.9+
   final case class RunTerminatedException(c: Option[Throwable])
-      extends Exception(null, c.orNull)
+      extends Exception(null, c.getOrElse(null))
 }

@@ -13,8 +13,10 @@
 package org.scalajs.testsuite.library
 
 import scala.scalajs.LinkingInfo
+import scala.scalajs.LinkingInfo.{ESVersion, ModuleKind}
 
 import org.junit.Assert._
+import org.junit.Assume._
 import org.junit.Test
 
 import org.scalajs.testsuite.utils.Platform
@@ -26,18 +28,57 @@ class LinkingInfoTest {
   @Test def developmentMode(): Unit =
     assertEquals(!Platform.isInProductionMode, LinkingInfo.developmentMode)
 
+  @Test def esVersion(): Unit =
+    assertEquals(Platform.assumedESVersion, LinkingInfo.esVersion)
+
   @Test def assumingES6(): Unit =
-    assertEquals(Platform.assumeES2015, LinkingInfo.assumingES6)
+    assertEquals(Platform.assumedESVersion >= ESVersion.ES2015, LinkingInfo.assumingES6)
 
-  @Test def runtime(): Unit = {
-    import scala.scalajs.runtime.{linkingInfo, LinkingInfo}
+  @Test def useECMAScript2015Semantics(): Unit =
+    assertEquals(Platform.useECMAScript2015Semantics, LinkingInfo.useECMAScript2015Semantics)
 
-    def isCompliant(f: LinkingInfo.Semantics => Int) =
-      f(linkingInfo.semantics) == LinkingInfo.Semantics.Compliant
+  @Test def moduleKind(): Unit = {
+    if (Platform.isNoModule)
+      assertEquals(ModuleKind.NoModule, LinkingInfo.moduleKind)
+    else if (Platform.isESModule)
+      assertEquals(ModuleKind.ESModule, LinkingInfo.moduleKind)
+    else
+      assertEquals(ModuleKind.CommonJSModule, LinkingInfo.moduleKind)
+  }
 
-    assertEquals(Platform.hasCompliantAsInstanceOfs, isCompliant(_.asInstanceOfs))
-    assertEquals(Platform.hasCompliantArrayIndexOutOfBounds, isCompliant(_.arrayIndexOutOfBounds))
-    assertEquals(Platform.hasCompliantModuleInit, isCompliant(_.moduleInit))
-    assertEquals(Platform.hasStrictFloats, linkingInfo.semantics.strictFloats)
+  @Test def isWebAssembly(): Unit =
+    assertEquals(Platform.executingInWebAssembly, LinkingInfo.isWebAssembly)
+
+  @Test def esVersionConstants(): Unit = {
+    // The numeric values behind the constants are meaningful, so we test them.
+    assertEquals(5, ESVersion.ES5_1)
+    assertEquals(6, ESVersion.ES2015)
+    assertEquals(7, ESVersion.ES2016)
+    assertEquals(8, ESVersion.ES2017)
+    assertEquals(9, ESVersion.ES2018)
+    assertEquals(10, ESVersion.ES2019)
+    assertEquals(11, ESVersion.ES2020)
+    assertEquals(12, ESVersion.ES2021)
+    assertEquals(13, ESVersion.ES2022)
+    assertEquals(14, ESVersion.ES2023)
+    assertEquals(15, ESVersion.ES2024)
+    assertEquals(16, ESVersion.ES2025)
+    assertEquals(17, ESVersion.ES2026)
+  }
+
+  @Test def moduleKindConstants(): Unit = {
+    // The numeric values behind the constants should stay stable forever, so we test them.
+    assertEquals(1, ModuleKind.NoModule)
+    assertEquals(2, ModuleKind.ESModule)
+    assertEquals(3, ModuleKind.CommonJSModule)
+  }
+
+  @Test def isolatedJSLinkingInfo(): Unit = {
+    val linkingInfo = scala.scalajs.runtime.linkingInfo
+    assertEquals(Platform.isInProductionMode, linkingInfo.productionMode)
+    assertEquals(Platform.assumedESVersion, linkingInfo.esVersion)
+    assertEquals(Platform.assumedESVersion >= ESVersion.ES2015, linkingInfo.assumingES6)
+    assertEquals(Platform.executingInWebAssembly, linkingInfo.isWebAssembly)
+    assertEquals(Platform.assumedESVersion, linkingInfo.esVersion)
   }
 }

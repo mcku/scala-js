@@ -17,23 +17,27 @@ import scala.concurrent._
 import org.junit.Test
 import org.junit.Assert._
 
-import org.scalajs.ir
 import org.scalajs.ir.ClassKind
-import org.scalajs.ir.Definitions._
+import org.scalajs.ir.EntryPointsInfo
+import org.scalajs.ir.Names._
 import org.scalajs.ir.Trees._
 import org.scalajs.ir.Types._
+import org.scalajs.ir.WellKnownNames._
 
 import org.scalajs.junit.async._
 
 import org.scalajs.logging.NullLogger
 import org.scalajs.linker._
 import org.scalajs.linker.analyzer._
+import org.scalajs.linker.interface._
 import org.scalajs.linker.standard._
+import org.scalajs.linker.standard.ModuleSet.ModuleID
 
 import Analysis._
 
 import org.scalajs.linker.testutils._
 import org.scalajs.linker.testutils.TestIRBuilder._
+import org.scalajs.linker.testutils.LinkingUtils._
 
 class AnalyzerTest {
   import scala.concurrent.ExecutionContext.Implicits.global
@@ -47,165 +51,176 @@ class AnalyzerTest {
 
   @Test
   def missingJavaLangObject(): AsyncResult = await {
-    val analysis = computeAnalysis(Nil, stdlib = None)
-    assertExactErrors(analysis, MissingJavaLangObjectClass(fromAnalyzer))
-  }
-
-  @Test
-  def invalidJavaLangObject(): AsyncResult = await {
-    val invalidJLObjectDefs = Seq(
-        // j.l.Object cannot have a super class
-        classDef(ObjectClass, superClass = Some("Lparent")),
-        // j.l.Object must have kind == ClassKind.Class
-        classDef(ObjectClass, kind = ClassKind.ModuleClass),
-        // j.l.Object cannot extend any interface
-        classDef(ObjectClass, interfaces = List("Lparent"))
-    )
-
-    Future.traverse(invalidJLObjectDefs) { jlObjectDef =>
-      val analysis = computeAnalysis(Seq(jlObjectDef), stdlib = None)
-      assertExactErrors(analysis,
-          InvalidJavaLangObjectClass(fromAnalyzer))
+    val analysis = computeAnalysis(Nil, stdlib = TestIRRepo.empty)
+    assertContainsError("MissingClass(jlObject)", analysis) {
+      case MissingClass(ClsInfo(name), fromAnalyzer) =>
+        name == ObjectClass.nameString
     }
   }
 
   @Test
+  def missingJavaLangObjectButOthers(): AsyncResult = await {
+    val classDefs = Seq(classDef("A", superClass = Some(ObjectClass)))
+
+    val analysis = computeAnalysis(classDefs,
+        reqsFactory.classData("A"), stdlib = TestIRRepo.empty)
+
+    assertContainsError("MissingClass(jlObject)", analysis) {
+      case MissingClass(ClsInfo(name), fromAnalyzer) =>
+        name == ObjectClass.nameString
+    }
+  }
+
+  /* Note about inheritance cycles:
+   * We do not have a guarantee about the starting point of the cycle that is
+   * detected. In fact, we don't even have a guarantee that only one cycle is
+   * detected. We merely have a guarantee that at least one cycle is detected.
+   *
+   * Therefore, all the tests below need to allow all versions of the cycle.
+   */
+
+  @Test
   def cycleInInheritanceChainThroughParentClasses(): AsyncResult = await {
     val classDefs = Seq(
-        classDef("LA", superClass = Some("LB")),
-        classDef("LB", superClass = Some("LA"))
+      classDef("A", superClass = Some("B")),
+      classDef("B", superClass = Some("A"))
     )
 
-    val analysis = computeAnalysis(classDefs, reqsFactory.classData("LA"))
+    val analysis = computeAnalysis(classDefs, reqsFactory.classData("A"))
 
-    assertContainsError("CycleInInheritanceChain(LA, LB)", analysis) {
-      case CycleInInheritanceChain(List("LA", "LB"), `fromAnalyzer`) => true
+    assertContainsError("CycleInInheritanceChain(A, B)", analysis) {
+      case CycleInInheritanceChain(List(ClsName("A"), ClsName("B")), `fromAnalyzer`) => true
+      case CycleInInheritanceChain(List(ClsName("B"), ClsName("A")), `fromAnalyzer`) => true
     }
   }
 
   @Test
   def cycleInInheritanceChainThroughInterfaces(): AsyncResult = await {
     val classDefs = Seq(
-        classDef("LA", superClass = Some("LB")),
-        classDef("LB", superClass = Some(ObjectClass), interfaces = List("LA"))
+      classDef("A", superClass = Some("B")),
+      classDef("B", superClass = Some(ObjectClass), interfaces = List("A"))
     )
 
-    val analysis = computeAnalysis(classDefs, reqsFactory.classData("LA"))
+    val analysis = computeAnalysis(classDefs, reqsFactory.classData("A"))
 
-    assertContainsError("CycleInInheritanceChain(LA, LB)", analysis) {
-      case CycleInInheritanceChain(List("LA", "LB"), `fromAnalyzer`) => true
+    assertContainsError("CycleInInheritanceChain(A, B)", analysis) {
+      case CycleInInheritanceChain(List(ClsName("A"), ClsName("B")), `fromAnalyzer`) => true
+      case CycleInInheritanceChain(List(ClsName("B"), ClsName("A")), `fromAnalyzer`) => true
     }
   }
 
   @Test
   def bigCycleInInheritanceChain(): AsyncResult = await {
     val classDefs = Seq(
-        classDef("LA", superClass = Some("LB")),
-        classDef("LB", superClass = Some("LC")),
+      classDef("A", superClass = Some("B")),
+      classDef("B", superClass = Some("C")),
 
-        // Start of cycle.
-        classDef("LC", superClass = Some("LD")),
-        classDef("LD", superClass = Some("LE")),
-        classDef("LE", superClass = Some("LC"))
+      // Start of cycle.
+      classDef("C", superClass = Some("D")),
+      classDef("D", superClass = Some("E")),
+      classDef("E", superClass = Some("C"))
     )
 
-    val analysis = computeAnalysis(classDefs, reqsFactory.classData("LA"))
+    val analysis = computeAnalysis(classDefs, reqsFactory.classData("A"))
 
-    assertContainsError("CycleInInheritanceChain(LB, LC, LD)", analysis) {
-      case CycleInInheritanceChain(List("LC", "LD", "LE"), `fromAnalyzer`) => true
+    assertContainsError("CycleInInheritanceChain(C, D, E)", analysis) {
+      case CycleInInheritanceChain(
+              List(ClsName("C"), ClsName("D"), ClsName("E")), `fromAnalyzer`) => true
+      case CycleInInheritanceChain(
+              List(ClsName("D"), ClsName("E"), ClsName("C")), `fromAnalyzer`) => true
+      case CycleInInheritanceChain(
+              List(ClsName("E"), ClsName("C"), ClsName("D")), `fromAnalyzer`) => true
     }
   }
 
   @Test
   def missingClassDirect(): AsyncResult = await {
-    val analysis = computeAnalysis(Nil, reqsFactory.classData("LA"))
+    val analysis = computeAnalysis(Nil, reqsFactory.classData("A"))
 
-    assertContainsError("MissingClass(LA)", analysis) {
-      case MissingClass(ClsInfo("LA"), `fromUnitTest`) => true
+    assertContainsError("MissingClass(A)", analysis) {
+      case MissingClass(ClsInfo("A"), `fromUnitTest`) => true
     }
   }
 
   @Test
   def missingClassParent(): AsyncResult = await {
     val classDefs = Seq(
-        classDef("LA", superClass = Some("LB"))
+      classDef("A", superClass = Some("B"))
     )
 
-    val analysis = computeAnalysis(classDefs, reqsFactory.classData("LA"))
+    val analysis = computeAnalysis(classDefs, reqsFactory.classData("A"))
 
-    assertContainsError("MissingClass(LB)", analysis) {
-      case MissingClass(ClsInfo("LB"), FromClass(ClsInfo("LA"))) => true
+    assertContainsError("MissingClass(B)", analysis) {
+      case MissingClass(ClsInfo("B"), FromClass(ClsInfo("A"))) => true
     }
   }
 
   @Test
-  def missingSuperClass(): AsyncResult = await {
-    val kinds = Seq(
-        ClassKind.Class,
-        ClassKind.ModuleClass,
-        ClassKind.HijackedClass,
-        ClassKind.JSClass,
-        ClassKind.JSModuleClass,
-        ClassKind.NativeJSClass,
-        ClassKind.NativeJSModuleClass
+  def missingClassParentSynthesizingConstructorPlusReflectiveCall_Issue4865(): AsyncResult = await {
+    val classDefs = Seq(
+      classDef("A", superClass = Some("B"),
+          methods = List(trivialCtor("A", parentClassName = "B")))
     )
 
-    Future.traverse(kinds) { kind =>
-      val classDefs = Seq(
-          classDef("LA", kind = kind, memberDefs = List(trivialCtor("LA")))
-      )
+    val requirements = {
+      reqsFactory.instantiateClass("A", NoArgConstructorName) ++
+      reqsFactory.callMethod(ObjectClass, MethodName.reflectiveProxy("foo", Nil))
+    }
 
-      val analysis = computeAnalysis(classDefs,
-          reqsFactory.instantiateClass("LA", "init___"))
+    val analysis = computeAnalysis(classDefs, requirements)
 
-      assertContainsError("MissingSuperClass(LA)", analysis) {
-        case MissingSuperClass(ClsInfo("LA"), FromClass(ClsInfo("LA"))) => true
-      }
+    assertContainsError("MissingClass(B)", analysis) {
+      case MissingClass(ClsInfo("B"), FromClass(ClsInfo("A"))) => true
     }
   }
 
   @Test
   def invalidSuperClass(): AsyncResult = await {
     val kindsSub = Seq(
-        ClassKind.Class,
-        ClassKind.ModuleClass,
-        ClassKind.HijackedClass,
-        ClassKind.Interface,
-        ClassKind.JSClass,
-        ClassKind.JSModuleClass,
-        ClassKind.NativeJSClass,
-        ClassKind.NativeJSModuleClass,
-        ClassKind.AbstractJSType
+      ClassKind.Class,
+      ClassKind.ModuleClass,
+      ClassKind.JSClass,
+      ClassKind.JSModuleClass,
+      ClassKind.NativeJSClass,
+      ClassKind.NativeJSModuleClass,
+      ClassKind.AbstractJSType
     )
 
     def kindsBaseFor(kindSub: ClassKind): Seq[ClassKind] = {
       import ClassKind._
       kindSub match {
-        case Class | ModuleClass | HijackedClass =>
+        case Class | ModuleClass =>
           Seq(Interface, ModuleClass, JSClass, NativeJSClass)
         case Interface =>
-          Seq(Class, Interface)
+          // interfaces are checked in the ClassDefChecker.
+          throw new AssertionError("unreachable")
         case JSClass | JSModuleClass | NativeJSClass | NativeJSModuleClass |
             AbstractJSType =>
           Seq(Class, Interface, AbstractJSType, JSModuleClass)
+        case HijackedClass =>
+          throw new AssertionError("Cannot test HijackedClass because it fails earlier")
       }
     }
 
     Future.traverse(kindsSub) { kindSub =>
       Future.traverse(kindsBaseFor(kindSub)) { kindBase =>
-
         val classDefs = Seq(
-            classDef("LA", kind = kindSub, superClass = Some("LB")),
-            classDef("LB", kind = kindBase,
-                superClass = validParentForKind(kindBase))
+          classDef("A", kind = kindSub,
+              superClass = Some("B"),
+              methods = requiredMethods("A", kindSub, "B"),
+              jsConstructor = requiredJSConstructor(kindSub)),
+          classDef("B", kind = kindBase,
+              superClass = validParentForKind(kindBase),
+              methods = requiredMethods("B", kindBase),
+              jsConstructor = requiredJSConstructor(kindBase))
         )
 
         val analysis = computeAnalysis(classDefs,
-            reqsFactory.instantiateClass("LA", "init___"))
+            reqsFactory.instantiateClass("A", NoArgConstructorName))
 
-        assertContainsError("InvalidSuperClass(LB, LA)", analysis) {
-          case InvalidSuperClass(ClsInfo("LB"), ClsInfo("LA"),
-              FromClass(ClsInfo("LA"))) =>
+        assertContainsError("InvalidSuperClass(B, A)", analysis) {
+          case InvalidSuperClass(ClsInfo("B"), ClsInfo("A"),
+                  FromClass(ClsInfo("A"))) =>
             true
         }
       }
@@ -215,45 +230,50 @@ class AnalyzerTest {
   @Test
   def invalidImplementedInterface(): AsyncResult = await {
     val kindsCls = Seq(
-        ClassKind.Class,
-        ClassKind.ModuleClass,
-        ClassKind.HijackedClass,
-        ClassKind.Interface,
-        ClassKind.JSClass,
-        ClassKind.JSModuleClass,
-        ClassKind.NativeJSClass,
-        ClassKind.NativeJSModuleClass,
-        ClassKind.AbstractJSType
+      ClassKind.Class,
+      ClassKind.ModuleClass,
+      ClassKind.Interface,
+      ClassKind.JSClass,
+      ClassKind.JSModuleClass,
+      ClassKind.NativeJSClass,
+      ClassKind.NativeJSModuleClass,
+      ClassKind.AbstractJSType
     )
 
     def kindsIntfFor(kindCls: ClassKind): Seq[ClassKind] = {
       import ClassKind._
       kindCls match {
-        case Class | ModuleClass | HijackedClass | Interface =>
+        case Class | ModuleClass | Interface =>
           Seq(Class, ModuleClass, JSClass, NativeJSClass, AbstractJSType)
         case JSClass | JSModuleClass | NativeJSClass | NativeJSModuleClass |
             AbstractJSType =>
-          Seq(Class, ModuleClass, HijackedClass, Interface, JSClass,
+          Seq(Class, ModuleClass, Interface, JSClass,
               JSModuleClass, NativeJSClass, NativeJSModuleClass)
+        case HijackedClass =>
+          throw new AssertionError("Cannot test HijackedClass because it fails earlier")
       }
     }
 
     Future.traverse(kindsCls) { kindCls =>
       Future.traverse(kindsIntfFor(kindCls)) { kindIntf =>
         val classDefs = Seq(
-            classDef("LA", kind = kindCls,
-                superClass = validParentForKind(kindCls),
-                interfaces = List("LB")),
-            classDef("LB", kind = kindIntf,
-                superClass = validParentForKind(kindIntf))
+          classDef("A", kind = kindCls,
+              superClass = validParentForKind(kindCls),
+              interfaces = List("B"),
+              methods = requiredMethods("A", kindCls),
+              jsConstructor = requiredJSConstructor(kindCls)),
+          classDef("B", kind = kindIntf,
+              superClass = validParentForKind(kindIntf),
+              methods = requiredMethods("B", kindIntf),
+              jsConstructor = requiredJSConstructor(kindIntf))
         )
 
         val analysis = computeAnalysis(classDefs,
-            reqsFactory.instantiateClass("LA", "init___"))
+            reqsFactory.instantiateClass("A", NoArgConstructorName))
 
-        assertContainsError("InvalidImplementedInterface(LB, LA)", analysis) {
-          case InvalidImplementedInterface(ClsInfo("LB"), ClsInfo("LA"),
-              FromClass(ClsInfo("LA"))) =>
+        assertContainsError("InvalidImplementedInterface(B, A)", analysis) {
+          case InvalidImplementedInterface(ClsInfo("B"), ClsInfo("A"),
+                  FromClass(ClsInfo("A"))) =>
             true
         }
       }
@@ -263,161 +283,782 @@ class AnalyzerTest {
   @Test
   def notAModule(): AsyncResult = await {
     val classDefs = Seq(
-        classDef("LA", superClass = Some(ObjectClass),
-            memberDefs = List(trivialCtor("LA")))
+      classDef("A", superClass = Some(ObjectClass),
+          methods = List(trivialCtor("A")))
     )
 
-    val analysis = computeAnalysis(classDefs, reqsFactory.accessModule("LA"))
+    val analysis = computeAnalysis(classDefs, reqsFactory.accessModule("A"))
 
-    assertContainsError("NotAModule(LA)", analysis) {
-      case NotAModule(ClsInfo("LA"), `fromUnitTest`) => true
+    assertContainsError("NotAModule(A)", analysis) {
+      case NotAModule(ClsInfo("A"), `fromUnitTest`) => true
     }
   }
 
   @Test
   def missingMethod(): AsyncResult = await {
+    val fooMethodName = m("foo", Nil, V)
+
     val classDefs = Seq(
-        classDef("LA", superClass = Some(ObjectClass),
-            memberDefs = List(trivialCtor("LA")))
+      classDef("A", superClass = Some(ObjectClass),
+          methods = List(trivialCtor("A")))
     )
 
     val analysis = computeAnalysis(classDefs,
-        reqsFactory.instantiateClass("LA", "init___") ++
-        reqsFactory.callMethod("LA", "foo__V"))
+        reqsFactory.instantiateClass("A", NoArgConstructorName) ++
+        reqsFactory.callMethod("A", fooMethodName))
 
-    assertContainsError("MissingMethod(LA.foo__V)", analysis) {
-      case MissingMethod(MethInfo("LA", "foo__V"), `fromUnitTest`) => true
+    assertContainsError("MissingMethod(A.foo;V)", analysis) {
+      case MissingMethod(MethInfo("A", "foo;V"), FromDispatch(ClsInfo("A"), `fooMethodName`)) =>
+        true
+    }
+  }
+
+  @Test
+  def missingInheritedMethod(): AsyncResult = await {
+    /* Test that we do not use an inherited missing method:
+     * Otherwise we'll open ourselves up to non-deterministic behavior that
+     * depends on the call graph traversal order.
+     *
+     * The invocation below is carefully crafted to delay traversal of the call
+     * to B#foo as late as possible. If the lookup of B#foo would re-use the
+     * created missing method in A#foo, we'd get one error less.
+     */
+
+    val fooMethodName = m("foo", Nil, V)
+    val barMethodName = m("bar", Nil, V)
+
+    /* The separate VarDef upcasts the New to a non-exact class type.
+     * Otherwise we don't get the last error with FromDispatch(B).
+     */
+    val bVarDef = VarDef("b", NON, ClassType("B", nullable = true, exact = false),
+        mutable = false, New("B", NoArgConstructorName, Nil))
+
+    val classDefs = Seq(
+      classDef("A", superClass = Some(ObjectClass),
+          methods = List(
+            trivialCtor("A"),
+            MethodDef(EMF, barMethodName, NON, Nil, VoidType,
+                Some(Block(
+                  Apply(EAF, thisFor("A"), fooMethodName, Nil)(VoidType),
+                  bVarDef,
+                  Apply(EAF, bVarDef.ref, fooMethodName, Nil)(VoidType)
+                )))(EOH, UNV)
+          )),
+      classDef("B", superClass = Some("A"),
+          methods = List(trivialCtor("B", "A")))
+    )
+
+    val analysisFuture = computeAnalysis(classDefs,
+        reqsFactory.instantiateClass("A", NoArgConstructorName) ++
+        reqsFactory.callMethod("A", barMethodName))
+
+    for (analysis <- analysisFuture) yield {
+      assertContainsError("MissingMethod(A.foo;V) from A", analysis) {
+        case MissingMethod(MethInfo("A", "foo;V"), FromDispatch(ClsInfo("A"), `fooMethodName`)) =>
+          true
+      }
+
+      assertContainsError("MissingMethod(B.foo;V) from A", analysis) {
+        case MissingMethod(MethInfo("B", "foo;V"), FromDispatch(ClsInfo("A"), `fooMethodName`)) =>
+          true
+      }
+
+      assertContainsError("MissingMethod(B.foo;V) from B", analysis) {
+        case MissingMethod(MethInfo("B", "foo;V"), FromDispatch(ClsInfo("B"), `fooMethodName`)) =>
+          true
+      }
+    }
+  }
+
+  @Test
+  def missingAbstractMethod(): AsyncResult = await {
+    val fooMethodName = m("foo", Nil, IntRef)
+
+    val classDefs = Seq(
+      classDef("A", superClass = Some(ObjectClass),
+          methods = List(trivialCtor("A"))),
+      classDef("B", superClass = Some("A"),
+          methods = List(
+            trivialCtor("B", "A"),
+            MethodDef(EMF, fooMethodName, NON, Nil, IntType, Some(int(5)))(EOH, UNV)
+          ))
+    )
+
+    val analysis = computeAnalysis(classDefs,
+        reqsFactory.instantiateClass("B", NoArgConstructorName) ++
+        reqsFactory.callMethod("A", fooMethodName))
+
+    assertContainsError("MissingMethod(A.foo;I)", analysis) {
+      case MissingMethod(MethInfo("A", "foo;I"), FromDispatch(ClsInfo("A"), `fooMethodName`)) =>
+        true
+    }
+  }
+
+  @Test
+  def callAbstractMethod(): AsyncResult = await {
+    val fooMethodName = m("foo", Nil, IntRef)
+
+    val classDefs = Seq(
+      classDef(
+        "A",
+        superClass = Some(ObjectClass),
+        methods = List(
+          trivialCtor("A"),
+          MethodDef(EMF, fooMethodName, NON, Nil, IntType, None)(EOH, UNV)
+        )
+      )
+    )
+
+    val analysis = computeAnalysis(classDefs,
+        reqsFactory.instantiateClass("A", NoArgConstructorName) ++
+        reqsFactory.callMethod("A", fooMethodName))
+
+    assertContainsError("MissingMethod(A.foo;I)", analysis) {
+      case MissingMethod(MethInfo("A", "foo;I"), FromDispatch(ClsInfo("A"), `fooMethodName`)) =>
+        true
+    }
+  }
+
+  @Test
+  def staticCallAbstractMethod(): AsyncResult = await {
+    val fooMethodName = m("foo", Nil, IntRef)
+
+    val classDefs = Seq(
+      classDef(
+        "A",
+        superClass = Some(ObjectClass),
+        methods = List(
+          trivialCtor("A"),
+          MethodDef(EMF, fooMethodName, NON, Nil, IntType, None)(EOH, UNV)
+        )
+      )
+    )
+
+    val analysis = computeAnalysis(classDefs,
+        reqsFactory.callMethodStatically("A", fooMethodName))
+
+    assertContainsError("MissingMethod(A.foo;I)", analysis) {
+      case MissingMethod(MethInfo("A", "foo;I"), `fromUnitTest`) => true
+    }
+  }
+
+  @Test
+  def missingJSNativeMember(): AsyncResult = await {
+    val mainName = m("main", Nil, V)
+    val testName = m("test", Nil, O)
+    val method = MethodDef(
+        EMF.withNamespace(MemberNamespace.PublicStatic),
+        mainName, NON, Nil, VoidType,
+        Some(SelectJSNativeMember("A", testName)))(EOH, UNV)
+
+    val classDefs = Seq(
+      classDef("A", superClass = Some(ObjectClass),
+          methods = List(method))
+    )
+
+    val analysis = computeAnalysis(classDefs,
+        reqsFactory.callStaticMethod("A", mainName))
+
+    assertContainsError("MissingJSNativeMember(A.test;O)", analysis) {
+      case MissingJSNativeMember(ClsInfo("A"), `testName`,
+              FromMethod(MethInfo("A", "main;V"))) => true
     }
   }
 
   @Test
   def conflictingDefaultMethods(): AsyncResult = await {
-    val defaultMethodDef = MethodDef(MemberFlags.empty, Ident("foo__V"), Nil,
-        NoType, Some(Skip()))(emptyOptHints, None)
+    val defaultMethodDef = MethodDef(EMF, m("foo", Nil, V), NON, Nil,
+        VoidType, Some(Skip()))(EOH, UNV)
     val classDefs = Seq(
-        classDef("LI1", kind = ClassKind.Interface,
-            memberDefs = List(defaultMethodDef)),
-        classDef("LI2", kind = ClassKind.Interface,
-            memberDefs = List(defaultMethodDef)),
-        classDef("LA", superClass = Some(ObjectClass),
-            interfaces = List("LI1", "LI2"),
-            memberDefs = List(trivialCtor("LA")))
+      classDef("I1", kind = ClassKind.Interface,
+          methods = List(defaultMethodDef)),
+      classDef("I2", kind = ClassKind.Interface,
+          methods = List(defaultMethodDef)),
+      classDef("A", superClass = Some(ObjectClass),
+          interfaces = List("I1", "I2"),
+          methods = List(trivialCtor("A")))
     )
 
     val analysis = computeAnalysis(classDefs,
-        reqsFactory.instantiateClass("LA", "init___") ++
-        reqsFactory.callMethod("LA", "foo__V"))
+        reqsFactory.instantiateClass("A", NoArgConstructorName) ++
+        reqsFactory.callMethod("A", m("foo", Nil, V)))
 
-    assertContainsError("ConflictingDefaultMethods(LI1.foo__V, LI2.foo__V)", analysis) {
+    assertContainsError("ConflictingDefaultMethods(I1.foo;V, I2.foo;V)", analysis) {
       case ConflictingDefaultMethods(
-          List(MethInfo("LI1", "foo__V"), MethInfo("LI2", "foo__V")),
-          `fromAnalyzer`) =>
+              List(MethInfo("I1", "foo;V"), MethInfo("I2", "foo;V")),
+              `fromAnalyzer`) =>
         true
       case ConflictingDefaultMethods(
-          List(MethInfo("LI2", "foo__V"), MethInfo("LI1", "foo__V")),
-          `fromAnalyzer`) =>
+              List(MethInfo("I2", "foo;V"), MethInfo("I1", "foo;V")),
+              `fromAnalyzer`) =>
         true
     }
   }
 
   @Test
-  def conflictingTopLevelExports(): AsyncResult = await {
+  def invalidTopLevelExportInScript(): AsyncResult = await {
+    val classDefs = Seq(
+      classDef(
+        "A",
+        kind = ClassKind.ModuleClass,
+        superClass = Some(ObjectClass),
+        methods = List(trivialCtor("A", forModuleClass = true)),
+        topLevelExportDefs = List(
+          TopLevelMethodExportDef("main",
+              JSMethodDef(
+                  EMF.withNamespace(MemberNamespace.PublicStatic),
+                  str("default"), Nil, None, Undefined())(
+                  EOH, UNV))
+        )
+      )
+    )
+
+    testScriptAndModule(classDefs) { scriptAnalysis =>
+      assertContainsError("InvalidTopLevelExportInScript(foo, A)", scriptAnalysis) {
+        case InvalidTopLevelExportInScript(TLEInfo(ModID("main"), "default", ClsName("A"))) =>
+          true
+      }
+    } { moduleAnalysis =>
+      assertNoError(moduleAnalysis)
+    }
+  }
+
+  @Test
+  def conflictingTopLevelExportsDifferentModules(): AsyncResult = await {
     def singleDef(name: String) = {
       classDef(name,
           kind = ClassKind.ModuleClass, superClass = Some(ObjectClass),
-          memberDefs = List(trivialCtor(name)),
-          topLevelExportDefs = List(TopLevelModuleExportDef("foo")))
+          methods = List(trivialCtor(name, forModuleClass = true)),
+          topLevelExportDefs = List(TopLevelModuleExportDef(name, "foo")))
     }
 
-    val classDefs = Seq(singleDef("LA"), singleDef("LB"))
-    val analysis = computeAnalysis(classDefs)
+    val classDefs = Seq(singleDef("A"), singleDef("B"))
 
-    assertContainsError("ConflictingTopLevelExport(foo, LA, LB)", analysis) {
-      case ConflictingTopLevelExport("foo", List(ClsInfo("LA"), ClsInfo("LB"))) =>
+    testScriptAndModule(classDefs) { scriptAnalysis =>
+      assertContainsError("MultiplePublicModulesWithoutModuleSupport(A, B)", scriptAnalysis) {
+        case MultiplePublicModulesWithoutModuleSupport(List(ModID("A"), ModID("B"))) =>
+          true
+        case MultiplePublicModulesWithoutModuleSupport(List(ModID("B"), ModID("A"))) =>
+          true
+      }
+    } { moduleAnalysis =>
+      assertNoError(moduleAnalysis)
+    }
+  }
+
+  @Test
+  def conflictingTopLevelExportsSameModule(): AsyncResult = await {
+    def singleDef(name: String) = {
+      classDef(name,
+          kind = ClassKind.ModuleClass, superClass = Some(ObjectClass),
+          methods = List(trivialCtor(name, forModuleClass = true)),
+          topLevelExportDefs = List(TopLevelModuleExportDef("main", "foo")))
+    }
+
+    val classDefs = Seq(singleDef("A"), singleDef("B"))
+
+    val analysis = computeAnalysis(classDefs)
+    assertContainsError("ConflictingTopLevelExport(main, foo, A, B)", analysis) {
+      case ConflictingTopLevelExport(ModID("main"), "foo",
+              List(TLEInfo(_, _, ClsName("A")), TLEInfo(_, _, ClsName("B")))) =>
         true
-      case ConflictingTopLevelExport("foo", List(ClsInfo("LB"), ClsInfo("LA"))) =>
+      case ConflictingTopLevelExport(ModID("main"), "foo",
+              List(TLEInfo(_, _, ClsName("B")), TLEInfo(_, _, ClsName("A")))) =>
         true
     }
   }
 
   @Test
   def degenerateConflictingTopLevelExports(): AsyncResult = await {
-    val classDefs = Seq(classDef("LA",
+    val classDefs = Seq(classDef("A",
         kind = ClassKind.ModuleClass, superClass = Some(ObjectClass),
-        memberDefs = List(trivialCtor("LA")),
+        methods = List(trivialCtor("A", forModuleClass = true)),
         topLevelExportDefs = List(
-            TopLevelModuleExportDef("foo"),
-            TopLevelModuleExportDef("foo"))))
+            TopLevelModuleExportDef("main", "foo"),
+            TopLevelModuleExportDef("main", "foo"))))
 
     val analysis = computeAnalysis(classDefs)
-    assertContainsError("ConflictingTopLevelExport(foo, <degenerate>)", analysis) {
-      case ConflictingTopLevelExport("foo", _) => true
+    assertContainsError("ConflictingTopLevelExport(_, foo, <degenerate>)", analysis) {
+      case ConflictingTopLevelExport(_, "foo", _) => true
     }
   }
 
   @Test
-  def juPropertiesNotReachableWhenUsingGetSetClearProperty(): AsyncResult = await {
-    val systemMod = LoadModule(ClassRef("jl_System$"))
-    val emptyStr = StringLiteral("")
-    val StringType = ClassType(BoxedStringClass)
+  def multipleModulesTopLevelExportAndModuleInitializer(): AsyncResult = await {
+    val classDefs = Seq(classDef("A",
+        kind = ClassKind.ModuleClass, superClass = Some(ObjectClass),
+        methods = List(
+          trivialCtor("A", forModuleClass = true),
+          mainMethodDef(Skip())
+        ),
+        topLevelExportDefs = List(TopLevelModuleExportDef("A", "foo"))))
 
-    val classDefs = Seq(
-        classDef("LA", superClass = Some(ObjectClass), memberDefs = List(
-            trivialCtor("LA"),
-            MethodDef(MemberFlags.empty, Ident("test__V"), Nil, NoType, Some(Block(
-                Apply(EAF, systemMod, Ident("getProperty__T__T"), List(emptyStr))(StringType),
-                Apply(EAF, systemMod, Ident("getProperty__T__T__T"), List(emptyStr))(StringType),
-                Apply(EAF, systemMod, Ident("setProperty__T__T__T"), List(emptyStr))(StringType),
-                Apply(EAF, systemMod, Ident("clearProperty__T__T"), List(emptyStr))(StringType)
-            )))(emptyOptHints, None)
-        ))
-    )
+    val moduleInitializer =
+      ModuleInitializer.mainMethodWithArgs("A", "main").withModuleID("B")
 
-    for {
-      analysis <- computeAnalysis(classDefs,
-          reqsFactory.instantiateClass("LA", "init___") ++
-          reqsFactory.callMethod("LA", "test__V"),
-          stdlib = Some(TestIRRepo.fulllib))
-    } yield {
-      assertNoError(analysis)
-
-      val juPropertiesClass = analysis.classInfos("ju_Properties")
-      assertFalse(juPropertiesClass.isAnySubclassInstantiated)
-      assertFalse(juPropertiesClass.areInstanceTestsUsed)
-      assertFalse(juPropertiesClass.isDataAccessed)
+    testScriptAndModule(classDefs, moduleInitializers = List(moduleInitializer)) { scriptAnalysis =>
+      assertContainsError("MultiplePublicModulesWithoutModuleSupport(A, B)", scriptAnalysis) {
+        case MultiplePublicModulesWithoutModuleSupport(List(ModID("A"), ModID("B"))) =>
+          true
+        case MultiplePublicModulesWithoutModuleSupport(List(ModID("B"), ModID("A"))) =>
+          true
+      }
+    } { moduleAnalysis =>
+      assertNoError(moduleAnalysis)
     }
   }
 
-  @Test  // #3571
-  def specificReflectiveProxy(): AsyncResult = await {
+  @Test
+  def importClassWithoutModuleSupport(): AsyncResult = await {
+    val kinds = Seq(
+      ClassKind.NativeJSClass,
+      ClassKind.NativeJSModuleClass
+    )
+
+    Future.traverse(kinds) { kind =>
+      val classDefs = Seq(
+        classDef("A", kind = kind, superClass = Some(ObjectClass),
+            jsNativeLoadSpec = Some(JSNativeLoadSpec.Import("my-module", List("A"))))
+      )
+
+      val analysis = computeAnalysis(classDefs,
+          reqsFactory.instantiateClass("A", NoArgConstructorName),
+          config = StandardConfig().withModuleKind(ModuleKind.NoModule))
+
+      assertContainsError("ImportWithoutModuleSupport(my-module, A, None)", analysis) {
+        case ImportWithoutModuleSupport("my-module", ClsInfo("A"), None, `fromUnitTest`) =>
+          true
+      }
+    }
+  }
+
+  @Test
+  def importJSNativeMemberWithoutModuleSupport(): AsyncResult = await {
+    val mainName = m("main", Nil, V)
+    val testName = m("test", Nil, O)
+
+    val mainMethod = MethodDef(
+        EMF.withNamespace(MemberNamespace.PublicStatic),
+        mainName, NON, Nil, VoidType,
+        Some(SelectJSNativeMember("A", testName)))(EOH, UNV)
+    val nativeMember = JSNativeMemberDef(
+        EMF.withNamespace(MemberNamespace.PublicStatic), testName,
+        JSNativeLoadSpec.Import("my-module", List("test")))
+
     val classDefs = Seq(
-        classDef("LA", superClass = Some(ObjectClass)),
-        classDef("LB", superClass = Some("LA")),
-        classDef("LX", superClass = Some(ObjectClass),
-            memberDefs = List(
-                trivialCtor("LX"),
-                MethodDef(MemberFlags.empty, Ident("foo__LA"), Nil, ClassType("LA"),
-                    Some(Null()))(emptyOptHints, None),
-                MethodDef(MemberFlags.empty, Ident("foo__LB"), Nil, ClassType("LB"),
-                    Some(Null()))(emptyOptHints, None)
-            )
+      classDef("A", superClass = Some(ObjectClass),
+          methods = List(mainMethod),
+          topLevelImportDefs = List(nativeMember))
+    )
+
+    val analysis = computeAnalysis(classDefs,
+        reqsFactory.callStaticMethod("A", mainName))
+
+    assertContainsError("ImportWithoutModuleSupport(my-module, A, None)", analysis) {
+      case ImportWithoutModuleSupport("my-module", ClsInfo("A"), Some(`testName`),
+              FromMethod(MethInfo("A", "main;V"))) => true
+    }
+  }
+
+  @Test
+  def importDynamicWithoutModuleSupport(): AsyncResult = await {
+    val dynName = m("dyn", Nil, O)
+
+    val classDefs = Seq(
+      classDef(
+        "A",
+        kind = ClassKind.Class,
+        superClass = Some(ObjectClass),
+        methods = List(
+            mainMethodDef(ApplyDynamicImport(EAF, "B", dynName, Nil)))
+      ),
+      classDef("B",
+          kind = ClassKind.Class, superClass = Some(ObjectClass),
+          methods = List(
+              MethodDef(EMF.withNamespace(MemberNamespace.PublicStatic),
+                  dynName, NON, Nil, AnyType,
+                  Some(consoleLog(str("hello world"))))(EOH, UNV)))
+    )
+
+    val moduleInitializer = ModuleInitializer.mainMethodWithArgs("A", "main")
+
+    testScriptAndModule(classDefs, moduleInitializers = List(moduleInitializer)) { scriptAnalysis =>
+      assertContainsError("DynamicImportWithoutModuleSupport", scriptAnalysis) {
+        case DynamicImportWithoutModuleSupport(_) =>
+          true
+      }
+    } { moduleAnalysis =>
+      assertNoError(moduleAnalysis)
+    }
+  }
+
+  @deprecated("test deprecated features", "forever")
+  @Test
+  def newTargetWithoutES2015(): AsyncResult = await {
+    val classDefs = Seq(
+      mainTestClassDef(LoadJSConstructor("A")),
+      classDef(
+        "A",
+        kind = ClassKind.JSClass,
+        superClass = Some(JSObjectLikeClass),
+        jsConstructor = Some(
+          JSConstructorDef(JSCtorFlags, Nil, None,
+              JSConstructorBody(
+                Nil,
+                JSSuperConstructorCall(Nil),
+                JSNewTarget() :: Nil
+              ))(EOH, UNV)
         )
+      ),
+      JSObjectLikeClassDef
+    )
+
+    val moduleInitializer = MainTestModuleInitializers
+
+    val analysis = computeAnalysis(classDefs,
+        moduleInitializers = MainTestModuleInitializers,
+        config = StandardConfig().withESFeatures(_.withESVersion(ESVersion.ES5_1)))
+
+    assertContainsError("NewTargetWithoutES2015Support", analysis) {
+      case NewTargetWithoutES2015Support(_) => true
+    }
+  }
+
+  @Test
+  def asyncWithoutES2017(): AsyncResult = await {
+    val classDefs = Seq(
+      mainTestClassDef {
+        Closure(ClosureFlags.arrow.withAsync(true), Nil, Nil, None, AnyType, int(5), Nil)
+      }
+    )
+
+    val moduleInitializer = MainTestModuleInitializers
+
+    val analysis = computeAnalysis(classDefs,
+        moduleInitializers = MainTestModuleInitializers,
+        config = StandardConfig().withESFeatures(_.withESVersion(ESVersion.ES2016)))
+
+    assertContainsError("AsyncWithoutES2017Support", analysis) {
+      case AsyncWithoutES2017Support(_) => true
+    }
+  }
+
+  @Test
+  def asyncOrAwaitWithoutJSPI(): AsyncResult = await {
+    val results = for {
+      problematicTree <- List(
+        Closure(ClosureFlags.arrow.withAsync(true), Nil, Nil, None, AnyType, int(5), Nil),
+        JSAwait(int(5))
+      )
+    } yield {
+      val classDefs = Seq(
+        mainTestClassDef(problematicTree)
+      )
+
+      val moduleInitializer = MainTestModuleInitializers
+
+      val config = StandardConfig()
+        .withModuleKind(ModuleKind.ESModule)
+        .withESFeatures(_.withESVersion(ESVersion.ES2022).withUseWebAssembly(true))
+
+      val analysis = computeAnalysis(classDefs,
+          moduleInitializers = MainTestModuleInitializers,
+          config = config)
+
+      assertContainsError("AsyncWithoutJSPI", analysis) {
+        case AsyncWithoutJSPI(_) => true
+      }
+    }
+
+    Future.sequence(results)
+  }
+
+  @Test
+  def orphanAwaitWithoutWebAssembly(): AsyncResult = await {
+    val classDefs = Seq(
+      mainTestClassDef {
+        JSAwait(int(5))
+      }
+    )
+
+    val moduleInitializer = MainTestModuleInitializers
+
+    val config = StandardConfig()
+      .withESFeatures(_.withESVersion(ESVersion.ES2017))
+      .withWasmFeatures(_.withUseJSPI(true))
+
+    val analysis = computeAnalysis(classDefs,
+        moduleInitializers = MainTestModuleInitializers,
+        config = config)
+
+    assertContainsError("OrphanAwaitWithoutWebAssembly", analysis) {
+      case OrphanAwaitWithoutWebAssembly(_) => true
+    }
+  }
+
+  @Test
+  def importMetaWithoutESModule(): AsyncResult = await {
+    val classDefs = Seq(
+      classDef(
+        "A",
+        kind = ClassKind.Class,
+        superClass = Some(ObjectClass),
+        methods = List(
+          mainMethodDef(JSImportMeta())
+        )
+      )
+    )
+
+    val moduleInitializer = ModuleInitializer.mainMethodWithArgs("A", "main")
+
+    testForEachModuleKind(classDefs, moduleInitializers = List(moduleInitializer)) {
+      (kind, analysis) =>
+        if (kind == ModuleKind.ESModule) {
+          assertNoError(analysis)
+        } else {
+          assertContainsError("ImportMetaWithoutESModule", analysis) {
+            case ImportMetaWithoutESModule(_) =>
+              true
+          }
+        }
+    }
+  }
+
+  @Test // #3571
+  def specificReflectiveProxy(): AsyncResult = await {
+    val fooAMethodName = m("foo", Nil, ClassRef("A"))
+    val fooBMethodName = m("foo", Nil, ClassRef("B"))
+
+    val fooReflProxyName =
+      MethodName.reflectiveProxy(SimpleMethodName("foo"), Nil)
+
+    val classDefs = Seq(
+      classDef("A", superClass = Some(ObjectClass)),
+      classDef("B", superClass = Some("A")),
+      classDef(
+        "X",
+        superClass = Some(ObjectClass),
+        methods = List(
+          trivialCtor("X"),
+          MethodDef(EMF, fooAMethodName, NON, Nil, ClassType("A", nullable = true, exact = false),
+              Some(Null()))(EOH, UNV),
+          MethodDef(EMF, fooBMethodName, NON, Nil, ClassType("B", nullable = true, exact = false),
+              Some(Null()))(EOH, UNV)
+        )
+      )
     )
 
     for {
       analysis <- computeAnalysis(classDefs,
-          reqsFactory.instantiateClass("LX", "init___") ++
-          reqsFactory.callMethod("LX", "foo__"))
+          reqsFactory.instantiateClass("X", NoArgConstructorName) ++
+          reqsFactory.callMethod("X", fooReflProxyName))
     } yield {
       assertNoError(analysis)
 
       val MethodSyntheticKind.ReflectiveProxy(target) = {
-        analysis.classInfos("LX")
-          .methodInfos(MemberNamespace.Public)("foo__")
+        analysis.classInfos("X")
+          .methodInfos(MemberNamespace.Public)(fooReflProxyName)
           .syntheticKind
       }
 
-      assertEquals("foo__LB", target)
+      assertEquals(fooBMethodName, target)
+    }
+  }
+
+  @Test
+  def isAbstractReachable(): AsyncResult = await {
+    val fooMethodName = m("foo", Nil, IntRef)
+    val barMethodName = m("bar", Nil, IntRef)
+
+    val classDefs = Seq(
+      classDef("I1", kind = ClassKind.Interface,
+          methods = List(
+            MethodDef(EMF, barMethodName, NON, Nil, IntType, None)(EOH, UNV)
+          )),
+      classDef("I2", kind = ClassKind.Interface,
+          methods = List(
+            MethodDef(EMF, barMethodName, NON, Nil, IntType, None)(EOH, UNV)
+          )),
+      classDef("A", superClass = Some(ObjectClass), interfaces = List("I1"),
+          methods = List(
+            trivialCtor("A"),
+            MethodDef(EMF, fooMethodName, NON, Nil, IntType, None)(EOH, UNV)
+          )),
+      classDef("B", superClass = Some("A"), interfaces = List("I2"),
+          methods = List(
+            trivialCtor("B", "A"),
+            MethodDef(EMF, fooMethodName, NON, Nil, IntType, Some(int(5)))(EOH, UNV)
+          )),
+      classDef("C", superClass = Some("B"),
+          methods = List(
+            trivialCtor("C", "B"),
+            MethodDef(EMF, barMethodName, NON, Nil, IntType, Some(int(5)))(EOH, UNV)
+          ))
+    )
+
+    val analysisFuture = computeAnalysis(classDefs,
+        reqsFactory.instantiateClass("C", NoArgConstructorName) ++
+        reqsFactory.callMethod("A", fooMethodName) ++
+        reqsFactory.callMethod("B", barMethodName))
+
+    for (analysis <- analysisFuture) yield {
+      assertNoError(analysis)
+
+      val BClassInfo = analysis.classInfos("C")
+      assertEquals(List[ClassName]("C", "B", "A", ObjectClass, "I1", "I2"),
+          BClassInfo.ancestors.map(_.className))
+
+      val AfooMethodInfo = analysis.classInfos("A")
+        .methodInfos(MemberNamespace.Public)(fooMethodName)
+      assertTrue(AfooMethodInfo.isAbstractReachable)
+
+      val I1barMethodInfo = analysis.classInfos("I1")
+        .methodInfos(MemberNamespace.Public)(barMethodName)
+      assertTrue(I1barMethodInfo.isAbstractReachable)
+
+      val I2barMethodInfo = analysis.classInfos("I2")
+        .methodInfos(MemberNamespace.Public)(barMethodName)
+      assertFalse(I2barMethodInfo.isAbstractReachable)
+    }
+  }
+
+  @Test
+  def invalidLinkTimeProperty(): AsyncResult = await {
+    def test(invalidLinkTimeProperty: LinkTimeProperty): Future[Unit] = {
+      val classDefs = Seq(
+        classDef(
+          "A",
+          kind = ClassKind.Class,
+          superClass = Some(ObjectClass),
+          methods = List(
+            mainMethodDef(invalidLinkTimeProperty)
+          )
+        )
+      )
+
+      val moduleInitializer = ModuleInitializer.mainMethodWithArgs("A", "main")
+
+      val analysis = computeAnalysis(classDefs,
+          moduleInitializers = List(moduleInitializer))
+
+      assertContainsError(s"InvalidLinkTimeProperty(${invalidLinkTimeProperty.name})", analysis) {
+        case InvalidLinkTimeProperty(name, tpe, _) =>
+          name == invalidLinkTimeProperty.name && tpe == invalidLinkTimeProperty.tpe
+      }
+    }
+
+    val results = List(
+      test(LinkTimeProperty("not-found")(IntType)),
+      test(LinkTimeProperty(LinkTimeProperty.ESVersion)(BooleanType)) // ESVersion should be IntType
+    )
+    Future.sequence(results)
+  }
+
+  @Test
+  def linkTimeIfReachable(): AsyncResult = await {
+    val mainMethodName = m("main", Nil, IntRef)
+    val fooMethodName = m("foo", Nil, IntRef)
+    val barMethodName = m("bar", Nil, IntRef)
+
+    val productionMode = true
+
+    /* linkTimeIf(productionMode) {
+     *   this.foo()
+     * } {
+     *   this.bar()
+     * }
+     */
+    val mainBody = LinkTimeIf(
+      BinaryOp(BinaryOp.Boolean_==,
+          LinkTimeProperty("core/productionMode")(BooleanType),
+          BooleanLiteral(productionMode)),
+      Apply(EAF, thisFor("A"), fooMethodName, Nil)(IntType),
+      Apply(EAF, thisFor("A"), barMethodName, Nil)(IntType)
+    )(IntType)
+
+    val classDefs = Seq(
+      classDef(
+        "A",
+        superClass = Some(ObjectClass),
+        methods = List(
+          trivialCtor("A"),
+          MethodDef(EMF, mainMethodName, NON, Nil, IntType, Some(mainBody))(EOH, UNV),
+          MethodDef(EMF, fooMethodName, NON, Nil, IntType, Some(int(1)))(EOH, UNV),
+          MethodDef(EMF, barMethodName, NON, Nil, IntType, Some(int(2)))(EOH, UNV)
+        )
+      )
+    )
+
+    val requirements = {
+      reqsFactory.instantiateClass("A", NoArgConstructorName) ++
+      reqsFactory.callMethod("A", mainMethodName)
+    }
+
+    val analysisFuture = computeAnalysis(classDefs, requirements,
+        config = StandardConfig().withSemantics(_.withProductionMode(productionMode)))
+
+    for (analysis <- analysisFuture) yield {
+      assertNoError(analysis)
+
+      val AfooMethodInfo = analysis.classInfos("A")
+        .methodInfos(MemberNamespace.Public)(fooMethodName)
+      assertTrue(AfooMethodInfo.isReachable)
+
+      val AbarMethodInfo = analysis.classInfos("A")
+        .methodInfos(MemberNamespace.Public)(barMethodName)
+      assertFalse(AbarMethodInfo.isReachable)
+    }
+  }
+
+  @Test
+  def linkTimeIfError(): AsyncResult = await {
+    val mainMethodName = m("main", Nil, IntRef)
+    val fooMethodName = m("foo", Nil, IntRef)
+
+    val productionMode = true
+
+    /* linkTimeIf(unknownProperty) {
+     *   this.foo()
+     * } {
+     *   this.bar()
+     * }
+     */
+    val mainBody = LinkTimeIf(
+      BinaryOp(BinaryOp.Boolean_==,
+          LinkTimeProperty("core/unknownProperty")(BooleanType),
+          BooleanLiteral(productionMode)),
+      Apply(EAF, thisFor("A"), fooMethodName, Nil)(IntType),
+      Apply(EAF, thisFor("A"), fooMethodName, Nil)(IntType)
+    )(IntType)
+
+    val classDefs = Seq(
+      classDef(
+        "A",
+        superClass = Some(ObjectClass),
+        methods = List(
+          trivialCtor("A"),
+          MethodDef(EMF, mainMethodName, NON, Nil, IntType, Some(mainBody))(EOH, UNV)
+        )
+      )
+    )
+
+    val requirements = {
+      reqsFactory.instantiateClass("A", NoArgConstructorName) ++
+      reqsFactory.callMethod("A", mainMethodName)
+    }
+
+    val analysisFuture = computeAnalysis(classDefs, requirements,
+        config = StandardConfig().withSemantics(_.withProductionMode(productionMode)))
+
+    for (analysis <- analysisFuture) yield {
+      assertContainsError(s"InvalidLinkTimeProperty(core/unknownProperty)", analysis) {
+        case InvalidLinkTimeProperty("core/unknownProperty", BooleanType, _) => true
+      }
+
+      // Branches are not taken, so there is no error for linking `foo`
+      assertNotContainsError(s"any MissingMethod", analysis) {
+        case MissingMethod(_, _) => true
+      }
     }
   }
 }
@@ -428,53 +1069,46 @@ object AnalyzerTest {
   private val fromAnalyzer = FromCore("analyzer")
   private val fromUnitTest = FromCore("unit test")
 
-  private def validParentForKind(kind: ClassKind): Option[String] = {
+  private def validParentForKind(kind: ClassKind): Option[ClassName] = {
     import ClassKind._
     kind match {
       case Class | ModuleClass | HijackedClass | NativeJSClass |
           NativeJSModuleClass =>
         Some(ObjectClass)
       case JSClass | JSModuleClass =>
-        Some("sjs_js_Object")
+        Some(ClassName("scala.scalajs.js.Object"))
       case Interface | AbstractJSType =>
         None
     }
   }
 
-  private def computeAnalysis(classDefs: Seq[ClassDef],
-      symbolRequirements: SymbolRequirement = reqsFactory.none(),
-      stdlib: Option[TestIRRepo] = Some(TestIRRepo.minilib))(
-      implicit ec: ExecutionContext): Future[Analysis] = {
+  private def testScriptAndModule(classDefs: Seq[ClassDef],
+      moduleInitializers: Seq[ModuleInitializer] = Nil)(
+      scriptTest: Analysis => Unit)(
+      moduleTest: Analysis => Unit)(
+      implicit ec: ExecutionContext): Future[Unit] = {
 
-    val classesWithEntryPoints0 = classDefs
-      .map(ir.EntryPointsInfo.forClassDef)
-      .withFilter(_.hasEntryPoint)
-      .map(_.encodedName)
+    testForEachModuleKind(classDefs, moduleInitializers) { (kind, analysis) =>
+      if (kind == ModuleKind.NoModule)
+        scriptTest(analysis)
+      else
+        moduleTest(analysis)
+    }
+  }
 
-    val encodedNameToInfo =
-      classDefs.map(c => c.name.name -> Infos.generateClassInfo(c)).toMap
+  private def testForEachModuleKind(classDefs: Seq[ClassDef],
+      moduleInitializers: Seq[ModuleInitializer] = Nil)(
+      test: (ModuleKind, Analysis) => Unit)(
+      implicit ec: ExecutionContext): Future[Unit] = {
 
-    def inputProvider(loader: Option[TestIRRepo.InfoLoader]) = new Analyzer.InputProvider {
-      def classesWithEntryPoints(): Iterable[String] = classesWithEntryPoints0
-
-      def loadInfo(encodedName: String)(implicit ec: ExecutionContext): Option[Future[Infos.ClassInfo]] = {
-        /* Note: We could use Future.successful here to complete the future
-         * immediately. However, in order to exercise as much asynchronizity as
-         * possible, we don't.
-         */
-        val own = encodedNameToInfo.get(encodedName).map(Future(_))
-        own.orElse(loader.flatMap(_.loadInfo(encodedName)))
-      }
+    val results = for (kind <- ModuleKind.All) yield {
+      val analysis = computeAnalysis(classDefs,
+          moduleInitializers = moduleInitializers,
+          config = StandardConfig().withModuleKind(kind))
+      analysis.map(test(kind, _))
     }
 
-    for {
-      loader <- Future.traverse(stdlib.toList)(_.loader).map(_.headOption)
-      analysis <- Analyzer.computeReachability(CommonPhaseConfig(),
-          symbolRequirements, allowAddingSyntheticMethods = true,
-          inputProvider(loader))
-    } yield {
-      analysis
-    }
+    Future.sequence(results).map(_ => ())
   }
 
   private def assertNoError(analysis: Future[Analysis])(
@@ -515,19 +1149,45 @@ object AnalyzerTest {
 
   private def assertContainsError(msg: String, analysis: Analysis)(
       pf: PartialFunction[Error, Boolean]): Unit = {
-    val fullMessage = s"Expected $msg, got ${analysis.errors}"
-    assertTrue(fullMessage, analysis.errors.exists {
+    assertTrue(s"Expected $msg, got ${analysis.errors}",
+        containsError(analysis)(pf))
+  }
+
+  private def assertNotContainsError(msg: String, analysis: Analysis)(
+      pf: PartialFunction[Error, Boolean]): Unit = {
+    assertFalse(s"Did not expect $msg, got ${analysis.errors}",
+        containsError(analysis)(pf))
+  }
+
+  private def containsError(analysis: Analysis)(
+      pf: PartialFunction[Error, Boolean]): Boolean = {
+    analysis.errors.exists {
       e => pf.applyOrElse(e, (_: Error) => false)
-    })
+    }
   }
 
   object ClsInfo {
     def unapply(classInfo: Analysis.ClassInfo): Some[String] =
-      Some(classInfo.encodedName)
+      Some(classInfo.className.nameString)
   }
 
   object MethInfo {
     def unapply(methodInfo: Analysis.MethodInfo): Some[(String, String)] =
-      Some((methodInfo.owner.encodedName, methodInfo.encodedName))
+      Some((methodInfo.owner.className.nameString, methodInfo.methodName.nameString))
+  }
+
+  object TLEInfo {
+    def unapply(tleInfo: Analysis.TopLevelExportInfo): Some[(ModuleID, String, ClassName)] =
+      Some((tleInfo.moduleID, tleInfo.exportName, tleInfo.owningClass))
+  }
+
+  object ClsName {
+    def unapply(className: ClassName): Some[String] =
+      Some(className.nameString)
+  }
+
+  object ModID {
+    def unapply(moduleID: ModuleID): Some[String] =
+      Some(moduleID.id)
   }
 }

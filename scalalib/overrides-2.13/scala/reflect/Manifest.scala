@@ -80,22 +80,22 @@ object Manifest {
   def valueManifests: List[AnyValManifest[_]] =
     ManifestFactory.valueManifests
 
-  def Byte: ManifestFactory.ByteManifest = ManifestFactory.Byte
-  def Short: ManifestFactory.ShortManifest = ManifestFactory.Short
-  def Char: ManifestFactory.CharManifest = ManifestFactory.Char
-  def Int: ManifestFactory.IntManifest = ManifestFactory.Int
-  def Long: ManifestFactory.LongManifest = ManifestFactory.Long
-  def Float: ManifestFactory.FloatManifest = ManifestFactory.Float
-  def Double: ManifestFactory.DoubleManifest = ManifestFactory.Double
-  def Boolean: ManifestFactory.BooleanManifest = ManifestFactory.Boolean
-  def Unit: ManifestFactory.UnitManifest = ManifestFactory.Unit
+  val Byte: ManifestFactory.ByteManifest = ManifestFactory.Byte
+  val Short: ManifestFactory.ShortManifest = ManifestFactory.Short
+  val Char: ManifestFactory.CharManifest = ManifestFactory.Char
+  val Int: ManifestFactory.IntManifest = ManifestFactory.Int
+  val Long: ManifestFactory.LongManifest = ManifestFactory.Long
+  val Float: ManifestFactory.FloatManifest = ManifestFactory.Float
+  val Double: ManifestFactory.DoubleManifest = ManifestFactory.Double
+  val Boolean: ManifestFactory.BooleanManifest = ManifestFactory.Boolean
+  val Unit: ManifestFactory.UnitManifest = ManifestFactory.Unit
 
-  def Any: Manifest[scala.Any] = ManifestFactory.Any
-  def Object: Manifest[java.lang.Object] = ManifestFactory.Object
-  def AnyRef: Manifest[scala.AnyRef] = ManifestFactory.AnyRef
-  def AnyVal: Manifest[scala.AnyVal] = ManifestFactory.AnyVal
-  def Null: Manifest[scala.Null] = ManifestFactory.Null
-  def Nothing: Manifest[scala.Nothing] = ManifestFactory.Nothing
+  val Any: Manifest[scala.Any] = ManifestFactory.Any
+  val Object: Manifest[java.lang.Object] = ManifestFactory.Object
+  val AnyRef: Manifest[scala.AnyRef] = ManifestFactory.AnyRef
+  val AnyVal: Manifest[scala.AnyVal] = ManifestFactory.AnyVal
+  val Null: Manifest[scala.Null] = ManifestFactory.Null
+  val Nothing: Manifest[scala.Nothing] = ManifestFactory.Nothing
 
   /** Manifest for the singleton type `value.type`. */
   def singleType[T <: AnyRef](value: AnyRef): Manifest[T] =
@@ -152,8 +152,7 @@ abstract class AnyValManifest[T <: AnyVal](override val toString: String) extend
     case _                    => false
   }
   override def equals(that: Any): Boolean = this eq that.asInstanceOf[AnyRef]
-  @transient
-  override val hashCode = System.identityHashCode(this)
+  override def hashCode = System.identityHashCode(this)
 }
 
 /** `ManifestFactory` defines factory methods for manifests.
@@ -182,7 +181,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Byte
   }
   private object ByteManifest extends ByteManifest
-  def Byte: ByteManifest = ByteManifest
+  val Byte: ByteManifest = ByteManifest
 
   @SerialVersionUID(1L)
   private[reflect] class ShortManifest extends AnyValManifest[scala.Short]("Short") {
@@ -199,7 +198,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Short
   }
   private object ShortManifest extends ShortManifest
-  def Short: ShortManifest = ShortManifest
+  val Short: ShortManifest = ShortManifest
 
   @SerialVersionUID(1L)
   private[reflect] class CharManifest extends AnyValManifest[scala.Char]("Char") {
@@ -216,7 +215,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Char
   }
   private object CharManifest extends CharManifest
-  def Char: CharManifest = CharManifest
+  val Char: CharManifest = CharManifest
 
   @SerialVersionUID(1L)
   private[reflect] class IntManifest extends AnyValManifest[scala.Int]("Int") {
@@ -233,7 +232,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Int
   }
   private object IntManifest extends IntManifest
-  def Int: IntManifest = IntManifest
+  val Int: IntManifest = IntManifest
 
   @SerialVersionUID(1L)
   private[reflect] class LongManifest extends AnyValManifest[scala.Long]("Long") {
@@ -250,7 +249,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Long
   }
   private object LongManifest extends LongManifest
-  def Long: LongManifest = LongManifest
+  val Long: LongManifest = LongManifest
 
   @SerialVersionUID(1L)
   private[reflect] class FloatManifest extends AnyValManifest[scala.Float]("Float") {
@@ -267,7 +266,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Float
   }
   private object FloatManifest extends FloatManifest
-  def Float: FloatManifest = FloatManifest
+  val Float: FloatManifest = FloatManifest
 
   @SerialVersionUID(1L)
   private[reflect] class DoubleManifest extends AnyValManifest[scala.Double]("Double") {
@@ -285,7 +284,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Double
   }
   private object DoubleManifest extends DoubleManifest
-  def Double: DoubleManifest = DoubleManifest
+  val Double: DoubleManifest = DoubleManifest
 
   @SerialVersionUID(1L)
   private[reflect] class BooleanManifest extends AnyValManifest[scala.Boolean]("Boolean") {
@@ -302,7 +301,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Boolean
   }
   private object BooleanManifest extends BooleanManifest
-  def Boolean: BooleanManifest = BooleanManifest
+  val Boolean: BooleanManifest = BooleanManifest
 
   @SerialVersionUID(1L)
   private[reflect] class UnitManifest extends AnyValManifest[scala.Unit]("Unit") {
@@ -322,7 +321,7 @@ object ManifestFactory {
     private def readResolve(): Any = Manifest.Unit
   }
   private object UnitManifest extends UnitManifest
-  def Unit: UnitManifest = UnitManifest
+  val Unit: UnitManifest = UnitManifest
 
   private object AnyManifest extends PhantomManifest[scala.Any](classOf[java.lang.Object], "Any") {
     override def runtimeClass = classOf[java.lang.Object]
@@ -330,7 +329,7 @@ object ManifestFactory {
     override def <:<(that: ClassManifest[_]): Boolean = (that eq this)
     private def readResolve(): Any = Manifest.Any
   }
-  def Any: Manifest[scala.Any] = AnyManifest
+  val Any: Manifest[scala.Any] = AnyManifest
 
   private object ObjectManifest extends PhantomManifest[java.lang.Object](classOf[java.lang.Object], "Object") {
     override def runtimeClass = classOf[java.lang.Object]
@@ -338,9 +337,9 @@ object ManifestFactory {
     override def <:<(that: ClassManifest[_]): Boolean = (that eq this) || (that eq Any)
     private def readResolve(): Any = Manifest.Object
   }
-  def Object: Manifest[java.lang.Object] = ObjectManifest
+  val Object: Manifest[java.lang.Object] = ObjectManifest
 
-  def AnyRef: Manifest[scala.AnyRef] = Object.asInstanceOf[Manifest[scala.AnyRef]]
+  val AnyRef: Manifest[scala.AnyRef] = Object
 
   private object AnyValManifest extends PhantomManifest[scala.AnyVal](classOf[java.lang.Object], "AnyVal") {
     override def runtimeClass = classOf[java.lang.Object]
@@ -348,7 +347,7 @@ object ManifestFactory {
     override def <:<(that: ClassManifest[_]): Boolean = (that eq this) || (that eq Any)
     private def readResolve(): Any = Manifest.AnyVal
   }
-  def AnyVal: Manifest[scala.AnyVal] = AnyValManifest
+  val AnyVal: Manifest[scala.AnyVal] = AnyValManifest
 
   private object NullManifest extends PhantomManifest[scala.Null](classOf[scala.runtime.Null$], "Null") {
     override def runtimeClass = classOf[scala.runtime.Null$]
@@ -357,7 +356,7 @@ object ManifestFactory {
       (that ne null) && (that ne Nothing) && !(that <:< AnyVal)
     private def readResolve(): Any = Manifest.Null
   }
-  def Null: Manifest[scala.Null] = NullManifest
+  val Null: Manifest[scala.Null] = NullManifest
 
   private object NothingManifest extends PhantomManifest[scala.Nothing](classOf[scala.runtime.Nothing$], "Nothing") {
     override def runtimeClass = classOf[scala.runtime.Nothing$]
@@ -365,7 +364,7 @@ object ManifestFactory {
     override def <:<(that: ClassManifest[_]): Boolean = (that ne null)
     private def readResolve(): Any = Manifest.Nothing
   }
-  def Nothing: Manifest[scala.Nothing] = NothingManifest
+  val Nothing: Manifest[scala.Nothing] = NothingManifest
 
   @SerialVersionUID(1L)
   private class SingletonTypeManifest[T <: AnyRef](value: AnyRef) extends Manifest[T] {
@@ -402,8 +401,7 @@ object ManifestFactory {
   private abstract class PhantomManifest[T](_runtimeClass: Predef.Class[_],
                                             override val toString: String) extends ClassTypeManifest[T](None, _runtimeClass, Nil) {
     override def equals(that: Any): Boolean = this eq that.asInstanceOf[AnyRef]
-    @transient
-    override val hashCode = System.identityHashCode(this)
+    override def hashCode = System.identityHashCode(this)
   }
 
   /** Manifest for the class type `clazz[args]`, where `clazz` is

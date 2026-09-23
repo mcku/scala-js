@@ -12,20 +12,20 @@
 
 package org.scalajs.testsuite.compiler
 
-import scala.annotation.tailrec
+import scala.annotation.{switch, tailrec}
 
 import org.junit.Test
 import org.junit.Assert._
 import org.junit.Assume._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.{assertThrows, _}
 
-import org.scalajs.testsuite.utils.Platform
+import org.scalajs.testsuite.utils.Platform._
 
 class RegressionTest {
   import RegressionTest._
 
-  @Test def `Wrong_division_conversion_(7_/_2.0)_issue_18`(): Unit = {
+  @Test def wrongDivisionConversion7Divide2Pt0_Issue18(): Unit = {
     val div = 7 / 2.0
     assertEquals(3.5, div, 0.0)
     assertEquals("double", div.getClass.getName)
@@ -35,7 +35,7 @@ class RegressionTest {
     assertEquals("double", mod.getClass.getName)
   }
 
-  @Test def Abort_with_some_pattern_match_guards_issue_22(): Unit = {
+  @Test def abortWithSomePatternMatchGuards_Issue22(): Unit = {
     object PatternMatchGuards {
       def go(f: Int => Int): Int = f(1)
       def main(): Unit = {
@@ -47,7 +47,7 @@ class RegressionTest {
     // Nothing to check
   }
 
-  @Test def Bad_encoding_for_characters_spanning_2_UTF_16_chars_issue_23(): Unit = {
+  @Test def badEncodingForCharactersSpanning2UTF16Chars_Issue23(): Unit = {
     val str = "A∀\uD835\uDCAB"
     var s: String = ""
     for (c <- str) {
@@ -57,7 +57,7 @@ class RegressionTest {
     assertEquals("65 8704 55349 56491 ", s)
   }
 
-  @Test def characterEscapes_issue_3125(): Unit = {
+  @Test def characterEscapes_Issue3125(): Unit = {
     val str = {
       // The space at the end is intended. It is 0x20.
       "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\u0009\u000a" +
@@ -73,28 +73,22 @@ class RegressionTest {
     assertEquals(39, strQuotes.charAt(1).toInt)
   }
 
-  @Test def String_concatenation_with_null_issue_26(): Unit = {
-    val x: Object = null
-    assertEquals("nullcheck", x + "check")
-  }
-
-  @Test def should_emit_static_calls_when_forwarding_to_another_constructor_issue_66(): Unit = {
+  @Test def emitStaticCallsWhenForwardingToAnotherConstructor_Issue66(): Unit =
     new Bug66B("", "")
-  }
 
-  @Test def should_correctly_call_subSequence_on_non_string_CharSequences_issue_55(): Unit = {
-    val arr: CharSequence = Array('a','b','c','d')
-    val ss = arr.subSequence(2,3)
+  @Test def callSubSequenceOnNonStringCharSequences_Issue55(): Unit = {
+    val arr: CharSequence = java.nio.CharBuffer.wrap(Array('a', 'b', 'c', 'd'))
+    val ss = arr.subSequence(2, 3)
     assertEquals(1, ss.length())
     assertEquals('c', ss.charAt(0))
   }
 
-  @Test def should_correctly_concat_primitive_values_to_strings_issue_113(): Unit = {
+  @Test def concatPrimitiveValuesToStrings_Issue113(): Unit = {
     assertEquals("4foo", 4 + "foo")
     assertEquals("afoo", 'a' + "foo")
   }
 
-  @Test def should_correctly_dispatch_calls_on_private_functions_issue_165(): Unit = {
+  @Test def dispatchCallsOnPrivateFunctions_Issue165(): Unit = {
     class A {
       private def x: Int = 1
       def value: Int = x
@@ -105,83 +99,12 @@ class RegressionTest {
     assertEquals(1, new B().value)
   }
 
-  @Test def should_correctly_mangle_JavaScript_reserved_identifiers_issue_153(): Unit = {
-    // scalastyle:off class.name
-
-    // Class name
-    class break {
-      // class variable
-      var continue: Int = 1
-      // method name
-      def switch: Int = {
-        // local name
-        val default = 2
-        default
-      }
-    }
-    trait Foo {
-      // static member (through mixin)
-      def function: Int = 3
-    }
-
-    val x = new break with Foo
-    assertEquals(1, x.continue)
-    assertEquals(2, x.switch)
-    assertEquals(3, x.function)
-
-    // scalastyle:on class.name
-  }
-
-  @Test def should_correctly_mangle_identifiers_starting_with_a_digit_issue_153(): Unit = {
-    // scalastyle:off class.name
-
-    // Class name
-    class `0` {
-      // class variable
-      var `1`: Int = 1
-      // method name
-      def `2`: Int = {
-        // local name
-        val `22` = 2
-        `22`
-      }
-    }
-    trait Foo {
-      // static member (through mixin)
-      def `3`: Int = 3
-    }
-
-    val x = new `0` with Foo
-    assertEquals(1, x.`1`)
-    assertEquals(2, x.`2`)
-    assertEquals(3, x.`3`)
-
-    // scalastyle:on class.name
-  }
-
-  @Test def should_reserve_eval_and_arguments_issue_743(): Unit = {
-    val eval = 5
-    assertEquals(5, eval)
-    val arguments = "hello"
-    assertEquals("hello", arguments)
-  }
-
-  @Test def should_support_class_literals_for_existential_value_types_issue_218(): Unit = {
-    import Platform.scalaVersion
-
-    assumeFalse("Affected by https://github.com/scala/bug/issues/10551",
-        Platform.executingInJVM && {
-          scalaVersion.startsWith("2.11.") ||
-          scalaVersion == "2.12.0" || scalaVersion == "2.12.1" ||
-          scalaVersion == "2.12.2" || scalaVersion == "2.12.3" ||
-          scalaVersion == "2.12.4"
-        })
-
+  @Test def classLiteralsForExistentialValueTypes_Issue218(): Unit = {
     assertEquals("org.scalajs.testsuite.compiler.RegressionTest$Bug218Foo",
         scala.reflect.classTag[Bug218Foo[_]].toString)
   }
 
-  @Test def should_support_Buffer_issue_268(): Unit = {
+  @Test def buffer_Issue268(): Unit = {
     val a = scala.collection.mutable.Buffer.empty[Int]
     a.insert(0, 0)
     a.remove(0)
@@ -191,7 +114,7 @@ class RegressionTest {
     assertEquals("1, 3, 5, 7, 9, 10, 8, 6, 4, 2, 0", a.mkString(", "))
   }
 
-  @Test def should_not_call_equals_when_comparing_with_a_literal_null_issue_362(): Unit = {
+  @Test def doNotCallEqualsWhenComparingWithLiteralNull_Issue362(): Unit = {
     // scalastyle:off equals.hash.code
     class A {
       override def equals(x: Any): Boolean = !(this == null)
@@ -207,7 +130,7 @@ class RegressionTest {
     assertEquals(x, y)
   }
 
-  @Test def should_unbox_null_to_the_zero_of_types_issue_674(): Unit = {
+  @Test def unboxNullToTheZeroOfTypes_Issue674(): Unit = {
     class Box[A] {
       var value: A = _
     }
@@ -253,7 +176,7 @@ class RegressionTest {
     assertEquals(null, ref)
   }
 
-  @Test def Param_defs_in_tailrec_methods_should_be_considered_mutable_issue_825(): Unit = {
+  @Test def paramDefsInTailrecMethodsAreMutable_Issue825(): Unit = {
     @tailrec
     def foo(x: Int, y: Int): Unit = {
       if (x < y) foo(y, x)
@@ -265,28 +188,31 @@ class RegressionTest {
     foo(2, 4)
   }
 
-  @Test def null_synchronized_should_throw_issue_874(): Unit = {
-    assertThrows(classOf[NullPointerException], null.synchronized(5))
-  }
-
-  @Test def x_synchronized_should_preserve_side_effects_of_x(): Unit = {
+  @Test def synchronizedXPreservesSideEffectsOfX(): Unit = {
     var c = 0
     def x: RegressionTest.this.type = { c += 1; this }
     assertEquals(5, x.synchronized(5))
     assertEquals(1, c)
   }
 
-  @Test def IR_checker_should_allow_Apply_Select_on_NullType_and_NothingType_issue_1123(): Unit = {
-    def giveMeANull(): Null = null
-    assertThrows(classOf[Exception], (giveMeANull(): StringBuilder).append(5))
-    assertThrows(classOf[Exception], (giveMeANull(): scala.runtime.IntRef).elem)
+  @Test def irCheckerAllowsApplySelectOnNullType_Issue1123(): Unit = {
+    /* The IR checker checks this code whether or not the assumption holds.
+     * The assumption only applies to the run-time behavior.
+     */
+    assumeTrue("assuming compliant null pointer checks", hasCompliantNullPointers)
 
-    def giveMeANothing(): Nothing = throw new Exception("boom")
-    assertThrows(classOf[Exception], (giveMeANothing(): StringBuilder).append(5))
-    assertThrows(classOf[Exception], (giveMeANothing(): scala.runtime.IntRef).elem)
+    def giveMeANull(): Null = null
+    assertThrows(classOf[NullPointerException], (giveMeANull(): StringBuilder).append(5))
+    assertThrows(classOf[NullPointerException], (giveMeANull(): scala.runtime.IntRef).elem)
   }
 
-  @Test def IR_checker_must_not_check_field_existence_on_non_existent_classes(): Unit = {
+  @Test def irCheckerAllowsApplySelectOnNothingType_Issue1123(): Unit = {
+    def giveMeANothing(): Nothing = throw new IllegalStateException("boom")
+    assertThrows(classOf[IllegalStateException], (giveMeANothing(): StringBuilder).append(5))
+    assertThrows(classOf[IllegalStateException], (giveMeANothing(): scala.runtime.IntRef).elem)
+  }
+
+  @Test def irCheckerDoesNotCheckFieldExistenceOnNonExistentClasses(): Unit = {
     // In this test, Outer is not "needed at all"
 
     class Outer(x: Int) {
@@ -307,7 +233,7 @@ class RegressionTest {
     assertEquals(3, test(null))
   }
 
-  @Test def IR_checker_must_not_check_field_existence_on_classes_with_no_instance_issue_3060(): Unit = {
+  @Test def irCheckerDoesNotCheckFieldExistenceOnClassesWithNoInstance_Issue3060(): Unit = {
     // In this test, Outer is "needed at all", but does not have any instance
 
     class Outer(x: Int) {
@@ -331,9 +257,7 @@ class RegressionTest {
     assertEquals(3, test(null))
   }
 
-  @Test def IR_checker_must_not_check_method_signatures_on_classes_with_no_instance(): Unit = {
-    assumeTrue("linking only", false)
-
+  @Test def irCheckerDoesNotCheckMethodSignaturesOnClassesWithNoInstance(): Unit = {
     class Foo // this class will be dropped by base linking
 
     class Bar {
@@ -345,13 +269,35 @@ class RegressionTest {
 
     @noinline def nullBar(): Bar = null
 
+    @noinline def nothingBar(): Bar = throw new IllegalStateException()
+
     // the IR checker must not try to infer the signature of these calls
-    nullBar().meth(null)
-    (null: Bar).meth(null)
-    (??? : Bar).meth(null) // scalastyle:ignore
+    assertThrowsNPEIfCompliant(nullBar().meth(null))
+    assertThrowsNPEIfCompliant((null: Bar).meth(null))
+    assertThrows(classOf[IllegalStateException], (nothingBar(): Bar).meth(null))
   }
 
-  @Test def should_properly_order_ctor_statements_when_inlining_issue_1369(): Unit = {
+  @Test def irCheckerDoesNotCheckMethodSignaturesOnInterfacesWithNoInstance(): Unit = {
+    class Foo // this class will be dropped by base linking
+
+    trait Bar {
+      /* This method is called, but unreachable because there are no instances
+       * of `Bar`. It will therefore not make `Foo` reachable.
+       */
+      def meth(foo: Foo): String = foo.toString()
+    }
+
+    @noinline def nullBar(): Bar = null
+
+    @noinline def nothingBar(): Bar = throw new IllegalStateException()
+
+    // the IR checker must not try to infer the signature of these calls
+    assertThrowsNPEIfCompliant(nullBar().meth(null))
+    assertThrowsNPEIfCompliant((null: Bar).meth(null))
+    assertThrows(classOf[IllegalStateException], (nothingBar(): Bar).meth(null))
+  }
+
+  @Test def orderCtorStatementsWhenInlining_Issue1369(): Unit = {
     trait Bar {
       def x: Int
       var y = x + 1
@@ -365,9 +311,9 @@ class RegressionTest {
     assertEquals(2, obj.y)
   }
 
-  @Test def should_not_restrict_mutability_of_fields_issue_1021(): Unit = {
+  @Test def doNotRestrictMutabilityOfFields_Issue1021(): Unit = {
     class A {
-      /* This var is refered to in the lambda passed to `foreach`. Therefore
+      /* This var is referred to in the lambda passed to `foreach`. Therefore
        * it is altered in another compilation unit (even though it is
        * private[this]).
        * This test makes sure the compiler doesn't wrongly mark it as
@@ -387,7 +333,7 @@ class RegressionTest {
     assertEquals(2, a.get)
   }
 
-  @Test def should_populate_desugar_environments_with_Closure_params_issue_1399(): Unit = {
+  @Test def populateDesugarEnvironmentsWithClosureParams_Issue1399(): Unit = {
     /* To query whether a field is mutable, the JSDesugar needs to first
      * unnest a statement block from an argument list, and then unnest the
      * parameter under test.
@@ -420,7 +366,7 @@ class RegressionTest {
     assertEquals("15", new Test().fct(1))
   }
 
-  @Test def should_not_cause_Closure_to_crash_with_Unexpected_variable_NaN_issue_1469(): Unit = {
+  @Test def doNotCauseClosureToCrashWithUnexpectedVariableNaN_Issue1469(): Unit = {
     /* Basically we want to make sure that a specialized bridge of Function1
      * taking and returning Double is emitted (and not dce'ed) for this
      * class F, which actually returns Unit.
@@ -456,28 +402,113 @@ class RegressionTest {
     f(5)
   }
 
-  @Test def switch_match_with_2_guards_for_the_same_value_issue_1589(): Unit = {
-    @noinline def genB(): Int = 0xE1
+  @Test def switchMatchWith2GuardsForTheSameValue_Issue1589(): Unit = {
+    @noinline def genB(): Int = 0xe1
     val b = genB()
     val x = b >> 4 match {
-      case 0xE if b == 0xE0 =>
+      case 0xe if b == 0xe0 =>
         4
-      case 0xE if b == 0xE1 =>
+      case 0xe if b == 0xe1 =>
         5
     }
     assertEquals(5, x)
   }
 
-  @Test def switch_match_with_a_guard_and_a_result_type_of_BoxedUnit_issue_1955(): Unit = {
+  @Test def switchMatchWithGuardAndResultTypeOfBoxedUnit_Issue1955(): Unit = {
     val bug = new Bug1955
     bug.bug(2, true)
-    assertEquals(0, bug.result)
+    assertEquals(22, bug.result)
+    bug.bug(2, false)
+    assertEquals(-1, bug.result)
     bug.bug(1, true)
     assertEquals(579, bug.result)
-    assertThrows(classOf[MatchError], bug.bug(2, false))
+    bug.bug(6, true)
+    assertEquals(-1, bug.result)
   }
 
-  @Test def return_x_match_issue_2928(): Unit = {
+  @Test def switchMatchWithGuardAndResultTypeOfBoxedUnitWithTailrec_Issue5112(): Unit = {
+    val bug = new Bug5112
+    bug.bug('d', true)
+    assertEquals(44, bug.result)
+    bug.bug('a', true)
+    assertEquals(11, bug.result)
+    bug.bug('E', true)
+    assertEquals(22, bug.result)
+    bug.bug('e', false)
+    assertEquals(44, bug.result)
+    bug.bug('G', false)
+    assertEquals(33, bug.result)
+  }
+
+  @Test def switchMatchWithGuardInStatementPosButWithNonUnitBranches_Issue4105(): Unit = {
+    def encodeString(string: String, isKey: Boolean): String = {
+      val buffer = new java.lang.StringBuilder()
+      val length = string.length
+      var index = 0
+      while (index < length) {
+        val ch = string.charAt(index)
+        (ch: @switch) match { // note that this is a switch, in statement position
+          case '\t' =>
+            buffer.append("\\t") // note that all branches return a StringBuilder
+          case '\n' =>
+            buffer.append("\\n")
+          case '\f' =>
+            buffer.append("\\f")
+          case '\r' =>
+            buffer.append("\\r")
+          case '\\' | '#' | '!' | '=' | ':' =>
+            buffer.append('\\')
+            buffer.append(ch)
+          case ' ' if isKey => // note the guard here!
+            buffer.append("\\ ")
+          case _ =>
+            buffer.append(ch)
+        }
+        index += 1
+      }
+      buffer.toString()
+    }
+
+    assertEquals("abc", encodeString("abc", false))
+    assertEquals("abc", encodeString("abc", true))
+    assertEquals("abc def", encodeString("abc def", false))
+    assertEquals("abc\\ def", encodeString("abc def", true))
+    assertEquals("1\\t2\\n3\\f4\\r5\\\\6\\!7 8a9", encodeString("1\t2\n3\f4\r5\\6!7 8a9", false))
+    assertEquals("1\\t2\\n3\\f4\\r5\\\\6\\!7\\ 8a9", encodeString("1\t2\n3\f4\r5\\6!7 8a9", true))
+  }
+
+  @Test def returnXMatchInt_Issue2928(): Unit = {
+    // scalastyle:off return
+
+    def testNonUnit(x: Int): Boolean = {
+      return x match {
+        case 1 => true
+        case _ => false
+      }
+    }
+
+    var r: Option[Boolean] = None
+
+    def testUnit(x: Int): Unit = {
+      return x match {
+        case 1 => r = Some(true)
+        case _ => r = Some(false)
+      }
+    }
+
+    assertEquals(true, testNonUnit(1))
+    assertEquals(false, testNonUnit(2))
+
+    testUnit(1)
+    assertEquals(Some(true), r)
+    r = None
+    testUnit(2)
+    assertEquals(Some(false), r)
+
+    // scalastyle:on return
+  }
+
+  @Test def returnXMatchString_Issue2928(): Unit = {
     // scalastyle:off return
 
     def testNonUnit(x: String): Boolean = {
@@ -508,7 +539,42 @@ class RegressionTest {
     // scalastyle:on return
   }
 
-  @Test def null_asInstanceOf_Unit_should_succeed_issue_1691(): Unit = {
+  @Test def returnXMatchList_Issue2928(): Unit = {
+    // scalastyle:off return
+
+    def testNonUnit(x: List[String]): Boolean = {
+      return x match {
+        case "True" :: Nil => true
+        case _             => false
+      }
+    }
+
+    var r: Option[Boolean] = None
+
+    def testUnit(x: List[String]): Unit = {
+      return x match {
+        case "True" :: Nil => r = Some(true)
+        case _             => r = Some(false)
+      }
+    }
+
+    assertEquals(true, testNonUnit("True" :: Nil))
+    assertEquals(false, testNonUnit("not true" :: Nil))
+    assertEquals(false, testNonUnit("True" :: "second" :: Nil))
+
+    testUnit("True" :: Nil)
+    assertEquals(Some(true), r)
+    r = None
+    testUnit("not true" :: Nil)
+    assertEquals(Some(false), r)
+    r = None
+    testUnit("True" :: "second" :: Nil)
+    assertEquals(Some(false), r)
+
+    // scalastyle:on return
+  }
+
+  @Test def nullAsInstanceOfUnitSucceeds_Issue1691(): Unit = {
     /* Avoid scalac's special treatment of `<literal null>.asInstanceOf[X]`.
      * It does have the benefit to test our constant-folder of that pattern,
      * once getNull() is inlined; and of our run-time implementation, when the
@@ -517,20 +583,15 @@ class RegressionTest {
     def getNull(): Any = null
     val x = getNull().asInstanceOf[Unit]: Any
 
-    if (Platform.scalaVersion.startsWith("2.11.")) {
-      assertNull(x.asInstanceOf[AnyRef])
-    } else {
-      // As of Scala 2.12.0-M5, null.asInstanceOf[Unit] (correctly) returns ()
-      assertEquals((), x)
-    }
+    assertEquals((), x)
   }
 
-  @Test def lambda_parameter_with_a_dash_issue_1790(): Unit = {
+  @Test def lambdaParameterWithDash_Issue1790(): Unit = {
     val f = (`a-b`: Int) => `a-b` + 1
     assertEquals(6, f(5))
   }
 
-  @Test def nested_labeled_block_sort_circuit_returns_issue_2307(): Unit = {
+  @Test def nestedLabeledBlockSortCircuitReturns_Issue2307(): Unit = {
     class UnsafeCrud(i: Int) {
       def unsafeUpdate(l: List[Any], i: Int, f: Any => Any): (List[Any], Any) = {
         def loop(l: List[Any], i: Int, prefix: List[Any]): (List[Any], List[Any], Any) = {
@@ -558,18 +619,6 @@ class RegressionTest {
     assertEquals((Nil, 10), result)
   }
 
-  private val hasEqEqJLFloatDoubleBug: Boolean = {
-    val v = Platform.scalaVersion
-    v.startsWith("2.11.") || v == "2.12.1"
-  }
-
-  def assertTrueUnlessEqEqJLFloatDoubleBug(actual: Boolean): Unit = {
-    if (hasEqEqJLFloatDoubleBug)
-      assertFalse(actual)
-    else
-      assertTrue(actual)
-  }
-
   @Test def eqEqJLDouble(): Unit = {
     // Taken from run/sd329.scala in scala/scala
 
@@ -584,10 +633,10 @@ class RegressionTest {
     def d2B: java.lang.Double = d2
     def d3B: java.lang.Double = d3
     def d4B: java.lang.Double = d4
-    assertTrueUnlessEqEqJLFloatDoubleBug(d1B == d2B)
+    assertTrue(d1B == d2B)
     assertTrue(d1 == d1B)
     assertTrue(d1B == d1)
-    assertTrueUnlessEqEqJLFloatDoubleBug(d3B != d4B)
+    assertTrue(d3B != d4B)
     assertTrue(d3 != d4B)
     assertTrue(d3B != d4)
 
@@ -625,10 +674,10 @@ class RegressionTest {
     def f2B: java.lang.Float = f2
     def f3B: java.lang.Float = f3
     def f4B: java.lang.Float = f4
-    assertTrueUnlessEqEqJLFloatDoubleBug(f1B == f2B)
+    assertTrue(f1B == f2B)
     assertTrue(f1 == f1B)
     assertTrue(f1B == f1)
-    assertTrueUnlessEqEqJLFloatDoubleBug(f3B != f4B)
+    assertTrue(f3B != f4B)
     assertTrue(f3 != f4B)
     assertTrue(f3B != f4)
 
@@ -652,7 +701,7 @@ class RegressionTest {
     assertTrue(f3A != f4B)
   }
 
-  @Test def isInstanceOf_must_not_call_toString_issue_2953(): Unit = {
+  @Test def isInstanceOfDoesNotCallToString_Issue2953(): Unit = {
     class C {
       override def toString(): String =
         throw new AssertionError("C.toString must not be called by isInstanceOf")
@@ -674,12 +723,7 @@ class RegressionTest {
     assertFalse("String", c.isInstanceOf[String])
   }
 
-  @Test def super_mixin_call_in_2_12_issue_3013(): Unit = {
-    assumeTrue(
-        "Super mixin calls are broken in Scala/JVM 2.12.{0-2}",
-        !Platform.executingInJVM ||
-        !Set("2.12.1", "2.12.2").contains(Platform.scalaVersion))
-
+  @Test def superMixinCallIn212_Issue3013(): Unit = {
     import Bug3013._
 
     val b = new B
@@ -689,7 +733,7 @@ class RegressionTest {
     assertEquals("B", c.t3)
   }
 
-  @Test def tailrec_in_trait_with_self_type_scala_2_12_issue_3058(): Unit = {
+  @Test def tailrecInTraitWithSelfTypeScala212_Issue3058(): Unit = {
     trait Parent { this: Child =>
       @tailrec final def bar(i: Int, acc: Int): Int = {
         if (i <= count)
@@ -706,7 +750,7 @@ class RegressionTest {
     assertEquals(15, new Child().bar(1, 0))
   }
 
-  @Test def tailrec_in_class_with_self_type_scala_2_12_issue_3058(): Unit = {
+  @Test def tailrecInClassWithSelfTypeScala212_Issue3058(): Unit = {
     class Parent { this: Child =>
       @tailrec final def bar(i: Int, acc: Int): Int = {
         if (i <= count)
@@ -723,7 +767,7 @@ class RegressionTest {
     assertEquals(15, new Child().bar(1, 0))
   }
 
-  @Test def tailrec_in_trait_with_self_type_scala_2_12_issue_3267(): Unit = {
+  @Test def tailrecInTraitWithSelfTypeScala212_Issue3267(): Unit = {
     class Parser {
       def c(): Int = 65
     }
@@ -748,7 +792,7 @@ class RegressionTest {
     assertEquals(107, new ParserWithHelpers().rec(3))
   }
 
-  @Test def tailrec_in_class_with_self_type_scala_2_12_issue_3267(): Unit = {
+  @Test def tailrecInClassWithSelfTypeScala212_Issue3267(): Unit = {
     trait Parser {
       def c(): Int = 65
     }
@@ -773,7 +817,7 @@ class RegressionTest {
     assertEquals(107, new ParserWithHelpers().rec(3))
   }
 
-  @Test def adaptedIntToLongInMatch_issue_3281(): Unit = {
+  @Test def adaptedIntToLongInMatch_Issue3281(): Unit = {
     import Bug3281._
 
     val l: Any = 0 :: Nil
@@ -783,7 +827,7 @@ class RegressionTest {
     assertEquals(5L, r)
   }
 
-  @Test def polymorphicArrayApplyWithArrayOfArrayOfChar_issue_3338(): Unit = {
+  @Test def polymorphicArrayApplyWithArrayOfArrayOfChar_Issue3338(): Unit = {
     @inline
     def arrayGet[A](a: Array[A], i: Int): Any = a(i)
 
@@ -796,6 +840,156 @@ class RegressionTest {
     assertEquals('a', d)
   }
 
+  @Test def nestedObjectNamedClass_Issue3888(): Unit =
+    assertEquals(6, `class`.foo(5))
+
+  @Test def gccCrashWithLetConst_Issue4098(): Unit = {
+    val set = new java.util.HashSet[String]()
+    set.remove("")
+    set.remove("1") // only if remove is called twice
+    assertEquals(0, set.size())
+  }
+
+  @Test def nestedObjectsAndClassesWhoseNamesDifferOnlyInCase_Issue4148(): Unit = {
+    // These tests mostly assert that all four objects and classes link
+    assertEquals(1, staticForwardersAvoidanceObjectBeforeClass.checkValue)
+    assertEquals(2, new StaticForwardersAvoidanceObjectBeforeClass().checkValue)
+    assertEquals(3, new StaticForwardersAvoidanceObjectAfterClass().checkValue)
+    assertEquals(4, staticForwardersAvoidanceObjectAfterClass.checkValue)
+  }
+
+  @Test def fieldsWithNothingType_Issue4370(): Unit = {
+    class EagerFieldsWithNothingType {
+      val a: Nothing = throw new IllegalStateException("always")
+      var b: Nothing = throw new IllegalStateException("never")
+    }
+
+    val ex1 = assertThrows(classOf[IllegalStateException], new EagerFieldsWithNothingType)
+    assertEquals("always", ex1.getMessage())
+
+    class LazyFieldsWithNothingType {
+      lazy val a: Nothing = throw new IllegalStateException("lazily always")
+    }
+
+    val obj = new LazyFieldsWithNothingType
+    val ex2 = assertThrows(classOf[IllegalStateException], obj.a)
+    assertEquals("lazily always", ex2.getMessage())
+  }
+
+  @Test def paramDefWithWrongTypeWithHKTAndTypeAliases_Issue3953(): Unit = {
+    import scala.language.higherKinds
+
+    sealed class StreamT[M[_]](val step: M[Step[StreamT[M]]])
+
+    sealed abstract class Step[S]
+
+    def mustMatch[A](actual: A)(f: PartialFunction[A, Boolean]): Boolean =
+      f.applyOrElse(actual, (_: Any) => false)
+
+    type Id[A] = A
+
+    val result = mustMatch(new StreamT[Id](null).step) {
+      case _ => true
+    }
+    assertTrue(result)
+  }
+
+  @Test
+  def traitMixinInLocalLazyVal_Issue3918(): Unit = {
+    trait TraitMixedInLocalLazyVal {
+      val foo = "foobar"
+    }
+
+    lazy val localLazyVal = {
+      class ClassExtendsTraitInLocalLazyVal extends TraitMixedInLocalLazyVal
+      val obj = new ClassExtendsTraitInLocalLazyVal
+      obj.foo
+    }
+    assertEquals("foobar", localLazyVal)
+  }
+
+  @Test
+  def inferConstableOrConstantDesc_Issue4545(): Unit = {
+    // Both Constable and ConstantDesc
+    val b = Array("foo", java.lang.Integer.valueOf(5))
+    assertEquals(2, b.length)
+    assertEquals("foo", b(0))
+    assertEquals(5, b(1))
+
+    // Both Constable but Boolean is not a ConstantDesc
+    val a = Array("foo", java.lang.Boolean.TRUE)
+    assertEquals(2, a.length)
+    assertEquals("foo", a(0))
+    assertEquals(true, a(1))
+  }
+
+  @Test
+  def anyValMethodWithDefaultParamsOverloadedInCompanion_Issue4583(): Unit = {
+    assertEquals(5, Bug4583.bar(5))
+    assertEquals("hello", Bug4583.bar("hello"))
+
+    val foo = new Bug4583(6)
+    assertEquals(6, foo.bar())
+    assertEquals(8, foo.bar(2))
+  }
+
+  @Test
+  def valueCapturedTwiceWithDifferentNames_Issue4716(): Unit = {
+    /* The optimizer used to produce Closures with duplicate capture parameter
+     * names. This happens when two different vals are captured in a lambda,
+     * and these vals are aliases of each other so the optimizer merges them.
+     * It then gives the same name to the capture params.
+     *
+     * To reproduce the bug, we need captures that cannot be eliminated by the
+     * emitter afterwards. This is why we need the loop.
+     */
+
+    @noinline def hideClosure[A](f: () => A): A = f()
+
+    var done = false
+    while (!done) { // don't remove this loop or the test becomes moot
+      @noinline def makePair(): (Int, Int) = (5, 6)
+
+      val capture1 = makePair()
+      val capture2: scala.Product2[Int, Int] = capture1
+
+      assertEquals(11, hideClosure { () =>
+        capture1._1 + capture2._2
+      })
+
+      done = true
+    }
+  }
+
+  @Test
+  def inlineClassWithMultipleFieldsOfSameSimpleName_Issue4947(): Unit = {
+    @noinline
+    def hide(x: Any): Any = x
+
+    @noinline
+    def test: Boolean = false
+
+    val b =
+      if (test) new Bug4947.B("f")
+      else new Bug4947.B("g")
+
+    assertEquals(1, hide(b.foo))
+    assertEquals("g", hide(b.bar))
+  }
+
+  @Test
+  def typedClosureWithStatementBodyMustBeTransformedAsStat_Issue5331(): Unit = {
+    final class Box(var x: Int)
+
+    @noinline
+    def escapeAndCall(body: Runnable): Unit = body.run()
+
+    val box = new Box(5)
+    val task: Runnable = () => box.x = 6 // SAM for Runnable
+    escapeAndCall(task)
+    assertEquals(6, box.x)
+  }
+
 }
 
 object RegressionTest {
@@ -805,6 +999,7 @@ object RegressionTest {
     def this(e: Object) = this("", e)
     def this(s: String) = this(s, "")
   }
+
   class Bug66B(s: String, e: Object) extends Bug66A(s)
 
   class Bug1955 {
@@ -816,12 +1011,34 @@ object RegressionTest {
     }
 
     def bug(x: Int, e: Boolean): Unit = {
-      x match {
-        case 1 => doSomething(123, 456, ())
-        case 2 if e =>
+      (x: @switch) match {
+        case 1      => doSomething(123, 456, ())
+        case 2 if e => result = 22
+        case 3      => result = 33
+        case 4      => result = 44
+        case _      => result = -1
       }
 
       if (false) ()
+    }
+  }
+
+  class Bug5112 {
+    var result: Int = 0
+
+    // The tail-recursive transformation is required to trigger the bug
+    @tailrec
+    final def bug(ch: Char, guard: Boolean): Unit = {
+      if (ch >= 'A' && ch <= 'Z') {
+        bug((ch + 'a' - 'A').toChar, guard)
+      } else {
+        (ch: @switch) match {
+          case 'a'                => result = 11
+          case 'c' | 'e' if guard => result = 22
+          case 'g'                => result = 33
+          case _                  => result = 44
+        }
+      }
     }
   }
 
@@ -853,5 +1070,57 @@ object RegressionTest {
 
     def overloaded(x: Any): Unit =
       fail("Bug3281.overloaded(x: Any) was called")
+  }
+
+  object `class` { // scalastyle:ignore
+    def foo(x: Int): Int = x + 1
+  }
+
+  class Bug4583(val x: Int) extends AnyVal {
+    def bar(y: Int = 0): Int = x + y
+  }
+
+  object Bug4583 {
+    def bar(x: Int): Int = x
+    def bar(x: String): String = x
+  }
+
+  object Bug4947 {
+    class A {
+      private val x: Int = 1
+      def foo: Int = x
+    }
+
+    @inline
+    class B(init: String) extends A {
+      private val x: String = init
+      def bar: String = x
+    }
+  }
+
+  /* The objects and classes here intentionally have names that differ only in
+   * case, and are intentionally defined in a specific order. This is required
+   * to properly test the fix for #4148 (static forwarders can overwrite
+   * companion classes with a name that differs only in case on
+   * case-insensitive file systems). Depending on the order of which comes
+   * first or second, different strategies can fail, so we test both. For
+   * example, prior to the fix, #4148 would only manifest itself when the
+   * object was declared *after* the class, but not before.
+   */
+
+  object staticForwardersAvoidanceObjectBeforeClass {
+    def checkValue: Int = 1
+  }
+
+  class StaticForwardersAvoidanceObjectBeforeClass {
+    def checkValue: Int = 2
+  }
+
+  class StaticForwardersAvoidanceObjectAfterClass {
+    def checkValue: Int = 3
+  }
+
+  object staticForwardersAvoidanceObjectAfterClass {
+    def checkValue: Int = 4
   }
 }

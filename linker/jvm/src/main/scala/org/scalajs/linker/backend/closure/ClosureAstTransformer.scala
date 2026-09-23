@@ -18,23 +18,37 @@ import org.scalajs.ir
 import ir.Position
 import ir.Position.NoPosition
 
+import org.scalajs.linker.Nullables._
 import org.scalajs.linker.backend.javascript.Trees._
 import org.scalajs.linker.backend.javascript.SourceFileUtil
 
 import com.google.javascript.rhino._
-import com.google.javascript.rhino.StaticSourceFile.SourceKind
-import com.google.javascript.jscomp._
+import com.google.javascript.jscomp.parsing.parser.FeatureSet
 
-import scala.collection.mutable
 import scala.annotation.tailrec
 
+import java.lang.{Double => JDouble}
 import java.net.URI
 
-private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
+private[closure] object ClosureAstTransformer {
+  def transformScript(topLevelTrees: List[Tree], featureSet: FeatureSet,
+      relativizeBaseURI: Option[URI]): Node = {
+    val transformer = new ClosureAstTransformer(featureSet, relativizeBaseURI)
+    transformer.transformScript(topLevelTrees)
+  }
+}
 
-  private val inputId = new InputId("Scala.js IR")
-
+private class ClosureAstTransformer(featureSet: FeatureSet,
+    relativizeBaseURI: Option[URI]) {
   private val dummySourceName = new java.net.URI("virtualfile:scala.js-ir")
+
+  def transformScript(topLevelTrees: List[Tree]): Node = {
+    val script = setNodePosition(new Node(Token.SCRIPT), NoPosition)
+    for (stat <- topLevelTrees)
+      script.addChildToBack(transformStat(stat)(NoPosition))
+    script.putProp(Node.FEATURE_SET, featureSet)
+    script
+  }
 
   def transformStat(tree: Tree)(implicit parentPos: Position): Node =
     innerTransformStat(tree, tree.pos orElse parentPos)
@@ -43,6 +57,20 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
     implicit val pos = pos_in
 
     wrapTransform(tree) {
+      case JSDocConstructor(tree) =>
+        val node = transformStat(tree)
+        // The @constructor must be propagated through an ExprResult node
+        val trg =
+          if (node.isExprResult()) node.getChildAtIndex(0)
+          else node
+        val ctorDoc = {
+          val b = JSDocInfo.builder()
+          b.recordConstructor()
+          b.build()
+        }
+        trg.setJSDocInfo(ctorDoc)
+        node
+
       case VarDef(ident, optRhs) =>
         val node = transformName(ident)
         optRhs.foreach(rhs => node.addChildToFront(transformExpr(rhs)))
@@ -116,7 +144,7 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
       case Continue(None) =>
         new Node(Token.CONTINUE)
       case Continue(Some(label)) =>
-       new Node(Token.CONTINUE, transformLabel(label))
+        new Node(Token.CONTINUE, transformLabel(label))
 
       case Switch(selector, cases, default) =>
         val switchNode = new Node(Token.SWITCH, transformExpr(selector))
@@ -151,21 +179,14 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
       case Debugger() =>
         new Node(Token.DEBUGGER)
 
-      case FunctionDef(name, args, body) =>
+      case FunctionDef(name, args, restParam, body) =>
         val node = transformName(name)
-        val rhs = genFunction(name.name, args, body)
+        val rhs = genFunction(name.resolveName(), args, restParam, body)
         node.addChildToFront(rhs)
         new Node(Token.VAR, node)
 
-      case ClassDef(className, parentClass, members) =>
-        val membersBlock = new Node(Token.CLASS_MEMBERS)
-        for (member <- members)
-          membersBlock.addChildToBack(transformClassMember(member))
-        new Node(
-            Token.CLASS,
-            className.fold(new Node(Token.EMPTY))(transformName(_)),
-            parentClass.fold(new Node(Token.EMPTY))(transformExpr(_)),
-            membersBlock)
+      case classDef: ClassDef =>
+        transformClassDef(classDef)
 
       case _ =>
         // We just assume it is an expression
@@ -173,12 +194,26 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
     }
   }
 
+  private def transformClassDef(classDef: ClassDef)(
+      implicit pos: Position): Node = {
+    val ClassDef(className, parentClass, members) = classDef
+
+    val membersBlock = new Node(Token.CLASS_MEMBERS)
+    for (member <- members)
+      membersBlock.addChildToBack(transformClassMember(member))
+    new Node(
+        Token.CLASS,
+        className.fold(new Node(Token.EMPTY))(transformName(_)),
+        parentClass.fold(new Node(Token.EMPTY))(transformExpr(_)),
+        membersBlock)
+  }
+
   private def transformClassMember(member: Tree): Node = {
     implicit val pos = member.pos
 
-    def newFixedPropNode(token: Token, static: Boolean, name: Ident,
+    def newFixedPropNode(token: Token, static: Boolean, name: MaybeDelayedIdent,
         function: Node): Node = {
-      val node = Node.newString(token, name.name)
+      val node = Node.newString(token, name.resolveName())
       node.addChildToBack(function)
       node.setStaticMember(static)
       node
@@ -198,8 +233,8 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
     }
 
     wrapTransform(member) {
-      case MethodDef(static, name, args, body) =>
-        val function = genFunction("", args, body)
+      case MethodDef(static, name, args, restParam, body) =>
+        val function = genFunction("", args, restParam, body)
         name match {
           case ComputedName(nameExpr) =>
             val node = newComputedPropNode(static, nameExpr, function)
@@ -224,12 +259,12 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
             val node = newComputedPropNode(static, nameExpr, function)
             node.putBooleanProp(Node.COMPUTED_PROP_METHOD, true)
             node
-          case name: Ident =>
+          case name: MaybeDelayedIdent =>
             newFixedPropNode(Token.MEMBER_FUNCTION_DEF, static, name, function)
         }
 
       case GetterDef(static, name, body) =>
-        val function = genFunction("", Nil, body)
+        val function = genFunction("", Nil, None, body)
         name match {
           case ComputedName(nameExpr) =>
             val node = newComputedPropNode(static, nameExpr, function)
@@ -240,12 +275,12 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
             val node = newComputedPropNode(static, nameExpr, function)
             node.putBooleanProp(Node.COMPUTED_PROP_GETTER, true)
             node
-          case name: Ident =>
+          case name: MaybeDelayedIdent =>
             newFixedPropNode(Token.GETTER_DEF, static, name, function)
         }
 
       case SetterDef(static, name, param, body) =>
-        val function = genFunction("", param :: Nil, body)
+        val function = genFunction("", param :: Nil, None, body)
         name match {
           case ComputedName(nameExpr) =>
             val node = newComputedPropNode(static, nameExpr, function)
@@ -256,7 +291,7 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
             val node = newComputedPropNode(static, nameExpr, function)
             node.putBooleanProp(Node.COMPUTED_PROP_SETTER, true)
             node
-          case name: Ident =>
+          case name: MaybeDelayedIdent =>
             newFixedPropNode(Token.SETTER_DEF, static, name, function)
         }
 
@@ -287,7 +322,9 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
         args.foreach(arg => node.addChildToBack(transformExpr(arg)))
         node
       case DotSelect(qualifier, item) =>
-        new Node(Token.GETPROP, transformExpr(qualifier), transformString(item))
+        val node = Node.newString(Token.GETPROP, item.resolveName())
+        node.addChildToBack(transformExpr(qualifier))
+        setNodePosition(node, item.pos.orElse(pos))
       case BracketSelect(qualifier, item) =>
         new Node(Token.GETELEM, transformExpr(qualifier), transformExpr(item))
 
@@ -299,17 +336,22 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
         // `this` or not. Since JSDesugar inserts protects calls if necessary,
         // it is sufficient to check if we have a select as target
         if (!fun.isInstanceOf[DotSelect] &&
-            !fun.isInstanceOf[BracketSelect])
+            !fun.isInstanceOf[BracketSelect]) {
           node.putBooleanProp(Node.FREE_CALL, true)
+        }
 
         node
 
       case ImportCall(arg) =>
         new Node(Token.DYNAMIC_IMPORT, transformExpr(arg))
+      case NewTarget() =>
+        new Node(Token.NEW_TARGET)
       case Delete(prop) =>
         new Node(Token.DELPROP, transformExpr(prop))
       case UnaryOp(op, lhs) =>
         mkUnaryOp(op, transformExpr(lhs))
+      case Await(arg) =>
+        new Node(Token.AWAIT, transformExpr(arg))
       case IncDec(prefix, inc, arg) =>
         val token = if (inc) Token.INC else Token.DEC
         val node = new Node(token, transformExpr(arg))
@@ -335,9 +377,11 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
       case BooleanLiteral(value) =>
         if (value) new Node(Token.TRUE) else new Node(Token.FALSE)
       case IntLiteral(value) =>
-        Node.newNumber(value)
+        mkNumberLiteral(value)
+      case UintLiteral(value) =>
+        mkNumberLiteral(Integer.toUnsignedLong(value).toDouble)
       case DoubleLiteral(value) =>
-        Node.newNumber(value)
+        mkNumberLiteral(value)
       case StringLiteral(value) =>
         Node.newString(value)
       case VarRef(ident) =>
@@ -347,50 +391,53 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
       case Super() =>
         new Node(Token.SUPER)
 
-      case Function(arrow, args, body) =>
-        val node = genFunction("", args, body)
-        node.setIsArrowFunction(arrow)
+      case Function(flags, args, restParam, body) =>
+        val node = genFunction("", args, restParam, body)
+        node.setIsArrowFunction(flags.arrow)
+        node.setIsAsyncFunction(flags.async)
         node
-      case FunctionDef(name, args, body) =>
-        genFunction(name.name, args, body)
+      case FunctionDef(name, args, restParam, body) =>
+        genFunction(name.resolveName(), args, restParam, body)
+
+      case classDef: ClassDef =>
+        transformClassDef(classDef)
 
       case Spread(items) =>
-        new Node(Token.SPREAD, transformExpr(items))
+        new Node(Token.ITER_SPREAD, transformExpr(items))
 
       case _ =>
         throw new TransformException(s"Unknown tree of class ${tree.getClass()}")
     }
   }
 
-  private def genFunction(name: String, args: List[ParamDef], body: Tree)(
+  private def genFunction(name: String, params: List[ParamDef], restParam: Option[ParamDef],
+      body: Tree)(
       implicit pos: Position): Node = {
     val paramList = new Node(Token.PARAM_LIST)
-    args.foreach(arg => paramList.addChildToBack(transformParam(arg)))
+    for (param <- params) {
+      paramList.addChildToBack(transformName(param.name)(param.pos.orElse(pos)))
+    }
+
+    for (param <- restParam) {
+      val pos1 = param.pos.orElse(pos)
+      val node = new Node(Token.ITER_REST, transformName(param.name)(pos1))
+      paramList.addChildToBack(setNodePosition(node, pos1))
+    }
 
     val nameNode = setNodePosition(Node.newString(Token.NAME, name), pos)
 
     new Node(Token.FUNCTION, nameNode, paramList, transformBlock(body))
   }
 
-  def transformParam(param: ParamDef)(implicit parentPos: Position): Node = {
-    val pos = if (param.pos.isDefined) param.pos else parentPos
-    val node = transformName(param.name)(pos)
-    if (param.rest)
-      setNodePosition(new Node(Token.REST, node), pos)
-    else
-      node
+  def transformName(ident: MaybeDelayedIdent)(implicit parentPos: Position): Node = {
+    setNodePosition(Node.newString(Token.NAME, ident.resolveName()),
+        ident.pos orElse parentPos)
   }
 
-  def transformName(ident: Ident)(implicit parentPos: Position): Node =
-    setNodePosition(Node.newString(Token.NAME, ident.name),
-        ident.pos orElse parentPos)
-
-  def transformLabel(ident: Ident)(implicit parentPos: Position): Node =
+  def transformLabel(ident: Ident)(implicit parentPos: Position): Node = {
     setNodePosition(Node.newString(Token.LABEL_NAME, ident.name),
         ident.pos orElse parentPos)
-
-  def transformString(ident: Ident)(implicit parentPos: Position): Node =
-    setNodePosition(Node.newString(ident.name), ident.pos orElse parentPos)
+  }
 
   def transformObjectLitField(name: PropertyName, value: Tree)(
       implicit parentPos: Position): Node = {
@@ -398,12 +445,12 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
     val transformedValue = transformExpr(value)
 
     val node = name match {
-      case Ident(name, _) =>
-        Node.newString(Token.STRING_KEY, name)
+      case name: MaybeDelayedIdent =>
+        Node.newString(Token.STRING_KEY, name.resolveName())
 
       case StringLiteral(name) =>
         val node = Node.newString(Token.STRING_KEY, name)
-        node.setQuotedString()
+        node.setQuotedStringKey()
         node
 
       case ComputedName(nameExpr) =>
@@ -421,48 +468,14 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
         transformBlock(stats, pos)
       case tree =>
         transformBlock(List(tree), pos)
-    } (pos)
+    }(pos)
   }
 
   def transformBlock(stats: List[Tree], blockPos: Position): Node = {
     val block = new Node(Token.BLOCK)
-    for (node <- transformBlockStats(stats)(blockPos))
-      block.addChildToBack(node)
+    for (stat <- stats)
+      block.addChildToBack(transformStat(stat)(blockPos))
     block
-  }
-
-  def transformBlockStats(stats: List[Tree])(
-      implicit parentPos: Position): List[Node] = {
-
-    @inline def ctorDoc() = {
-      val b = new JSDocInfoBuilder(false)
-      b.recordConstructor()
-      b.build()
-    }
-
-    // The Rhino IR attaches DocComments to the following nodes (rather than
-    // having individual nodes). We preprocess these here.
-    @tailrec
-    def loop(ts: List[Tree], nextIsCtor: Boolean, acc: List[Node]): List[Node] = ts match {
-      case DocComment(text) :: tss =>
-        loop(tss, nextIsCtor = text.startsWith("@constructor"), acc)
-
-      case t :: tss =>
-        val node = transformStat(t)
-        if (nextIsCtor) {
-          // The @constructor must be propagated through an ExprResult node
-          val trg =
-            if (node.isExprResult()) node.getChildAtIndex(0)
-            else node
-          trg.setJSDocInfo(ctorDoc())
-        }
-        loop(tss, nextIsCtor = false, node :: acc)
-
-      case Nil =>
-        acc.reverse
-    }
-
-    loop(stats, nextIsCtor = false, Nil)
   }
 
   @inline
@@ -478,27 +491,54 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
     }
   }
 
-  def setNodePosition(node: Node, pos: ir.Position): node.type = {
-    if (pos != ir.Position.NoPosition) {
-      attachSourceFile(node, pos.source)
-      node.setLineno(pos.line+1)
-      node.setCharno(pos.column)
-    } else {
-      attachSourceFile(node, dummySourceName)
+  private def setNodePosition(node: Node, pos: ir.Position): node.type = {
+    if (node.getLineno() == -1) { // Do not overwrite a position that was already set
+      if (pos != ir.Position.NoPosition) {
+        attachSourceFile(node, pos.source)
+        node.setLinenoCharno(pos.line + 1, pos.column)
+      } else {
+        attachSourceFile(node, dummySourceName)
+      }
     }
     node
   }
 
   private def attachSourceFile(node: Node, source: URI): node.type = {
     val str = SourceFileUtil.webURI(relativizeBaseURI, source)
+    val file = new SimpleSourceFile(str, StaticSourceFile.SourceKind.STRONG)
 
-    node.setInputId(inputId)
-    node.setStaticSourceFile(new SourceFile(str, SourceKind.STRONG))
+    /* A lot of Closure code makes the assumption that the InputId is the
+     * filename. We follow this assumption so we can use more of the already
+     * provided classes that make this assumption.
+     */
+    node.setInputId(new InputId(file.getName()))
+    node.setStaticSourceFile(file)
 
     node
   }
 
   // Helpers for IR
+
+  private def mkNumberLiteral(value: Double)(implicit pos: Position): Node = {
+    /* Since GCC v20210601, Number nodes can only hold finite non-negative
+     * values. NaNs and Infinities must be represented as text nodes, and
+     * negative values as a NEG unary operator of a positive value.
+     */
+
+    if (JDouble.isNaN(value)) {
+      setNodePosition(Node.newString(Token.NAME, "NaN"), pos)
+    } else {
+      val absValueNode =
+        if (JDouble.isInfinite(value)) Node.newString(Token.NAME, "Infinity")
+        else Node.newNumber(Math.abs(value))
+      val positionedAbsValueNode = setNodePosition(absValueNode, pos)
+      if (value < 0.0 || (value == 0.0 && 1.0 / value < 0.0))
+        setNodePosition(new Node(Token.NEG, positionedAbsValueNode), pos)
+      else
+        positionedAbsValueNode
+    }
+  }
+
   @inline
   private def mkUnaryOp(op: UnaryOp.Code, lhs: Node): Node = {
     import ir.Trees.JSUnaryOp._
@@ -543,6 +583,8 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
 
       case `in`         => Token.IN
       case `instanceof` => Token.INSTANCEOF
+
+      case ** => Token.EXPONENT
     }
 
     new Node(tok, lhs, rhs)
@@ -550,7 +592,7 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
 
   // Exception wrapper in transforms
 
-  class TransformException private (msg: String, e: Throwable)
+  class TransformException private (msg: String, e: Nullable[Throwable])
       extends RuntimeException(msg, e) {
 
     def this(tree: Tree, e: Throwable) =
@@ -565,7 +607,7 @@ private[closure] class ClosureAstTransformer(relativizeBaseURI: Option[URI]) {
 
     private def mkMsg(tree: Tree): String = {
       "Exception while translating Scala.js JS tree to GCC IR at tree:\n" +
-        tree.show
+      tree.show
     }
   }
 

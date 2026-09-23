@@ -12,76 +12,68 @@
 
 package org.scalajs.linker.backend.emitter
 
-import scala.language.implicitConversions
+import org.scalajs.ir.Position
+import org.scalajs.ir.Trees.ClosureFlags
 
-import scala.annotation.tailrec
-
-import org.scalajs.ir
-import ir._
-import ir.Definitions._
-import ir.Types._
-import ir.{Trees => irt}
-
-import org.scalajs.linker._
 import org.scalajs.linker.backend.javascript.Trees._
+import org.scalajs.linker.interface.ESVersion
 
-import EmitterDefinitions._
-
-/** Collection of tree generators that are used accross the board.
+/** Collection of tree generators that are used across the board.
  *  This class is fully stateless.
  *
  *  Also carries around config (semantics and esFeatures).
  */
-private[emitter] final class JSGen(val semantics: Semantics,
-    val esFeatures: ESFeatures, val moduleKind: ModuleKind,
-    internalOptions: InternalOptions,
-    mentionedDangerousGlobalRefs: Set[String]) {
+private[emitter] final class JSGen(val config: Emitter.Config) {
 
-  val useClasses = esFeatures.useECMAScript2015
+  import config._
+  import coreSpec._
 
-  val useArrowFunctions = esFeatures.useECMAScript2015
+  /** Should we use ECMAScript classes for JavaScript classes and Throwable
+   *  classes?
+   *
+   *  This is true iff `useECMAScript2015Semantics` is true, independently of
+   *  [[org.scalajs.linker.interface.ESFeatures.avoidClasses ESFeatures.avoidClasses]].
+   *
+   *  We must emit classes for JavaScript classes for semantics reasons:
+   *  inheritance of static properties and ability to extend native JavaScript
+   *  ES classes.
+   *
+   *  We must emit classes Throwable classes so that they are recognized as
+   *  proper JavaScript error classes, which gives them better support in
+   *  debuggers.
+   */
+  val useClassesForJSClassesAndThrowables = esFeatures.useECMAScript2015Semantics
 
-  val useBigIntForLongs = esFeatures.allowBigIntsForLongs
+  /** Should we use ECMAScript classes for non-Throwable Scala classes?
+   *
+   *  If [[org.scalajs.linker.interface.ESFeatures.avoidClasses ESFeatures.avoidClasses]]
+   *  is true, we do not use classes for non-Throwable classes. We can do that
+   *  because whether regular classes are compiled as classes or functions and
+   *  prototypes has no impact on observable semantics.
+   *
+   *  `useClassesForRegularClasses` is always false when
+   *  `useClassesForJSClassesAndThrowables` is false.
+   */
+  val useClassesForRegularClasses =
+    useClassesForJSClassesAndThrowables && !esFeatures.avoidClasses
 
-  val trackAllGlobalRefs = internalOptions.trackAllGlobalRefs
+  /** Should we emit `let`s and `const`s for all internal variables?
+   *
+   *  See [[org.scalajs.linker.interface.ESFeatures.avoidLetsAndConsts ESFeatures.avoidLetsAndConsts]]
+   *  for a rationale.
+   *
+   *  Note: top-level exports in Script (`NoModule`) mode are always
+   *  emitted as `let`s under ECMAScript 2015 semantics, irrespective of this
+   *  value.
+   */
+  val useLets = esFeatures.esVersion >= ESVersion.ES2015 && !esFeatures.avoidLetsAndConsts
 
-  def genZeroOf(tpe: Type)(implicit pos: Position): Tree = {
-    tpe match {
-      case BooleanType => BooleanLiteral(false)
-      case CharType    => IntLiteral(0)
-      case ByteType    => IntLiteral(0)
-      case ShortType   => IntLiteral(0)
-      case IntType     => IntLiteral(0)
-      case LongType    => genLongZero()
-      case FloatType   => DoubleLiteral(0.0)
-      case DoubleType  => DoubleLiteral(0.0)
-      case StringType  => StringLiteral("")
-      case UndefType   => Undefined()
-      case _           => Null()
-    }
-  }
-
-  def genLongZero()(implicit pos: Position): Tree = {
-    if (useBigIntForLongs)
-      BigIntLiteral(0L)
-    else
-      envField("L0")
-  }
-
-  def genLongModuleApply(methodName: String, args: Tree*)(
-      implicit pos: Position): Tree = {
-    import TreeDSL._
-    Apply(
-        genLoadModule(LongImpl.RuntimeLongModuleClass) DOT methodName,
-        args.toList)
-  }
-
-  def genConst(name: Ident, rhs: Tree)(implicit pos: Position): LocalDef =
+  def genConst(name: MaybeDelayedIdent, rhs: Tree)(implicit pos: Position): LocalDef =
     genLet(name, mutable = false, rhs)
 
-  def genLet(name: Ident, mutable: Boolean, rhs: Tree)(
+  def genLet(name: MaybeDelayedIdent, mutable: Boolean, rhs: Tree)(
       implicit pos: Position): LocalDef = {
-    if (esFeatures.useECMAScript2015)
+    if (useLets)
       Let(name, mutable, Some(rhs))
     else
       VarDef(name, Some(rhs))
@@ -95,352 +87,73 @@ private[emitter] final class JSGen(val semantics: Semantics,
 
   private def genEmptyLet(name: Ident, mutable: Boolean)(
       implicit pos: Position): LocalDef = {
-    if (esFeatures.useECMAScript2015)
+    if (useLets)
       Let(name, mutable, rhs = None)
     else
       VarDef(name, rhs = None)
   }
 
-  def genSelectStatic(className: String, item: irt.Ident)(
-      implicit pos: Position): VarRef = {
-    envField("t", className + "__" + item.name)
-  }
-
-  def genIsInstanceOf(expr: Tree, typeRef: TypeRef)(
-      implicit globalKnowledge: GlobalKnowledge, pos: Position): Tree = {
-    import TreeDSL._
-
-    typeRef match {
-      case ClassRef(className) =>
-        if (!HijackedClassesAndTheirSuperClasses.contains(className) &&
-            !globalKnowledge.isInterface(className)) {
-          expr instanceof encodeClassVar(className)
-        } else if (className == BoxedLongClass && !useBigIntForLongs) {
-          expr instanceof encodeClassVar(LongImpl.RuntimeLongClass)
-        } else {
-          genIsAsInstanceOf(expr, typeRef, test = true)
-        }
-      case ArrayTypeRef(_, _)  =>
-        genIsAsInstanceOf(expr, typeRef, test = true)
-    }
-  }
-
-  def genIsInstanceOfHijackedClass(expr: Tree, classRef: ClassRef)(
-      implicit pos: Position): Tree = {
-    import TreeDSL._
-
-    if (classRef.className == BoxedLongClass && !useBigIntForLongs)
-      expr instanceof encodeClassVar(LongImpl.RuntimeLongClass)
-    else
-      genIsAsInstanceOf(expr, classRef, test = true)
-  }
-
-  def genAsInstanceOf(expr: Tree, typeRef: TypeRef)(
-      implicit pos: Position): Tree =
-    genIsAsInstanceOf(expr, typeRef, test = false)
-
-  private def genIsAsInstanceOf(expr: Tree, typeRef: TypeRef, test: Boolean)(
-      implicit pos: Position): Tree = {
-    import TreeDSL._
-
-    typeRef match {
-      case ClassRef(className0) =>
-        val className =
-          if (className0 == BoxedLongClass && !useBigIntForLongs) LongImpl.RuntimeLongClass
-          else className0
-
-        if (HijackedClasses.contains(className)) {
-          def genIsFloat(): Tree =
-            if (semantics.strictFloats) genCallHelper("isFloat", expr)
-            else typeof(expr) === "number"
-
-          if (test) {
-            className match {
-              case BoxedUnitClass      => expr === Undefined()
-              case BoxedBooleanClass   => typeof(expr) === "boolean"
-              case BoxedCharacterClass => expr instanceof envField("Char")
-              case BoxedByteClass      => genCallHelper("isByte", expr)
-              case BoxedShortClass     => genCallHelper("isShort", expr)
-              case BoxedIntegerClass   => genCallHelper("isInt", expr)
-              case BoxedLongClass      => genCallHelper("isLong", expr)
-              case BoxedFloatClass     => genIsFloat()
-              case BoxedDoubleClass    => typeof(expr) === "number"
-              case BoxedStringClass    => typeof(expr) === "string"
-            }
-          } else {
-            className match {
-              case BoxedUnitClass      => genCallHelper("asUnit", expr)
-              case BoxedBooleanClass   => genCallHelper("asBoolean", expr)
-              case BoxedCharacterClass => genCallHelper("asChar", expr)
-              case BoxedByteClass      => genCallHelper("asByte", expr)
-              case BoxedShortClass     => genCallHelper("asShort", expr)
-              case BoxedIntegerClass   => genCallHelper("asInt", expr)
-              case BoxedLongClass      => genCallHelper("asLong", expr)
-              case BoxedFloatClass     => genCallHelper("asFloat", expr)
-              case BoxedDoubleClass    => genCallHelper("asDouble", expr)
-              case BoxedStringClass    => Apply(envField("as_T"), List(expr))
-            }
-          }
-        } else {
-          Apply(
-              envField(if (test) "is" else "as", className),
-              List(expr))
-        }
-
-      case ArrayTypeRef(base, depth) =>
-        Apply(
-            envField(if (test) "isArrayOf" else "asArrayOf", base),
-            List(expr, IntLiteral(depth)))
-    }
-  }
-
-  def genCallHelper(helperName: String, args: Tree*)(
-      implicit pos: Position): Tree = {
-    Apply(envField(helperName), args.toList)
-  }
-
-  def encodeClassVar(className: String)(implicit pos: Position): VarRef =
-    envField("c", className)
-
-  def genLoadModule(moduleClass: String)(implicit pos: Position): Tree = {
-    import TreeDSL._
-    Apply(envField("m", moduleClass), Nil)
-  }
-
-  def genJSClassConstructor(className: String,
-      keepOnlyDangerousVarNames: Boolean)(
-      implicit globalKnowledge: GlobalKnowledge,
-      pos: Position): WithGlobals[Tree] = {
-
-    genJSClassConstructor(className,
-        globalKnowledge.getJSNativeLoadSpec(className),
-        keepOnlyDangerousVarNames)
-  }
-
-  def genJSClassConstructor(className: String,
-      spec: Option[irt.JSNativeLoadSpec],
-      keepOnlyDangerousVarNames: Boolean)(
-      implicit pos: Position): WithGlobals[Tree] = {
-    spec match {
-      case None =>
-        // This is a non-native JS class
-        WithGlobals(genNonNativeJSClassConstructor(className))
-
-      case Some(spec) =>
-        genLoadJSFromSpec(spec, keepOnlyDangerousVarNames)
-    }
-  }
-
-  def genNonNativeJSClassConstructor(className: String)(
-      implicit pos: Position): Tree = {
-    Apply(envField("a", className), Nil)
-  }
-
-  def genLoadJSFromSpec(spec: irt.JSNativeLoadSpec,
-      keepOnlyDangerousVarNames: Boolean)(
-      implicit pos: Position): WithGlobals[Tree] = {
-
-    def pathSelection(from: Tree, path: List[String]): Tree = {
-      path.foldLeft(from) {
-        (prev, part) => genBracketSelect(prev, StringLiteral(part))
-      }
-    }
-
-    spec match {
-      case irt.JSNativeLoadSpec.Global(globalRef, path) =>
-        val globalVarRef = VarRef(Ident(globalRef, Some(globalRef)))
-        val globalVarNames = {
-          if (keepOnlyDangerousVarNames && !trackAllGlobalRefs &&
-              !GlobalRefUtils.isDangerousGlobalRef(globalRef)) {
-            Set.empty[String]
-          } else {
-            Set(globalRef)
-          }
-        }
-        WithGlobals(pathSelection(globalVarRef, path), globalVarNames)
-
-      case irt.JSNativeLoadSpec.Import(module, path) =>
-        val moduleValue = envModuleField(module)
-        path match {
-          case "default" :: rest if moduleKind == ModuleKind.CommonJSModule =>
-            val defaultField = genCallHelper("moduleDefault", moduleValue)
-            WithGlobals(pathSelection(defaultField, rest))
-          case _ =>
-            WithGlobals(pathSelection(moduleValue, path))
-        }
-
-      case irt.JSNativeLoadSpec.ImportWithGlobalFallback(importSpec, globalSpec) =>
-        moduleKind match {
-          case ModuleKind.NoModule =>
-            genLoadJSFromSpec(globalSpec, keepOnlyDangerousVarNames)
-          case ModuleKind.ESModule | ModuleKind.CommonJSModule =>
-            genLoadJSFromSpec(importSpec, keepOnlyDangerousVarNames)
-        }
-    }
-  }
-
-  def genArrayValue(arrayTypeRef: ArrayTypeRef, elems: List[Tree])(
-      implicit pos: Position): Tree = {
-    genCallHelper("makeNativeArrayWrapper", genClassDataOf(arrayTypeRef),
-        ArrayConstr(elems))
-  }
-
-  def genClassOf(typeRef: TypeRef)(implicit pos: Position): Tree =
-    Apply(DotSelect(genClassDataOf(typeRef), Ident("getClassOf")), Nil)
-
-  def genClassDataOf(typeRef: TypeRef)(implicit pos: Position): Tree = {
-    typeRef match {
-      case ClassRef(className) =>
-        genClassDataOf(className)
-      case ArrayTypeRef(base, dims) =>
-        (1 to dims).foldLeft[Tree](envField("d", base)) { (prev, _) =>
-          Apply(DotSelect(prev, Ident("getArrayOf")), Nil)
-        }
-    }
-  }
-
-  def genClassOf(className: String)(implicit pos: Position): Tree =
-    Apply(DotSelect(genClassDataOf(className), Ident("getClassOf")), Nil)
-
-  def genClassDataOf(className: String)(implicit pos: Position): Tree =
-    envField("d", className)
-
-  def envModuleField(module: String)(implicit pos: Position): VarRef = {
-    /* This is written so that the happy path, when `module` contains only
-     * valid characters, is fast.
-     */
-
-    def isValidChar(c: Char): Boolean =
-      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-
-    def containsOnlyValidChars(): Boolean = {
-      // scalastyle:off return
-      val len = module.length
-      var i = 0
-      while (i != len) {
-        if (!isValidChar(module.charAt(i)))
-          return false
-        i += 1
-      }
-      true
-      // scalastyle:on return
-    }
-
-    def buildValidName(): String = {
-      val result = new java.lang.StringBuilder("$i_")
-      val len = module.length
-      var i = 0
-      while (i != len) {
-        val c = module.charAt(i)
-        if (isValidChar(c))
-          result.append(c)
-        else
-          result.append("$%04x".format(c.toInt))
-        i += 1
-      }
-      result.toString()
-    }
-
-    val varName =
-      if (containsOnlyValidChars()) "$i_" + module
-      else buildValidName()
-
-    VarRef(Ident(avoidClashWithGlobalRef(varName), Some(module)))
-  }
-
-  def envField(field: String, subField: String, origName: Option[String] = None)(
-      implicit pos: Position): VarRef = {
-    VarRef(envFieldIdent(field, subField, origName))
-  }
-
-  def envFieldIdent(field: String, subField: String,
-      origName: Option[String] = None)(
-      implicit pos: Position): Ident = {
-    Ident(avoidClashWithGlobalRef("$" + field + "_" + subField), origName)
-  }
-
-  def envField(field: String)(implicit pos: Position): VarRef =
-    VarRef(envFieldIdent(field))
-
-  def envFieldIdent(field: String)(implicit pos: Position): Ident =
-    Ident(avoidClashWithGlobalRef("$" + field))
-
-  def avoidClashWithGlobalRef(envFieldName: String): String = {
-    /* This is not cached because it should virtually never happen.
-     * slowPath() is only called if we use a dangerous global ref, which should
-     * already be very rare. And if do a second iteration in the loop only if
-     * we refer to the global variables `$foo` *and* `$$foo`. At this point the
-     * likelihood is so close to 0 that caching would be more expensive than
-     * not caching.
-     */
-    @tailrec
-    def slowPath(lastNameTried: String): String = {
-      val nextNameToTry = "$" + lastNameTried
-      if (mentionedDangerousGlobalRefs.contains(nextNameToTry))
-        slowPath(nextNameToTry)
-      else
-        nextNameToTry
-    }
-
-    /* Hopefully this is JIT'ed away as `false` because
-     * `mentionedDangerousGlobalRefs` is in fact `Set.EmptySet`.
-     */
-    if (mentionedDangerousGlobalRefs.contains(envFieldName))
-      slowPath(envFieldName)
-    else
-      envFieldName
-  }
-
-  /** Keeps only the global refs that need to be tracked.
-   *
-   *  By default, only dangerous global refs need to be tracked outside of
-   *  functions, to power `mentionedDangerousGlobalRefs` and therefore
-   *  `avoidClashWithGlobalRef`. In that case, the set is hopefully already
-   *  emptied at this point for the large majority of methods, if not all.
-   *
-   *  However, when integrating with GCC, we must tell it a list of all the
-   *  global variables that are accessed in an externs file. In that case, we
-   *  need to track all global variables across functions and classes. This is
-   *  slower, but running GCC will take most of the time anyway in that case.
-   */
-  def keepOnlyTrackedGlobalRefs(globalRefs: Set[String]): Set[String] =
-    if (trackAllGlobalRefs) globalRefs
-    else GlobalRefUtils.keepOnlyDangerousGlobalRefs(globalRefs)
-
-  def genPropSelect(qual: Tree, item: PropertyName)(
-      implicit pos: Position): Tree = {
-    item match {
-      case item: Ident         => DotSelect(qual, item)
-      case item: StringLiteral => genBracketSelect(qual, item)
-      case ComputedName(tree)  => genBracketSelect(qual, tree)
-    }
-  }
-
   def genBracketSelect(qual: Tree, item: Tree)(implicit pos: Position): Tree = {
-    item match {
-      case StringLiteral(name) if internalOptions.optimizeBracketSelects &&
-          irt.isValidIdentifier(name) && name != "eval" =>
-        /* We exclude "eval" because we do not want to rely too much on the
-         * strict mode peculiarities of eval(), so that we can keep running
-         * on VMs that do not support strict mode.
-         */
-        DotSelect(qual, Ident(name))
-      case _ =>
-        BracketSelect(qual, item)
-    }
+    if (optimizeBracketSelects)
+      BracketSelect.makeOptimized(qual, item)
+    else
+      BracketSelect(qual, item)
   }
 
   def genIdentBracketSelect(qual: Tree, item: String)(
       implicit pos: Position): Tree = {
     require(item != "eval")
-    if (internalOptions.optimizeBracketSelects)
+    if (optimizeBracketSelects)
       DotSelect(qual, Ident(item))
     else
       BracketSelect(qual, StringLiteral(item))
   }
 
-  def genArrowFunction(args: List[ParamDef], body: Tree)(
+  /** Generates an arrow function if supported by the ES version.
+   *
+   *  This is independent of the ECMAScript 2015 *semantics*. This method must
+   *  not be used for closures that are *specified* to be arrow functions in
+   *  ES 2015 but `function`s in ES 5.1 semantics. In other words, it must not
+   *  be used to compile `ir.Trees.Closure`s.
+   */
+  def genArrowFunction(args: List[ParamDef], restParam: Option[ParamDef], body: Tree)(
       implicit pos: Position): Function = {
-    Function(useArrowFunctions, args, body)
+    val closureFlags =
+      ClosureFlags.function.withArrow(esFeatures.esVersion >= ESVersion.ES2015)
+    Function(closureFlags, args, restParam, body)
+  }
+
+  def genDefineProperty(obj: Tree, prop: Tree, descriptor: List[(String, Tree)])(
+      implicit tracking: GlobalRefTracking, pos: Position): WithGlobals[Tree] = {
+    val descriptorTree =
+      ObjectConstr(descriptor.map(x => StringLiteral(x._1) -> x._2))
+
+    globalRef("Object").map { objRef =>
+      Apply(genIdentBracketSelect(objRef, "defineProperty"),
+          List(obj, prop, descriptorTree))
+    }
+  }
+
+  def globalRef(name: String)(
+      implicit tracking: GlobalRefTracking, pos: Position): WithGlobals[VarRef] = {
+    val trackedSet: Set[String] =
+      if (tracking.shouldTrack(name)) Set(name)
+      else Set.empty
+    WithGlobals(VarRef(Ident(name)), trackedSet)
+  }
+
+  def genPropSelect(qual: Tree, item: PropertyName)(
+      implicit pos: Position): Tree = {
+    item match {
+      case item: MaybeDelayedIdent => DotSelect(qual, item)
+      case item: StringLiteral     => genBracketSelect(qual, item)
+      case ComputedName(tree)      => genBracketSelect(qual, tree)
+    }
+  }
+
+  def genIIFE(captures: List[(ParamDef, Tree)], body: Tree)(
+      implicit pos: Position): Tree = {
+    val (params, args) = captures.unzip
+    Apply(genArrowFunction(params, None, body), args)
   }
 }

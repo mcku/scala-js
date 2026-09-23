@@ -33,19 +33,19 @@ abstract class DirectTest {
   /** create settings objects for test from arg string */
   def newSettings(args: List[String]): Settings = {
     val s = new Settings
-    s processArguments (args, true)
+    s.processArguments(args, true)
     s
   }
 
   def newScalaJSCompiler(args: String*): Global = {
-    val settings = newSettings(
+    val settings0 = newSettings(
         List(
             "-d", testOutputPath,
             "-bootclasspath", scalaLibPath,
             "-classpath", classpath.mkString(File.pathSeparator)) ++
         extraArgs ++ args.toList)
 
-    lazy val global: Global = new Global(settings, newReporter(settings)) {
+    lazy val global: Global = new Global(settings0, newReporter(settings0)) {
       private implicit class PluginCompat(val plugin: Plugin) {
         def options: List[String] = {
           val prefix = plugin.name + ":"
@@ -60,7 +60,7 @@ abstract class DirectTest {
 
       override lazy val plugins = {
         val scalaJSPlugin = newScalaJSPlugin(global)
-        scalaJSPlugin.processOptions(scalaJSPlugin.options,
+        scalaJSPlugin.init(scalaJSPlugin.options,
             msg => throw new IllegalArgumentException(msg))
         scalaJSPlugin :: Nil
       }
@@ -95,8 +95,7 @@ abstract class DirectTest {
   def compileString(sourceCode: String): Boolean =
     compileString(defaultGlobal)(sourceCode)
 
-  // Cannot reuse global, otherwise compiler crashes with Scala >= 2.11.5
-  // on following tests:
+  // Cannot reuse global, otherwise the compiler crashes on the following tests:
   // - org.scalajs.nscplugin.test.JSExportTest
   // - org.scalajs.nscplugin.test.JSDynamicLiteralTest
   // Filed as #1443

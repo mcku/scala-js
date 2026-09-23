@@ -12,8 +12,10 @@
 
 package java.util.concurrent.atomic
 
-class AtomicInteger(private[this] var value: Int)
-    extends Number with Serializable {
+import java.util.function.IntBinaryOperator
+import java.util.function.IntUnaryOperator
+
+class AtomicInteger(private[this] var value: Int) extends Number with Serializable {
 
   def this() = this(0)
 
@@ -32,7 +34,8 @@ class AtomicInteger(private[this] var value: Int)
   }
 
   final def compareAndSet(expect: Int, update: Int): Boolean = {
-    if (expect != value) false else {
+    if (expect != value) false
+    else {
       value = update
       true
     }
@@ -63,6 +66,30 @@ class AtomicInteger(private[this] var value: Int)
     val newValue = value + delta
     value = newValue
     newValue
+  }
+
+  final def getAndUpdate(updateFunction: IntUnaryOperator): Int = {
+    val old = value
+    value = updateFunction.applyAsInt(old)
+    old
+  }
+
+  final def updateAndGet(updateFunction: IntUnaryOperator): Int = {
+    val old = value
+    value = updateFunction.applyAsInt(old)
+    value
+  }
+
+  final def getAndAccumulate(x: Int, accumulatorFunction: IntBinaryOperator): Int = {
+    val old = value
+    value = accumulatorFunction.applyAsInt(old, x)
+    old
+  }
+
+  final def accumulateAndGet(x: Int, accumulatorFunction: IntBinaryOperator): Int = {
+    val old = value
+    value = accumulatorFunction.applyAsInt(old, x)
+    value
   }
 
   override def toString(): String =

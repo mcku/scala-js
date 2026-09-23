@@ -12,61 +12,21 @@
 
 package org.scalajs.testsuite.jsinterop
 
-import scala.language.implicitConversions
-
 import scala.scalajs.js
 import js.JSConverters._
 
-import js.annotation.JSExport
-
 import org.junit.Assert._
+import org.junit.Assume._
 import org.junit.Test
 
 import org.scalajs.testsuite.utils.JSAssert._
+import org.scalajs.testsuite.utils.Platform._
 
 class DynamicTest {
 
-  implicit def dyn2Bool(dyn: js.Dynamic): Boolean =
-    dyn.asInstanceOf[Boolean]
-
-  implicit def dyn2Int(dyn: js.Dynamic): Int =
-    dyn.asInstanceOf[Int]
-
-  implicit def dyn2AnyRef(dyn: js.Dynamic): AnyRef =
-    dyn.asInstanceOf[AnyRef]
-
   // scala.scalajs.js.Dynamic
 
-  @Test def should_workaround_Scala_2_10_issue_with_implicit_conversion_for_dynamic_fields_named_x_issue_8(): Unit = {
-    class Point(val x: Int, val y: Int)
-
-    def jsonToPoint(json: js.Dynamic): Point = {
-      new Point(json.x.toString.toInt, json.y.toString.toInt)
-    }
-
-    val json = js.eval("var dynamicTestPoint = { x: 1, y: 2 }; dynamicTestPoint;")
-    val point = jsonToPoint(json.asInstanceOf[js.Dynamic])
-
-    assertEquals(1, point.x)
-    assertEquals(2, point.y)
-  }
-
-  @Test def should_allow_to_call_functions_with_arguments_named_x(): Unit = {
-    class A {
-      def a: Int = 1
-    }
-
-    class B extends A {
-      @JSExport
-      def x(par: Int): Int = a + par // make sure `this` is bound correctly in JS
-    }
-
-    val b = (new B).asInstanceOf[js.Dynamic]
-
-    assertEquals(11, b.x(10))
-  }
-
-  @Test def should_allow_instanciating_JS_classes_dynamically_issue_10(): Unit = {
+  @Test def newInstance_Issue10(): Unit = {
     val DynamicTestClass = js.eval("""
         var DynamicTestClass = function(x) {
           this.x = x;
@@ -75,9 +35,12 @@ class DynamicTest {
         """).asInstanceOf[js.Dynamic]
     val obj = js.Dynamic.newInstance(DynamicTestClass)("Scala.js")
     assertEquals("Scala.js", obj.x)
+
+    val dateObj = js.Dynamic.newInstance(js.constructorOf[js.Date])(1234)
+    assertEquals(1234, dateObj.getTime())
   }
 
-  @Test def should_allow_instantiating_JS_classes_dynamically_with_varargs_issue_708(): Unit = {
+  @Test def newInstanceWithVarargs_Issue708(): Unit = {
     val DynamicTestClassVarArgs = js.eval("""
         var DynamicTestClassVarArgs = function() {
           this.count = arguments.length;
@@ -102,7 +65,7 @@ class DynamicTest {
     val obj2_elem1 = obj2.elem1
     assertEquals(42, obj2_elem1)
     val obj2_elem2 = obj2.elem2
-    assertTrue(obj2_elem2)
+    assertEquals(true, obj2_elem2)
 
     def obj3Args: Seq[js.Any] = Seq("Scala.js", 42, true)
     val obj3 = js.Dynamic.newInstance(DynamicTestClassVarArgs)(obj3Args: _*)
@@ -113,11 +76,20 @@ class DynamicTest {
     val obj3_elem1 = obj3.elem1
     assertEquals(42, obj3_elem1)
     val obj3_elem2 = obj3.elem2
-    assertTrue(obj3_elem2)
+    assertEquals(true, obj3_elem2)
   }
 
-  @Test def should_provide_an_object_literal_construction(): Unit = {
-    import js.Dynamic.{ literal => obj }
+  @Test def newInstanceOfWithVarargsWhenConstructIsRequired_Issue4362(): Unit = {
+    assumeTrue("requires the spread operator", assumeES2015)
+
+    @noinline def args(): Seq[js.Any] = Seq(1234)
+
+    val dateObj = js.Dynamic.newInstance(js.constructorOf[js.Date])(args(): _*)
+    assertEquals(1234, dateObj.getTime())
+  }
+
+  @Test def objectLiteralConstruction(): Unit = {
+    import js.Dynamic.{literal => obj}
     val x = obj(foo = 3, bar = "foobar")
     val x_foo = x.foo
     assertEquals(3, x_foo.asInstanceOf[Int])
@@ -127,8 +99,8 @@ class DynamicTest {
     assertJSUndefined(x_unknown)
 
     val y = obj(
-        inner = obj(name = "inner obj"),
-        fun = { () => 42 }
+      inner = obj(name = "inner obj"),
+      fun = { () => 42 }
     )
     val y_inner_name = y.inner.name
     assertEquals("inner obj", y_inner_name)
@@ -137,15 +109,23 @@ class DynamicTest {
     assertJSUndefined(obj_anything)
   }
 
-  @Test def object_literal_in_statement_position_issue_1627(): Unit = {
-    // Just make sure it does not cause a SyntaxError
+  @Test def objectLiteralInStatementPosition_Issue1627_Issue4949(): Unit = {
+    @noinline def dynProp(): String = "foo"
+
+    // Just make sure those statements do not cause a SyntaxError
     js.Dynamic.literal(foo = "bar")
-    // and also test the case without param (different code path in Printers)
     js.Dynamic.literal()
+    js.Dynamic.literal(foo = "bar").foo
+    js.Dynamic.literal(foo = () => "bar").foo()
+    js.Dynamic.literal(foo = "bar").foo = "babar"
+    js.Dynamic.literal(foo = "foo").selectDynamic(dynProp())
+    js.Dynamic.literal(foo = "foo").updateDynamic(dynProp())("babar")
+    js.Dynamic.literal(foo = () => "bar").applyDynamic(dynProp())()
+    js.Dynamic.literal(foo = "bar") + js.Dynamic.literal(foobar = "babar")
   }
 
-  @Test def should_provide_object_literal_construction_with_dynamic_naming(): Unit = {
-    import js.Dynamic.{ literal => obj }
+  @Test def objectLiteralConstructionWithDynamicNaming(): Unit = {
+    import js.Dynamic.{literal => obj}
     val x = obj("foo" -> 3, "bar" -> "foobar")
     val x_foo = x.foo
     assertEquals(3, x_foo)
@@ -164,14 +144,14 @@ class DynamicTest {
     assertEquals(10, y_hello2)
 
     var count = 0
-    val z = obj({ count += 1; ("foo", "bar")})
+    val z = obj { count += 1; ("foo", "bar") }
     val z_foo = z.foo
     assertEquals("bar", z_foo)
     assertEquals(1, count)
   }
 
-  @Test def should_preserve_evaluation_order_of_keys_and_values(): Unit = {
-    import js.Dynamic.{ literal => obj }
+  @Test def evaluationOrderOfKeysAndValues(): Unit = {
+    import js.Dynamic.{literal => obj}
 
     val orderCheck = Array.newBuilder[Int]
     val x = obj(
@@ -202,9 +182,9 @@ class DynamicTest {
     val orderCheck3 = Array.newBuilder[Int]
     val z = obj(
         { val a = block("foo"); orderCheck3 += 1; a } ->
-          { val a = block(3); orderCheck3 += 2; a },
+        { val a = block(3); orderCheck3 += 2; a },
         { val a = block("bar"); orderCheck3 += 3; a } ->
-          { val a = block("foobar"); orderCheck3 += 4; a })
+        { val a = block("foobar"); orderCheck3 += 4; a })
     val z_foo = z.foo
     assertEquals(3, z_foo)
     val z_bar = z.bar
@@ -214,14 +194,14 @@ class DynamicTest {
     assertArrayEquals(Array(1, 2, 3, 4), orderCheck3.result())
   }
 
-  @Test def should_allow_to_create_an_empty_object_with_the_literal_syntax(): Unit = {
-    import js.Dynamic.{ literal => obj }
+  @Test def createAnEmptyObjectWithTheLiteralSyntax(): Unit = {
+    import js.Dynamic.{literal => obj}
     val x = obj()
     assertTrue(x.isInstanceOf[js.Object])
   }
 
-  @Test def should_properly_encode_object_literal_property_names(): Unit = {
-    import js.Dynamic.{ literal => obj }
+  @Test def encodeObjectLiteralPropertyNames(): Unit = {
+    import js.Dynamic.{literal => obj}
 
     val obj0 = obj("3-" -> 42)
     val `obj0_3-` = obj0.`3-`
@@ -264,7 +244,7 @@ class DynamicTest {
     }
   }
 
-  @Test def `should_accept_:__*_arguments_for_literal_construction_issue_1743`(): Unit = {
+  @Test def colonAsteriskArgumentsForLiteralConstruction_Issue1743(): Unit = {
     import js.Dynamic.literal
 
     val fields = Seq[(String, js.Any)]("foo" -> 42, "bar" -> "foobar")
@@ -288,7 +268,7 @@ class DynamicTest {
     assertEquals("foobar", y_bar)
   }
 
-  @Test def should_allow_object_literals_to_have_duplicate_keys_issue_1595(): Unit = {
+  @Test def objectLiteralsWithDuplicateKeys_Issue1595(): Unit = {
     import js.Dynamic.{literal => obj}
 
     // Basic functionality
@@ -316,8 +296,8 @@ class DynamicTest {
     test(obj(foo = 4, bar = 5, foo = 6))
   }
 
-  @Test def should_return_subclasses_of_js_Object_in_literal_construction_issue_783(): Unit = {
-    import js.Dynamic.{ literal => obj }
+  @Test def subclassesOfJSObjectInLiteralConstruction_Issue783(): Unit = {
+    import js.Dynamic.{literal => obj}
 
     val a: js.Object = obj(theValue = 1)
     assertTrue(a.hasOwnProperty("theValue"))
@@ -328,7 +308,7 @@ class DynamicTest {
     assertFalse(b.hasOwnProperty("noValue"))
   }
 
-  @Test def shouldNotListScalaDynamicAsSuperIntf(): Unit = {
+  @Test def scalaDynamicIsNotSuperIntf(): Unit = {
     /* We test the arrays of the classes, as it is the only reliable way to
      * ensure that interfaces listed in the IR are what they should be.
      */

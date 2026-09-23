@@ -37,22 +37,10 @@ private[nio] object GenDataViewBuffer {
     val viewCapacity =
       (byteBufferLimit - byteBufferPos) / newDataViewBuffer.bytesPerElem
     val byteLength = viewCapacity * newDataViewBuffer.bytesPerElem
-    val dataView = newDataView(
+    val dataView = new DataView(
         byteArray.buffer, byteArray.byteOffset + byteBufferPos, byteLength)
     newDataViewBuffer(dataView,
-        0, viewCapacity, byteBuffer.isReadOnly, byteBuffer.isBigEndian)
-  }
-
-  /* Work around for https://github.com/joyent/node/issues/6051
-   * node 0.10 does not like creating a DataView whose byteOffset is equal to
-   * the buffer's length, even if byteLength == 0.
-   */
-  @inline
-  private def newDataView(buffer: ArrayBuffer, byteOffset: Int, byteLength: Int): DataView = {
-    if (byteLength == 0)
-      lit(buffer = buffer, byteOffset = byteOffset, byteLength = byteLength).asInstanceOf[DataView]
-    else
-      new DataView(buffer, byteOffset, byteLength)
+        0, viewCapacity, byteBuffer.isReadOnly(), byteBuffer.isBigEndian)
   }
 }
 
@@ -60,12 +48,9 @@ private[nio] object GenDataViewBuffer {
  * `self.BufferType` appears in signatures.
  * It's tolerable because the class is `private[nio]` anyway.
  */
-private[nio] final class GenDataViewBuffer[B <: Buffer] private (val self: B)
-    extends AnyVal {
+private[nio] final class GenDataViewBuffer[B <: Buffer] private (val self: B) extends AnyVal {
 
   import self._
-
-  import GenDataViewBuffer.newDataView
 
   type NewThisDataViewBuffer = GenDataViewBuffer.NewDataViewBuffer[BufferType]
 
@@ -74,19 +59,19 @@ private[nio] final class GenDataViewBuffer[B <: Buffer] private (val self: B)
       implicit newDataViewBuffer: NewThisDataViewBuffer): BufferType = {
     val bytesPerElem = newDataViewBuffer.bytesPerElem
     val dataView = _dataView
-    val pos = position
-    val newCapacity = limit - pos
-    val slicedDataView = newDataView(dataView.buffer,
-        dataView.byteOffset + bytesPerElem*pos, bytesPerElem*newCapacity)
+    val pos = position()
+    val newCapacity = limit() - pos
+    val slicedDataView = new DataView(dataView.buffer,
+        dataView.byteOffset + bytesPerElem * pos, bytesPerElem * newCapacity)
     newDataViewBuffer(slicedDataView,
-        0, newCapacity, isReadOnly, isBigEndian)
+        0, newCapacity, isReadOnly(), isBigEndian)
   }
 
   @inline
   def generic_duplicate()(
       implicit newDataViewBuffer: NewThisDataViewBuffer): BufferType = {
     val result = newDataViewBuffer(_dataView,
-        position, limit, isReadOnly, isBigEndian)
+        position(), limit(), isReadOnly(), isBigEndian)
     result._mark = _mark
     result
   }
@@ -95,7 +80,7 @@ private[nio] final class GenDataViewBuffer[B <: Buffer] private (val self: B)
   def generic_asReadOnlyBuffer()(
       implicit newDataViewBuffer: NewThisDataViewBuffer): BufferType = {
     val result = newDataViewBuffer(_dataView,
-        position, limit, true, isBigEndian)
+        position(), limit(), true, isBigEndian)
     result._mark = _mark
     result
   }
@@ -103,18 +88,18 @@ private[nio] final class GenDataViewBuffer[B <: Buffer] private (val self: B)
   @inline
   def generic_compact()(
       implicit newDataViewBuffer: NewThisDataViewBuffer): BufferType = {
-    if (isReadOnly)
+    if (isReadOnly())
       throw new ReadOnlyBufferException
 
     val dataView = _dataView
     val bytesPerElem = newDataViewBuffer.bytesPerElem
     val byteArray = new Int8Array(dataView.buffer,
         dataView.byteOffset, dataView.byteLength)
-    val pos = position
-    val lim = limit
+    val pos = position()
+    val lim = limit()
     byteArray.set(byteArray.subarray(bytesPerElem * pos, bytesPerElem * lim))
     _mark = -1
-    limit(capacity)
+    limit(capacity())
     position(lim - pos)
     self
   }
@@ -122,7 +107,7 @@ private[nio] final class GenDataViewBuffer[B <: Buffer] private (val self: B)
   @inline
   def generic_order(): ByteOrder =
     if (isBigEndian) ByteOrder.BIG_ENDIAN
-    else             ByteOrder.LITTLE_ENDIAN
+    else ByteOrder.LITTLE_ENDIAN
 
   @inline
   def generic_arrayBuffer: ArrayBuffer =

@@ -80,21 +80,26 @@ private[nio] final class HeapFloatBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Float], offset: Int, length: Int): Unit =
+      dst: Array[Float], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Float], offset: Int, length: Int): Unit =
+      src: Array[Float], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }
 
 private[nio] object HeapFloatBuffer {
   private[nio] implicit object NewHeapFloatBuffer
       extends GenHeapBuffer.NewHeapBuffer[FloatBuffer, Float] {
+    @inline
     def apply(capacity: Int, array: Array[Float], arrayOffset: Int,
         initialPosition: Int, initialLimit: Int,
-        readOnly: Boolean): FloatBuffer = {
+        readOnly: Boolean, direct: Boolean): FloatBuffer = {
+      if (direct)
+        throw new AssertionError("Cannot create a direct HeapFloatBuffer")
       new HeapFloatBuffer(capacity, array, arrayOffset,
           initialPosition, initialLimit, readOnly)
     }

@@ -42,10 +42,9 @@ private[nio] final class TypedArrayCharBuffer private (
     GenTypedArrayBuffer(this).generic_asReadOnlyBuffer()
 
   def subSequence(start: Int, end: Int): CharBuffer = {
-    if (start < 0 || end < start || end > remaining)
-      throw new IndexOutOfBoundsException
+    BoundsChecks.checkStartEnd(start, end, remaining())
     new TypedArrayCharBuffer(_typedArray,
-        position() + start, position() + end, isReadOnly)
+        position() + start, position() + end, isReadOnly())
   }
 
   @noinline
@@ -103,13 +102,15 @@ private[nio] final class TypedArrayCharBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Char], offset: Int, length: Int): Unit =
+      dst: Array[Char], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Char], offset: Int, length: Int): Unit =
+      src: Array[Char], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }
 
 private[nio] object TypedArrayCharBuffer {
@@ -135,6 +136,6 @@ private[nio] object TypedArrayCharBuffer {
   def fromTypedArrayByteBuffer(byteBuffer: TypedArrayByteBuffer): CharBuffer =
     GenTypedArrayBuffer.generic_fromTypedArrayByteBuffer(byteBuffer)
 
-  def wrap(array: Uint16Array): CharBuffer =
+  def wrapUint16Array(array: Uint16Array): CharBuffer =
     new TypedArrayCharBuffer(array, 0, array.length, false)
 }

@@ -2,6 +2,11 @@ package scala.runtime
 
 import scala.math.ScalaNumber
 
+/* The declaration of the class is only to make the JVM back-end happy when
+ * compiling the scalalib.
+ */
+final class BoxesRunTime
+
 object BoxesRunTime {
   def boxToBoolean(b: Boolean): java.lang.Boolean =
     b.asInstanceOf[java.lang.Boolean]
@@ -44,7 +49,7 @@ object BoxesRunTime {
   def unboxToDouble(d: Any): Double = d.asInstanceOf[Double]
 
   def equals(x: Object, y: Object): Boolean =
-    if (x eq y) true
+    if (scala.scalajs.js.special.strictEquals(x, y)) true
     else equals2(x, y)
 
   @inline // only called by equals(), not by codegen

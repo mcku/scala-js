@@ -12,56 +12,62 @@
 
 package org.scalajs.linker.testutils
 
-import scala.collection.mutable
 import scala.concurrent._
 
-import org.scalajs.linker._
-import org.scalajs.linker.standard._
-import org.scalajs.linker.analyzer.Infos._
+import org.scalajs.linker.StandardImpl
+import org.scalajs.linker.interface.IRFile
 
 object TestIRRepo {
-  val minilib = new TestIRRepo(StdlibHolder.minilib)
-  val fulllib = new TestIRRepo(StdlibHolder.fulllib)
+  private val globalIRCache = StandardImpl.irFileCache()
 
-  class InfoLoader(encodedNameToFile: Map[String, IRFileImpl]) {
-    private val infosCache = mutable.Map.empty[String, Future[ClassInfo]]
+  val minilib: Future[Seq[IRFile]] = loadGlobal(StdlibHolder.minilib)
+  val javalib: Future[Seq[IRFile]] = loadGlobal(StdlibHolder.javalib)
+  val empty: Future[Seq[IRFile]] = Future.successful(Nil)
 
-    def loadInfo(encodedName: String)(
-        implicit ec: ExecutionContext): Option[Future[ClassInfo]] = {
-      infosCache.synchronized {
-        infosCache.get(encodedName).orElse {
-          val info =
-            encodedNameToFile.get(encodedName).map(_.tree.map(generateClassInfo))
-          info.foreach(i => infosCache.put(encodedName, i))
-          info
-        }
-      }
-    }
-  }
-}
+  private def loadGlobal(stdlibPath: String): Future[Seq[IRFile]] = {
+    import scala.concurrent.ExecutionContext.Implicits.global
 
-final class TestIRRepo(stdlibPath: String) {
-  import scala.concurrent.ExecutionContext.Implicits.global
-  import TestIRRepo.InfoLoader
-
-  private val globalIRCache = IRFileCache()
-
-  val stdlibIRFiles: Future[Seq[IRFile]] = {
     Platform.loadJar(stdlibPath)
       .flatMap(globalIRCache.newCache.cached _)
   }
 
-  lazy val loader: Future[InfoLoader] = {
-    def toElem(f: IRFile) = {
-      val impl = IRFileImpl.fromIRFile(f)
-      impl.entryPointsInfo.map(i => i.encodedName -> impl)
-    }
+  /** For each previous lib, calls `f(version, irFiles)`, and combines the result.
+   *
+   *  This method applies `f` *sequentially*. It waits until the returned
+   *  `Future` completes before moving on to the next iteration.
+   */
+  def sequentiallyForEachPreviousLib[A](f: (String, Seq[IRFile]) => Future[A])(
+      implicit ec: ExecutionContext): Future[List[A]] = {
 
-    for {
-      files <- stdlibIRFiles
-      encodedNameToFile <- Future.traverse(files)(toElem)
-    } yield {
-      new InfoLoader(encodedNameToFile.toMap)
+    // sort for determinism
+    val sortedPreviousLibs = StdlibHolder.previousLibs.toList.sortBy(_._1)
+
+    sequentialFutureTraverse(sortedPreviousLibs) { case (version, path) =>
+      Platform.loadJar(path).flatMap { files =>
+        val cache = globalIRCache.newCache
+        cache
+          .cached(files)
+          .flatMap(f(version, _))
+          .andThen { case _ => cache.free() }
+      }
+    }
+  }
+
+  /** Like `Future.traverse`, but waits until each `Future` has completed
+   *  before starting the next one.
+   */
+  private def sequentialFutureTraverse[A, B](items: List[A])(f: A => Future[B])(
+      implicit ec: ExecutionContext): Future[List[B]] = {
+    items match {
+      case Nil =>
+        Future.successful(Nil)
+      case head :: tail =>
+        for {
+          headResult <- f(head)
+          tailResult <- sequentialFutureTraverse(tail)(f)
+        } yield {
+          headResult :: tailResult
+        }
     }
   }
 }

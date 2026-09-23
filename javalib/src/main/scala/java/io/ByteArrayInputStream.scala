@@ -14,7 +14,8 @@ package java.io
 
 class ByteArrayInputStream(
     protected val buf: Array[Byte],
-    offset: Int, length: Int) extends InputStream {
+    offset: Int, length: Int)
+    extends InputStream {
 
   protected val count: Int = offset + length
   protected var mark: Int = offset
@@ -23,26 +24,25 @@ class ByteArrayInputStream(
   def this(buf: Array[Byte]) = this(buf, 0, buf.length)
 
   override def read(): Int = {
-    if (pos >= count)
+    if (pos >= count) {
       -1
-    else {
-      val res = buf(pos) & 0xFF // convert to unsigned int
+    } else {
+      val res = buf(pos) & 0xff // convert to unsigned int
       pos += 1
       res
     }
   }
 
   override def read(b: Array[Byte], off: Int, reqLen: Int): Int = {
-    if (off < 0 || reqLen < 0 || reqLen > b.length - off)
-      throw new IndexOutOfBoundsException
+    BoundsChecks.checkOffsetCount(off, reqLen, b.length)
 
-    val len = Math.min(reqLen, count - pos)
-
-    if (reqLen == 0)
-      0  // 0 requested, 0 returned
-    else if (len == 0)
-      -1 // nothing to read at all
-    else {
+    if (pos == count) {
+      /* There is nothing left to read.
+       * #3913: return -1 even if reqLen == 0.
+       */
+      -1
+    } else {
+      val len = Math.min(reqLen, count - pos)
       System.arraycopy(buf, pos, b, off, len)
       pos += len
       len

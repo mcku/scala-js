@@ -12,7 +12,11 @@
 
 package java.util
 
+import java.util.function._
+import java.util.Objects.requireNonNull
+
 final class Optional[T] private (value: T) {
+  import Optional._
 
   def get(): T = {
     if (!isPresent())
@@ -21,20 +25,53 @@ final class Optional[T] private (value: T) {
       value
   }
 
-  def isPresent(): Boolean = value != null
+  @inline def isPresent(): Boolean = value != null
 
-  //def ifPresent(consumer: Consumer[_ >: T]): Unit
-  //def filter(predicate: Predicate[_ >: T]): Optional[U]
-  //def map[U](mapper: Function[_ >: T, _ <: U]): Optional[U]
-  //def flatMap[U](mapper: Function[_ >: T, Optional[U]]): Optional[U]
+  @inline def isEmpty(): Boolean = value == null
 
-  def orElse(other: T): T = {
-    if (isPresent) value
-    else other
+  def ifPresent(action: Consumer[_ >: T]): Unit = {
+    if (isPresent())
+      action.accept(value)
   }
 
-  //def orElseGet(other: Supplier[_ <: T]): T
-  //def orElseThrow[X](exceptionSupplier: Supplier[_ <: X]): T
+  def ifPresentOrElse(action: Consumer[_ >: T], emptyAction: Runnable): Unit = {
+    if (isPresent())
+      action.accept(value)
+    else
+      emptyAction.run()
+  }
+
+  def filter(predicate: Predicate[_ >: T]): Optional[T] =
+    if (isEmpty() || predicate.test(value)) this
+    else Optional.empty()
+
+  def map[U](mapper: Function[_ >: T, _ <: U]): Optional[U] =
+    if (isEmpty()) emptyCast[U](this)
+    else Optional.ofNullable(mapper(value))
+
+  def flatMap[U](mapper: Function[_ >: T, Optional[_ <: U]]): Optional[U] =
+    if (isEmpty()) emptyCast[U](this)
+    else upcast[U](mapper(value))
+
+  def or(supplier: Supplier[_ <: Optional[_ <: T]]): Optional[T] =
+    if (isPresent()) this
+    else upcast[T](supplier.get())
+
+  def orElse(other: T): T =
+    if (isPresent()) value
+    else other
+
+  def orElseGet(supplier: Supplier[_ <: T]): T =
+    if (isPresent()) value
+    else supplier.get()
+
+  def orElseThrow(): T =
+    if (isPresent()) value
+    else throw new NoSuchElementException()
+
+  def orElseThrow[X <: Throwable](exceptionSupplier: Supplier[_ <: X]): T =
+    if (isPresent()) value
+    else throw exceptionSupplier.get()
 
   override def equals(obj: Any): Boolean = {
     obj match {
@@ -59,12 +96,16 @@ final class Optional[T] private (value: T) {
 object Optional {
   def empty[T](): Optional[T] = new Optional[T](null.asInstanceOf[T])
 
-  def of[T](value: T): Optional[T] = {
-    if (value == null)
-      throw new NullPointerException()
-    else
-      new Optional[T](value)
-  }
+  def of[T](value: T): Optional[T] =
+    new Optional[T](requireNonNull(value))
 
   def ofNullable[T](value: T): Optional[T] = new Optional[T](value)
+
+  @inline
+  private def upcast[T](optional: Optional[_ <: T]): Optional[T] =
+    optional.asInstanceOf[Optional[T]]
+
+  @inline
+  private def emptyCast[T](empty: Optional[_]): Optional[T] =
+    empty.asInstanceOf[Optional[T]]
 }

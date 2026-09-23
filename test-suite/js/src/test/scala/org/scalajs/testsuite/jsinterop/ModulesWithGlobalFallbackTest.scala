@@ -32,122 +32,94 @@ class ModulesWithGlobalFallbackTest {
   import ModulesWithGlobalFallbackTest._
 
   @Test def testImportModuleItself(): Unit = {
-    val qs = QueryString
-    assertEquals("object", js.typeOf(qs))
+    val m = NamespaceImport
+    assertEquals("object", js.typeOf(m))
 
-    val dict = js.Dictionary("foo" -> "bar", "baz" -> "qux")
-
-    assertEquals("foo=bar&baz=qux", qs.stringify(dict))
-    assertEquals("foo:bar;baz:qux", qs.stringify(dict, ";", ":"))
+    assertEquals(5, m.ssum(2))
+    assertEquals(13, m.ssum(2, 3))
+    assertEquals("value", m.strConstant)
+    assertEquals("value", m.strConstantAsDef)
 
     /* Potentially, this could be "optimized" by importing `stringify` as a
      * global symbol if we are emitting ES2015 modules.
      */
-    assertEquals("foo=bar&baz=qux", QueryString.stringify(dict))
-    assertEquals("foo:bar;baz:qux", QueryString.stringify(dict, ";", ":"))
+    assertEquals(5, NamespaceImport.ssum(2))
+    assertEquals(13, NamespaceImport.ssum(2, 3))
+    assertEquals("value", NamespaceImport.strConstant)
+    assertEquals("value", NamespaceImport.strConstantAsDef)
   }
 
   @Test def testImportLegacyModuleItselfAsDefault(): Unit = {
-    val qs = QueryStringAsDefault
-    assertEquals("object", js.typeOf(qs))
+    val m = DefaultAsSelf
+    assertEquals("object", js.typeOf(m))
 
-    val dict = js.Dictionary("foo" -> "bar", "baz" -> "qux")
-
-    assertEquals("foo=bar&baz=qux", qs.stringify(dict))
-    assertEquals("foo:bar;baz:qux", qs.stringify(dict, ";", ":"))
+    assertEquals(1, m.x)
+    assertEquals("foo", m.y)
 
     /* Potentially, this could be "optimized" by importing `stringify` as a
      * global symbol if we are emitting ES2015 modules.
      */
-    assertEquals("foo=bar&baz=qux", QueryStringAsDefault.stringify(dict))
-    assertEquals("foo:bar;baz:qux", QueryStringAsDefault.stringify(dict, ";", ":"))
+    assertEquals(1, DefaultAsSelf.x)
+    assertEquals("foo", DefaultAsSelf.y)
+  }
+
+  @Test def testImportDefaultFunction(): Unit =
+    assertEquals(5, defaultFunction())
+
+  @Test def testImportFunctionInModule(): Unit = {
+    assertEquals(5, NativeMembers.ssum(2))
+    assertEquals(13, NativeMembers.ssum(2, 3))
+  }
+
+  @Test def testImportFieldInModule(): Unit = {
+    assertEquals("string", js.typeOf(NativeMembers.strConstant))
+    assertEquals("string", js.typeOf(NativeMembers.strConstantAsDef))
   }
 
   @Test def testImportObjectInModule(): Unit = {
-    assertTrue((Buffer: Any).isInstanceOf[js.Object])
-    assertFalse(Buffer.isBuffer(5))
+    assertTrue((MyBox: Any).isInstanceOf[js.Object])
+    assertTrue(MyBox.make(5).isInstanceOf[MyBox[_]])
   }
 
   @Test def testImportClassInModule(): Unit = {
-    val b = Buffer.alloc(5)
-    for (i <- 0 until 5)
-      b(i) = (i * i).toShort
+    val b = new MyBox(1L)
 
-    for (i <- 0 until 5)
-      assertEquals(i * i, b(i).toInt)
-  }
-
-  @Test def testImportIntegrated(): Unit = {
-    val b = Buffer.from(js.Array[Short](0xe3, 0x81, 0x93, 0xe3, 0x82, 0x93,
-        0xe3, 0x81, 0xab, 0xe3, 0x81, 0xa1, 0xe3, 0x81, 0xaf))
-    val decoder = new StringDecoder()
-    assertTrue(Buffer.isBuffer(b))
-    assertFalse(Buffer.isBuffer(decoder))
-    assertEquals("こんにちは", decoder.write(b))
-    assertEquals("", decoder.end())
+    assertEquals(1L, b.get())
+    b.set(5L)
+    assertEquals(5L, b.get())
   }
 
 }
 
 object ModulesWithGlobalFallbackTest {
-  private object QueryStringFallbackImpl extends js.Object {
-    def stringify(obj: js.Dictionary[String], sep: String = "&",
-        eq: String = "="): String = {
-      var result = ""
-      for ((key, value) <- obj) {
-        if (result != "")
-          result += sep
-        result += key + eq + value
-      }
-      result
-    }
-  }
-
-  private class StringDecoderFallbackImpl(charsetName: String = "utf8")
-      extends js.Object {
-    import java.nio.charset._
-
-    private val charset = Charset.forName(charsetName)
-    private val decoder = charset.newDecoder()
-
-    private def writeInternal(buffer: Uint8Array,
-        endOfInput: Boolean): String = {
-      val in = TypedArrayBuffer.wrap(buffer.buffer, buffer.byteOffset,
-          buffer.byteLength)
-
-      // +2 so that a pending incomplete character has some space
-      val out = CharBuffer.allocate(
-          Math.ceil(decoder.maxCharsPerByte().toDouble * in.remaining()).toInt + 2)
-
-      val result = decoder.decode(in, out, endOfInput)
-      if (!result.isUnderflow())
-        result.throwException()
-
-      if (endOfInput) {
-        val flushResult = decoder.flush(out)
-        if (!flushResult.isUnderflow())
-          flushResult.throwException()
-      }
-
-      out.flip()
-      out.toString()
+  private object ModuleFallbackImpl extends js.Object {
+    /* We cannot use defs, because they require the function call to have a
+     * `this` bound to the containing object. But we cannot test fallbacks for
+     * native imports for this.
+     * Admittedly, this is a bit hacky.
+     */
+    val ssum: js.Function = { (x: Int, y: js.UndefOr[Int]) =>
+      val y2 = y.getOrElse(1)
+      x * x + y2 * y2
     }
 
-    def write(buffer: Uint8Array): String =
-      writeInternal(buffer, endOfInput = false)
-
-    def end(buffer: Uint8Array): String =
-      writeInternal(buffer, endOfInput = true)
-
-    def end(): String =
-      writeInternal(new Uint8Array(0), endOfInput = true)
+    val strConstant: String = "value"
   }
 
-  object BufferStaticFallbackImpl extends js.Object {
-    def alloc(size: Int): Any = new Uint8Array(size)
-    def from(array: js.Array[Short]): Any = new Uint8Array(array)
+  private object DefaultAsSelfFallbackImpl extends js.Object {
+    val x: Int = 1
+    val y: String = "foo"
+  }
 
-    def isBuffer(x: Any): Boolean = x.isInstanceOf[Uint8Array]
+  private val defaultFunFallbackImpl: js.Function0[Int] = () => 5
+
+  private class MyBoxFallbackImpl[T](private var x: T) extends js.Object {
+    def get(): T = x
+    def set(x: T): Unit = this.x = x
+  }
+
+  private object MyBoxStaticFallbackImpl extends js.Object {
+    def make[T](x: T): MyBoxFallbackImpl[T] = new MyBoxFallbackImpl(x)
   }
 
   @BeforeClass
@@ -156,55 +128,77 @@ object ModulesWithGlobalFallbackTest {
 
     if (isNoModule) {
       val global = org.scalajs.testsuite.utils.JSUtils.globalObject
-      global.ModulesWithGlobalFallbackTest_QueryString =
-        QueryStringFallbackImpl
-      global.ModulesWithGlobalFallbackTest_StringDecoder =
-        js.constructorOf[StringDecoderFallbackImpl]
-      global.ModulesWithGlobalFallbackTest_Buffer =
-        js.constructorOf[Uint8Array]
-      global.ModulesWithGlobalFallbackTest_BufferStatic =
-        BufferStaticFallbackImpl
+      global.ModulesWithGlobalFallbackTest_Module = ModuleFallbackImpl
+      global.ModulesWithGlobalFallbackTest_DefaultAsSelf = DefaultAsSelfFallbackImpl
+      global.ModulesWithGlobalFallbackTest_DefaultFun = defaultFunFallbackImpl
+      global.ModulesWithGlobalFallbackTest_MyBox = js.constructorOf[MyBoxFallbackImpl[_]]
+      global.ModulesWithGlobalFallbackTest_MyBoxStatic = MyBoxStaticFallbackImpl
     }
   }
 
+  final val modulePath = "../test-classes/modules-test.js"
+
   @js.native
-  @JSImport("querystring", JSImport.Namespace,
-      globalFallback = "ModulesWithGlobalFallbackTest_QueryString")
-  object QueryString extends js.Object {
-    def stringify(obj: js.Dictionary[String], sep: String = "&",
-        eq: String = "="): String = js.native
+  @JSImport(modulePath, JSImport.Namespace,
+      globalFallback = "ModulesWithGlobalFallbackTest_Module")
+  object NamespaceImport extends js.Object {
+    /* In this facade, 50 is not the actual default value for `y`.
+     * We intentionally use a different value to check that it is ignored.
+     * See #4554.
+     */
+    def ssum(x: Int, y: Int = 50): Int = js.native
+    val strConstant: String = js.native
+
+    @JSName("strConstant")
+    def strConstantAsDef: String = js.native
   }
 
   @js.native
-  @JSImport("querystring", JSImport.Default,
-      globalFallback = "ModulesWithGlobalFallbackTest_QueryString")
-  object QueryStringAsDefault extends js.Object {
-    def stringify(obj: js.Dictionary[String], sep: String = "&",
-        eq: String = "="): String = js.native
+  @JSImport("../test-classes/modules-test-default-as-self.js", JSImport.Default,
+      globalFallback = "ModulesWithGlobalFallbackTest_DefaultAsSelf")
+  object DefaultAsSelf extends js.Object {
+    val x: Int = js.native
+    val y: String = js.native
   }
 
   @js.native
-  @JSImport("string_decoder", "StringDecoder",
-      globalFallback = "ModulesWithGlobalFallbackTest_StringDecoder")
-  class StringDecoder(encoding: String = "utf8") extends js.Object {
-    def write(buffer: Buffer): String = js.native
-    def end(buffer: Buffer): String = js.native
-    def end(): String = js.native
+  @JSImport(modulePath, JSImport.Default,
+      globalFallback = "ModulesWithGlobalFallbackTest_DefaultFun")
+  def defaultFunction(): Int = js.native
+
+  object NativeMembers {
+    /* In this facade, 50 is not the actual default value for `y`.
+     * We intentionally use a different value to check that it is ignored.
+     * See #4554.
+     */
+    @js.native
+    @JSImport(modulePath, "ssum",
+        globalFallback = "ModulesWithGlobalFallbackTest_Module.ssum")
+    def ssum(x: Int, y: Int = 50): Int = js.native
+
+    @js.native
+    @JSImport(modulePath, "strConstant",
+        globalFallback = "ModulesWithGlobalFallbackTest_Module.strConstant")
+    val strConstant: String = js.native
+
+    @js.native
+    @JSImport(modulePath, "strConstant",
+        globalFallback = "ModulesWithGlobalFallbackTest_Module.strConstant")
+    def strConstantAsDef: String = js.native
   }
 
   @js.native
-  @JSImport("buffer", "Buffer",
-      globalFallback = "ModulesWithGlobalFallbackTest_Buffer")
-  class Buffer private[this] () extends js.typedarray.Uint8Array(0)
+  @JSImport(modulePath, "MyBox",
+      globalFallback = "ModulesWithGlobalFallbackTest_MyBox")
+  class MyBox[T](x: T) extends js.Object {
+    def get(): T = js.native
+    def set(x: T): Unit = js.native
+  }
 
-  // This API requires Node.js >= v5.10.0
   @js.native
-  @JSImport("buffer", "Buffer",
-      globalFallback = "ModulesWithGlobalFallbackTest_BufferStatic")
-  object Buffer extends js.Object {
-    def alloc(size: Int): Buffer = js.native
-    def from(array: js.Array[Short]): Buffer = js.native
-
-    def isBuffer(x: Any): Boolean = js.native
+  @JSImport(modulePath, "MyBox",
+      globalFallback = "ModulesWithGlobalFallbackTest_MyBoxStatic")
+  object MyBox extends js.Object {
+    def make[T](x: T): MyBox[T] = js.native
   }
 }

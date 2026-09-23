@@ -13,11 +13,13 @@
 package org.scalajs.testsuite.javalib.util
 
 import org.junit.Assert._
+import org.junit.Assume._
 import org.junit.Test
 
 import java.util.UUID
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.Platform._
 
 class UUIDTest {
 
@@ -29,7 +31,7 @@ class UUIDTest {
     assertEquals(1, uuid.version())
     assertEquals(0x1d07decf81d4faeL, uuid.timestamp())
     assertEquals(0x2765, uuid.clockSequence())
-    assertEquals(0xA0C91E6BF6L, uuid.node())
+    assertEquals(0xa0c91e6bf6L, uuid.node())
   }
 
   @Test def getLeastSignificantBits(): Unit = {
@@ -67,9 +69,9 @@ class UUIDTest {
 
   @Test def timestamp(): Unit = {
     assertEquals(0L,
-      new UUID(0x0000000000001000L, 0x8000000000000000L).timestamp())
+        new UUID(0x0000000000001000L, 0x8000000000000000L).timestamp())
     assertEquals(0x333555577777777L,
-      new UUID(0x7777777755551333L, 0x8000000000000000L).timestamp())
+        new UUID(0x7777777755551333L, 0x8000000000000000L).timestamp())
 
     assertThrows(classOf[Exception], new UUID(0x0000000000000000L, 0x8000000000000000L).timestamp())
     assertThrows(classOf[Exception], new UUID(0x0000000000002000L, 0x8000000000000000L).timestamp())
@@ -78,10 +80,12 @@ class UUIDTest {
   @Test def clockSequence(): Unit = {
     assertEquals(0, new UUID(0x0000000000001000L, 0x8000000000000000L).clockSequence())
     assertEquals(0x0fff, new UUID(0x0000000000001000L, 0x8fff000000000000L).clockSequence())
-    assertEquals(0x3fff, new UUID(0x0000000000001000L, 0xBfff000000000000L).clockSequence())
+    assertEquals(0x3fff, new UUID(0x0000000000001000L, 0xbfff000000000000L).clockSequence())
 
-    assertThrows(classOf[Exception], new UUID(0x0000000000000000L, 0x8000000000000000L).clockSequence())
-    assertThrows(classOf[Exception], new UUID(0x0000000000002000L, 0x8000000000000000L).clockSequence())
+    assertThrows(
+        classOf[Exception], new UUID(0x0000000000000000L, 0x8000000000000000L).clockSequence())
+    assertThrows(
+        classOf[Exception], new UUID(0x0000000000002000L, 0x8000000000000000L).clockSequence())
   }
 
   @Test def node(): Unit = {
@@ -93,21 +97,87 @@ class UUIDTest {
   }
 
   @Test def compareTo(): Unit = {
-    val uuid0101 = new UUID(1L, 1L)
-    val uuid0111 = new UUID(1L, 0x100000001L)
-    val uuid1000 = new UUID(0x100000000L, 0L)
+    /* #4882 `UUID.compareTo()` is known not to match the specification in RFC
+     * 4122. However, the exact algorithm used by the JVM is not publicly
+     * available with a license that we can use. The best we have is the
+     * JavaDoc that says
+     *
+     * > The first of two UUIDs is greater than the second if the most
+     * > significant field in which the UUIDs differ is greater for the first
+     * > UUID.
+     *
+     * We do not know what a "field" is; it does not match what the JavaDoc of
+     * the class calls "fields" of a variant 2 UUID, and there is no other
+     * mention of "field" elsewhere. We can guess that it is either the pair
+     * `get{Least,Most}SignificantBits()`, or the dash-separated segments of
+     * the string representation of a UUID. The latter is of the form
+     *
+     *   xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+     *      8       4    4    4       12
+     *
+     * Note that the first 3 segments make up the result of
+     * `getMostSignificantBits()`, while the last 2 segments make up
+     * `getLeastSignificantBits()`.
+     *
+     * In order to infer the algorithm used by the JVM, we generated UUIDs for
+     * all corner-case values of these 5 segments: the minimum and maximum
+     * values of the signed and unsigned representations of the fields. That
+     * makes 4^5 = 1024 different UUIDs. By construction, this also generates
+     * all corner-case values of `get{Most,Least}SignificantBits()`.
+     *
+     * We then tried implementations of `referenceLessThan` until it matched
+     * the result of the JVM's `compareTo` for all pairs of our UUIDs. There
+     * are 1024^2 ~= 1M such pairs.
+     *
+     * This test generates the 1024 UUIDs mentioned above, sorts them according
+     * to `referenceLessThan`, then verifies that `compareTo` agrees with the
+     * resulting order. This way, we only test 2*1024 pairs instead of the full
+     * 1 million.
+     */
 
-    assertEquals(0, uuid0101.compareTo(uuid0101))
-    assertEquals(0, uuid0111.compareTo(uuid0111))
-    assertEquals(0, uuid1000.compareTo(uuid1000))
+    // Reference comparison obtained by trial-and-error against the JVM.
+    def referenceLessThan(x: UUID, y: UUID): Boolean = {
+      if (x.getMostSignificantBits() != y.getMostSignificantBits())
+        x.getMostSignificantBits() < y.getMostSignificantBits()
+      else
+        x.getLeastSignificantBits() < y.getLeastSignificantBits()
+    }
 
-    assertTrue(uuid0101.compareTo(uuid0111) < 0)
-    assertTrue(uuid0101.compareTo(uuid1000) < 0)
-    assertTrue(uuid0111.compareTo(uuid1000) < 0)
+    def cornerCases(hexDigitCount: Int): List[Long] = {
+      val bits = hexDigitCount * 4
+      List(
+        0L, // unsigned min value
+        (1L << bits) - 1L, // unsigned max value
+        1L << (bits - 1), // signed min value
+        (1L << (bits - 1)) - 1L // signed max value
+      )
+    }
 
-    assertTrue(uuid0111.compareTo(uuid0101) > 0)
-    assertTrue(uuid1000.compareTo(uuid0101) > 0)
-    assertTrue(uuid1000.compareTo(uuid0111) > 0)
+    val uuids = for {
+      f1 <- cornerCases(8)
+      f2 <- cornerCases(4)
+      f3 <- cornerCases(4)
+      f4 <- cornerCases(4)
+      f5 <- cornerCases(12)
+    } yield {
+      new UUID((f1 << 32) | (f2 << 16) | f3, (f4 << 48) | f5)
+    }
+
+    val sortedUUIDs = uuids.sortWith(referenceLessThan(_, _))
+
+    /* For reference: full loop to run on the JVM to test all 1M pairs
+     * for (u1 <- sortedUUIDs; u2 <- sortedUUIDs) {
+     *   if (referenceLessThan(u1, u2) != (u1.compareTo(u2) < 0))
+     *     println(s"$u1 $u2")
+     * }
+     */
+
+    // For our unit tests, only test consecutive UUIDs, and assume that transitivity holds
+    for ((smaller, larger) <- sortedUUIDs.zip(sortedUUIDs.tail)) {
+      assertEquals(s"$smaller == $smaller", 0, smaller.compareTo(smaller))
+      assertEquals(s"$smaller < $larger", -1, smaller.compareTo(larger))
+      assertEquals(s"$larger > $smaller", 1, larger.compareTo(smaller))
+    }
   }
 
   @Test def hashCodeTest(): Unit = {
@@ -137,15 +207,9 @@ class UUIDTest {
 
   @Test def toStringTest(): Unit = {
     assertEquals("f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
-      new UUID(0xf81d4fae7dec11d0L, 0xa76500a0c91e6bf6L).toString)
+        new UUID(0xf81d4fae7dec11d0L, 0xa76500a0c91e6bf6L).toString)
     assertEquals("00000000-0000-1000-8000-000000000000",
-      new UUID(0x0000000000001000L, 0x8000000000000000L).toString)
-  }
-
-  @Test def randomUUID(): Unit = {
-    val uuid = UUID.randomUUID()
-    assertEquals(2, uuid.variant())
-    assertEquals(4, uuid.version())
+        new UUID(0x0000000000001000L, 0x8000000000000000L).toString)
   }
 
   @Test def fromString(): Unit = {
@@ -169,18 +233,31 @@ class UUIDTest {
     assertEquals(0, uuid2.clockSequence())
     assertEquals(0L, uuid2.node())
 
-    assertThrows(classOf[Exception], UUID.fromString(null))
-    assertThrows(classOf[Exception], UUID.fromString(""))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae_7dec-11d0-a765-00a0c91e6bf6"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae-7dec_11d0-a765-00a0c91e6bf6"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae-7dec-11d0_a765-00a0c91e6bf6"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae-7dec-11d0-a765_00a0c91e6bf6"))
-    assertThrows(classOf[Exception], UUID.fromString("-7dec-11d0-a765-00a0c91e6bf6"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae--11d0-a765-00a0c91e6bf6"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae-7dec--a765-00a0c91e6bf6"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae-7dec-11d0--00a0c91e6bf6"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae-7dec-11d0-a765-"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae-7dec-11d0-a765"))
-    assertThrows(classOf[Exception], UUID.fromString("f81d4fae-7dZc-11d0-a765-00a0c91e6bf6"))
+    assertThrows(classOf[IllegalArgumentException], UUID.fromString(""))
+    assertThrows(
+        classOf[IllegalArgumentException], UUID.fromString("f81d4fae_7dec-11d0-a765-00a0c91e6bf6"))
+    assertThrows(
+        classOf[IllegalArgumentException], UUID.fromString("f81d4fae-7dec_11d0-a765-00a0c91e6bf6"))
+    assertThrows(
+        classOf[IllegalArgumentException], UUID.fromString("f81d4fae-7dec-11d0_a765-00a0c91e6bf6"))
+    assertThrows(
+        classOf[IllegalArgumentException], UUID.fromString("f81d4fae-7dec-11d0-a765_00a0c91e6bf6"))
+    assertThrows(classOf[IllegalArgumentException], UUID.fromString("-7dec-11d0-a765-00a0c91e6bf6"))
+    assertThrows(
+        classOf[IllegalArgumentException], UUID.fromString("f81d4fae--11d0-a765-00a0c91e6bf6"))
+    assertThrows(
+        classOf[IllegalArgumentException], UUID.fromString("f81d4fae-7dec--a765-00a0c91e6bf6"))
+    assertThrows(
+        classOf[IllegalArgumentException], UUID.fromString("f81d4fae-7dec-11d0--00a0c91e6bf6"))
+    assertThrows(classOf[IllegalArgumentException], UUID.fromString("f81d4fae-7dec-11d0-a765-"))
+    assertThrows(classOf[IllegalArgumentException], UUID.fromString("f81d4fae-7dec-11d0-a765"))
+    assertThrows(
+        classOf[IllegalArgumentException], UUID.fromString("f81d4fae-7dZc-11d0-a765-00a0c91e6bf6"))
+  }
+
+  @Test def fromStringNull(): Unit = {
+    assumeTrue("assuming compliant null pointer checks", hasCompliantNullPointers)
+
+    assertThrows(classOf[NullPointerException], UUID.fromString(null))
   }
 }

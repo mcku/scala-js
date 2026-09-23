@@ -12,6 +12,8 @@
 
 package java.util
 
+import java.util.Objects.requireNonNull
+
 class ServiceConfigurationError(s: String, e: Throwable) extends Error(s, e) {
   def this(s: String) = this(s, null)
 }
@@ -21,8 +23,7 @@ class ConcurrentModificationException(s: String) extends RuntimeException(s) {
 }
 
 class DuplicateFormatFlagsException(f: String) extends IllegalFormatException {
-  if (f == null)
-    throw new NullPointerException()
+  requireNonNull(f)
 
   def getFlags(): String = f
   override def getMessage(): String = "Flags = '" + f + "'"
@@ -30,11 +31,8 @@ class DuplicateFormatFlagsException(f: String) extends IllegalFormatException {
 
 class EmptyStackException extends RuntimeException
 
-class FormatFlagsConversionMismatchException(f: String, c: Char)
-    extends IllegalFormatException {
-
-  if (f == null)
-    throw new NullPointerException()
+class FormatFlagsConversionMismatchException(f: String, c: Char) extends IllegalFormatException {
+  requireNonNull(f)
 
   def getFlags(): String = f
   def getConversion(): Char = c
@@ -48,11 +46,8 @@ class IllegalFormatCodePointException(c: Int) extends IllegalFormatException {
   override def getMessage(): String = "Code point = 0x" + Integer.toHexString(c)
 }
 
-class IllegalFormatConversionException(c: Char, arg: Class[_])
-    extends IllegalFormatException {
-
-  if (arg == null)
-    throw new NullPointerException()
+class IllegalFormatConversionException(c: Char, arg: Class[_]) extends IllegalFormatException {
+  requireNonNull(arg)
 
   def getConversion(): Char = c
   def getArgumentClass(): Class[_] = arg
@@ -63,8 +58,7 @@ class IllegalFormatConversionException(c: Char, arg: Class[_])
 class IllegalFormatException private[util] () extends IllegalArgumentException
 
 class IllegalFormatFlagsException(f: String) extends IllegalFormatException {
-  if (f == null)
-    throw new NullPointerException()
+  requireNonNull(f)
 
   def getFlags(): String = f
   override def getMessage(): String = "Flags = '" + f + "'"
@@ -80,8 +74,14 @@ class IllegalFormatWidthException(w: Int) extends IllegalFormatException {
   override def getMessage(): String = Integer.toString(w)
 }
 
+// See https://bugs.openjdk.java.net/browse/JDK-8253875
+private[util] class IllegalFormatArgumentIndexException(msg: String)
+    extends IllegalFormatException {
+  override def getMessage(): String = msg
+}
+
 class IllformedLocaleException(s: String, errorIndex: Int)
-  extends RuntimeException(s + (if (errorIndex < 0) "" else " [at index " + errorIndex + "]")) {
+    extends RuntimeException(s + (if (errorIndex < 0) "" else " [at index " + errorIndex + "]")) {
   def this() = this(null, -1)
   def this(s: String) = this(s, -1)
   def getErrorIndex(): Int = errorIndex
@@ -103,22 +103,20 @@ class InvalidPropertiesFormatException(s: String) extends java.io.IOException(s)
 }
 
 class MissingFormatArgumentException(s: String) extends IllegalFormatException {
-  if (s == null)
-    throw new NullPointerException()
+  requireNonNull(s)
 
   def getFormatSpecifier(): String = s
   override def getMessage(): String = "Format specifier '" + s + "'"
 }
 
 class MissingFormatWidthException(s: String) extends IllegalFormatException {
-  if (s == null)
-    throw new NullPointerException()
+  requireNonNull(s)
 
   def getFormatSpecifier(): String = s
   override def getMessage(): String = s
 }
 
-class MissingResourceException private[util](
+class MissingResourceException private[util] (
     s: String, private var className: String, private var key: String, e: Throwable)
     extends RuntimeException(s, e) {
   def this(s: String, className: String, key: String) = this(s, className, key, null)
@@ -134,19 +132,15 @@ class TooManyListenersException(s: String) extends Exception(s) {
   def this() = this(null)
 }
 
-class UnknownFormatConversionException(s: String)
-    extends IllegalFormatException {
-
-  if (s == null)
-    throw new NullPointerException()
+class UnknownFormatConversionException(s: String) extends IllegalFormatException {
+  requireNonNull(s)
 
   def getConversion(): String = s
   override def getMessage(): String = "Conversion = '" + s + "'"
 }
 
 class UnknownFormatFlagsException(f: String) extends IllegalFormatException {
-  if (f == null)
-    throw new NullPointerException()
+  requireNonNull(f)
 
   def getFlags(): String = f
   override def getMessage(): String = "Flags = " + f

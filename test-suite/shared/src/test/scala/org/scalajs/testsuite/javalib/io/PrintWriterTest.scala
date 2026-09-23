@@ -12,8 +12,6 @@
 
 package org.scalajs.testsuite.javalib.io
 
-import scala.language.implicitConversions
-
 import java.io._
 
 import org.junit.Test
@@ -69,7 +67,7 @@ class PrintWriterTest {
     assertEquals("begin", sw.toString())
   }
 
-  @Test def write_does_not_flush_even_with_new_line(): Unit = {
+  @Test def writeDoesNotFlushEvenWithNewLine(): Unit = {
     def test(body: PrintWriter => Unit, expected: String): Unit = {
       val (pw, sw) = newPrintWriter(autoFlush = true)
       body(pw)
@@ -85,7 +83,7 @@ class PrintWriterTest {
     test(_.write(Array('A', 'B', '\n', 'C'), 1, 2), "B\n")
   }
 
-  @Test def print_does_not_flush_even_with_new_line(): Unit = {
+  @Test def printDoesNotFlushEvenWithNewLine(): Unit = {
     def test(body: PrintWriter => Unit, expected: String): Unit = {
       val (pw, sw) = newPrintWriter(autoFlush = true)
       body(pw)
@@ -108,7 +106,7 @@ class PrintWriterTest {
     test(_.print(null: AnyRef), "null")
   }
 
-  @Test def println_forwards_and_flushes_when_autoFlush_is_true(): Unit = {
+  @Test def printlnForwardsAndFlushesWhenAutoFlushIsTrue(): Unit = {
     testPrintlnForward(_.println(), "\n", autoFlush = true)
     testPrintlnForward(_.println(true), "true\n", autoFlush = true)
     testPrintlnForward(_.println('Z'), "Z\n", autoFlush = true)
@@ -124,7 +122,7 @@ class PrintWriterTest {
     testPrintlnForward(_.println(null: AnyRef), "null\n", autoFlush = true)
   }
 
-  @Test def println_and_forwards_do_not_flush_when_autoFlush_is_false(): Unit = {
+  @Test def printlnAndForwardsDoNotFlushWhenAutoFlushIsFalse(): Unit = {
     testPrintlnForward(_.println(), "\n", autoFlush = false)
     testPrintlnForward(_.println(true), "true\n", autoFlush = false)
     testPrintlnForward(_.println('Z'), "Z\n", autoFlush = false)
@@ -145,17 +143,17 @@ class PrintWriterTest {
     val (pw, sw) = newPrintWriter(autoFlush = autoFlush)
     body(pw)
     if (autoFlush) assertTrue(sw.flushed)
-    else           assertFalse(sw.flushed)
+    else assertFalse(sw.flushed)
     assertFalse(pw.checkError())
     assertEquals(expected, sw.toString())
   }
 
-  @Test def printf_and_format_which_flushes_when_autoFlush_is_true(): Unit = {
+  @Test def printfAndFormatWhichFlushesWhenAutoFlushIsTrue(): Unit = {
     testPrintfFormat(_.printf("%04d", Int.box(5)), "0005", autoFlush = true)
     testPrintfFormat(_.format("%.5f", Double.box(Math.PI)), "3.14159", autoFlush = true)
   }
 
-  @Test def printf_and_format_do_not_flush_when_autoFlush_is_false(): Unit = {
+  @Test def printfAndFormatDoNotFlushWhenAutoFlushIsFalse(): Unit = {
     testPrintfFormat(_.printf("%04d", Int.box(5)), "0005", autoFlush = false)
     testPrintfFormat(_.format("%.5f", Double.box(Math.PI)), "3.14159", autoFlush = false)
   }
@@ -165,12 +163,12 @@ class PrintWriterTest {
     val (pw, sw) = newPrintWriter(autoFlush = autoFlush)
     body(pw)
     if (autoFlush) assertTrue(sw.flushed)
-    else           assertFalse(sw.flushed)
+    else assertFalse(sw.flushed)
     assertFalse(pw.checkError())
     assertEquals(expected, sw.toString())
   }
 
-  @Test def append_does_not_flush_even_with_new_line(): Unit = {
+  @Test def appendDoesNotFlushEvenWithNewLine(): Unit = {
     def test(body: PrintWriter => Unit, expected: String): Unit = {
       val (pw, sw) = newPrintWriter(autoFlush = true)
       body(pw)
@@ -187,7 +185,7 @@ class PrintWriterTest {
     test(_.append('\n'), "\n")
   }
 
-  @Test def traps_all_IOException_and_updates_checkError(): Unit = {
+  @Test def trapsAllIOExceptionAndUpdatesCheckError(): Unit = {
     def test(body: PrintWriter => Unit): Unit = {
       val (pw, sw) = newPrintWriter()
       sw.throwing = true
@@ -241,7 +239,8 @@ class PrintWriterTest {
 
   /** A PrintWriter that exposes various hooks for testing purposes. */
   private class MockPrintWriter(out: Writer,
-      autoFlush: Boolean) extends PrintWriter(out, autoFlush) {
+      autoFlush: Boolean)
+      extends PrintWriter(out, autoFlush) {
     def this(out: Writer) = this(out, false)
 
     override def clearError(): Unit = super.clearError()

@@ -42,6 +42,9 @@
 package java.math
 
 import scala.annotation.tailrec
+
+import java.util.ScalaOps._
+
 import BigInteger.QuotAndRem
 
 /** Provides BigInteger division and modular arithmetic.
@@ -135,7 +138,7 @@ private[math] object Division {
             if ((longR >>> 32).toInt == 0) {
               rem = longR.toInt
 
-              if ((leftHand ^ Long.MinValue) > (rightHand ^ Long.MinValue))
+              if (java.lang.Long.unsigned_>(leftHand, rightHand))
                 loop()
             }
           }
@@ -146,7 +149,8 @@ private[math] object Division {
       // Step D4: multiply normB by guessDigit and subtract the production
       // from normA.
       if (guessDigit != 0) {
-        val borrow = Division.multiplyAndSubtract(normA, j - normBLength, normB, normBLength, guessDigit)
+        val borrow =
+          Division.multiplyAndSubtract(normA, j - normBLength, normB, normBLength, guessDigit)
         // Step D5: check the borrow
         if (borrow != 0) {
           // Step D6: compensating addition
@@ -250,7 +254,7 @@ private[math] object Division {
   def evenModPow(base: BigInteger, exponent: BigInteger,
       modulus: BigInteger): BigInteger = {
     // STEP 1: Obtain the factorization 'modulus'= q * 2^j.
-    val j = modulus.getLowestSetBit
+    val j = modulus.getLowestSetBit()
     val q = modulus.shiftRight(j)
 
     // STEP 2: Compute x1 := base^exponent (mod q).
@@ -287,7 +291,7 @@ private[math] object Division {
         if (res(i) != modulusDigits(i)) {
           doSub =
             (res(i) != 0) && ((res(i) & UINT_MAX) > (modulusDigits(i) & UINT_MAX))
-          //force break
+          // force break
           i = 0
         }
         i -= 1
@@ -316,8 +320,8 @@ private[math] object Division {
      * Divide both number the maximal possible times by 2 without rounding
      * gcd(2*a, 2*b) = 2 * gcd(a,b)
      */
-    val lsb1 = op1.getLowestSetBit
-    val lsb2 = op2.getLowestSetBit
+    val lsb1 = op1.getLowestSetBit()
+    val lsb2 = op2.getLowestSetBit()
     val pow2Count = Math.min(lsb1, lsb2)
     BitLevel.inplaceShiftRight(op1, lsb1)
     BitLevel.inplaceShiftRight(op2, lsb2)
@@ -344,21 +348,21 @@ private[math] object Division {
         if (op2.numberLength > op1.numberLength * 1.2) {
           op2 = op2.remainder(op1)
           if (op2.signum() != 0) {
-            BitLevel.inplaceShiftRight(op2, op2.getLowestSetBit)
+            BitLevel.inplaceShiftRight(op2, op2.getLowestSetBit())
           }
         } else {
           // Use Knuth's algorithm of successive subtract and shifting
           do {
             Elementary.inplaceSubtract(op2, op1)
-            BitLevel.inplaceShiftRight(op2, op2.getLowestSetBit)
-          } while (op2.compareTo(op1) >= BigInteger.EQUALS);
+            BitLevel.inplaceShiftRight(op2, op2.getLowestSetBit())
+          } while (op2.compareTo(op1) >= BigInteger.EQUALS)
         }
         // now op1 >= op2
         val swap: BigInteger = op2
         op2 = op1
         op1 = swap
         if (op1.sign != 0)
-          loop
+          loop()
       }
     }
 
@@ -526,8 +530,8 @@ private[math] object Division {
     s.digits(0) = 1
 
     var k = 0
-    val lsbu = u.getLowestSetBit
-    val lsbv = v.getLowestSetBit
+    val lsbu = u.getLowestSetBit()
+    val lsbv = v.getLowestSetBit()
     if (lsbu > lsbv) {
       BitLevel.inplaceShiftRight(u, lsbu)
       BitLevel.inplaceShiftRight(v, lsbv)
@@ -544,7 +548,7 @@ private[math] object Division {
     while (v.signum() > 0) {
       while (u.compareTo(v) > BigInteger.EQUALS) {
         Elementary.inplaceSubtract(u, v)
-        val toShift = u.getLowestSetBit
+        val toShift = u.getLowestSetBit()
         BitLevel.inplaceShiftRight(u, toShift)
         Elementary.inplaceAdd(r, s)
         BitLevel.inplaceShiftLeft(s, toShift)
@@ -557,7 +561,7 @@ private[math] object Division {
         if (u.compareTo(v) <= BigInteger.EQUALS) {
           Elementary.inplaceSubtract(v, u)
           if (v.signum() != 0) {
-            val toShift = v.getLowestSetBit
+            val toShift = v.getLowestSetBit()
             BitLevel.inplaceShiftRight(v, toShift)
             Elementary.inplaceAdd(s, r)
             BitLevel.inplaceShiftLeft(r, toShift)
@@ -577,7 +581,7 @@ private[math] object Division {
     val n1 = calcN(p)
     if (k > m) {
       val r2 = monPro(p.subtract(r), BigInteger.ONE, p, n1)
-      monPro(r2, BigInteger.getPowerOfTwo(2*m - k), p, n1)
+      monPro(r2, BigInteger.getPowerOfTwo(2 * m - k), p, n1)
     } else {
       monPro(p.subtract(r), BigInteger.getPowerOfTwo(m - k), p, n1)
     }
@@ -590,10 +594,9 @@ private[math] object Division {
    *  @return {@code x<sup>-1</sup> (mod 2<sup>n</sup>)}.
    */
   def modPow2Inverse(x: BigInteger, n: Int): BigInteger = {
-    val y = new BigInteger(1, new Array[Int](1 << n))
-    y.numberLength = 1
+    val numberLength = (n + 31) >> 5 // ceil(n / 32)
+    val y = new BigInteger(1, numberLength, new Array[Int](numberLength))
     y.digits(0) = 1
-    y.sign = 1
     for (i <- 1 until n) {
       if (BitLevel.testBit(x.multiply(y), i)) {
         y.digits(i >> 5) |= (1 << (i & 31))
@@ -851,10 +854,9 @@ private[math] object Division {
       while (bi.testBit(i)) {
         i -= 1
       }
-      n - 1 - Math.max(i, bi.getLowestSetBit)
+      n - 1 - Math.max(i, bi.getLowestSetBit())
     }
   }
-
 
   /** Returns {@code bi == abs(2^exp)}. */
   private def isPowerOfTwo(bi: BigInteger, exp: Int): Boolean = {

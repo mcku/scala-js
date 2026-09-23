@@ -1,0 +1,2 @@
+> ; root/test ; multiTestJS/testHtml
+> ; set Global / scalaJSStage := FullOptStage ; root/test ; multiTestJS/testHtml

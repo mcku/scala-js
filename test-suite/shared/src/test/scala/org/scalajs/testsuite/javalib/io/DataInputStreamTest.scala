@@ -14,8 +14,8 @@ package org.scalajs.testsuite.javalib.io
 
 import java.io._
 
-import org.scalajs.testsuite.utils.AssertThrows._
-import org.scalajs.testsuite.utils.Platform.executingInJVM
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.Platform._
 
 import org.junit._
 import org.junit.Assert._
@@ -28,8 +28,8 @@ trait DataInputStreamTest {
   private def newStream(data: Int*) =
     new DataInputStream(inFromBytes(data.map(_.toByte)))
 
-  @Test def should_provide_readBoolean(): Unit = {
-    val data = Seq(0x00, 0x01, 0xF1, 0x00, 0x01)
+  @Test def readBoolean(): Unit = {
+    val data = Seq(0x00, 0x01, 0xf1, 0x00, 0x01)
     val stream = newStream(data: _*)
 
     for (d <- data)
@@ -38,8 +38,8 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readBoolean())
   }
 
-  @Test def should_provide_readByte(): Unit = {
-    val data = Seq(0x00, 0x01, 0xF1, 0x7D, 0x35)
+  @Test def readByte(): Unit = {
+    val data = Seq(0x00, 0x01, 0xf1, 0x7d, 0x35)
     val stream = newStream(data: _*)
 
     for (d <- data)
@@ -48,20 +48,20 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readBoolean())
   }
 
-  @Test def should_provide_readChar(): Unit = {
+  @Test def readChar(): Unit = {
     val stream = newStream(
-      0x00, 0x48, // H
-      0x00, 0xF6, // ö
-      0x00, 0x6C, // l
-      0x00, 0x6C, // l
-      0x00, 0xF6, // ö
-      0x00, 0x20, // [space]
-      0x00, 0x57, // W
-      0x01, 0x03, // ă
-      0x00, 0x72, // r
-      0x02, 0x34, // ȴ
-      0x01, 0x11, // đ
-      0x56 // dangling
+        0x00, 0x48, // H
+        0x00, 0xf6, // ö
+        0x00, 0x6c, // l
+        0x00, 0x6c, // l
+        0x00, 0xf6, // ö
+        0x00, 0x20, // [space]
+        0x00, 0x57, // W
+        0x01, 0x03, // ă
+        0x00, 0x72, // r
+        0x02, 0x34, // ȴ
+        0x01, 0x11, // đ
+        0x56 // dangling
     )
     var res = ""
 
@@ -73,7 +73,7 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readChar()) // Dangling + EOF
   }
 
-  @Test def should_provide_readDouble(): Unit = {
+  @Test def readDouble(): Unit = {
     val stream = newStream(
         0x3f, 0xe6, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
         0x41, 0x15, 0x19, 0x20, 0x45, 0x8d, 0x9b, 0x5f,
@@ -97,7 +97,7 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readDouble())
   }
 
-  @Test def should_provide_readFloat(): Unit = {
+  @Test def readFloat(): Unit = {
     val stream = newStream(
         0xbf, 0x80, 0x00, 0x00,
         0x45, 0x8e, 0x9c, 0x83,
@@ -121,7 +121,7 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readFloat())
   }
 
-  @Test def should_provide_readInt(): Unit = {
+  @Test def readInt(): Unit = {
     val stream = newStream(
         0x00, 0x00, 0x00, 0x00,
         0x7f, 0xff, 0xff, 0xff,
@@ -143,7 +143,7 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readInt())
   }
 
-  @Test def should_provide_readLong(): Unit = {
+  @Test def readLong(): Unit = {
     val stream = newStream(
         0x00, 0x01, 0xf0, 0xec, 0x59, 0x0c, 0x70, 0x9a,
         0xff, 0xff, 0xff, 0xff, 0xfe, 0x10, 0xd5, 0x5e,
@@ -165,7 +165,7 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readLong())
   }
 
-  @Test def should_provide_readShort(): Unit = {
+  @Test def readShort(): Unit = {
     val stream = newStream(
         0x01, 0xc5,
         0xff, 0xd5,
@@ -189,8 +189,8 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readDouble())
   }
 
-  @Test def should_provide_readUnsignedByte(): Unit = {
-    val data = Seq(0x00, 0x01, 0xF1, 0x7D, 0x35)
+  @Test def readUnsignedByte(): Unit = {
+    val data = Seq(0x00, 0x01, 0xf1, 0x7d, 0x35)
     val stream = newStream(data: _*)
 
     for (d <- data)
@@ -199,7 +199,7 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readBoolean()) // EOF
   }
 
-  @Test def should_provide_readUnsignedShort(): Unit = {
+  @Test def readUnsignedShort(): Unit = {
     val stream = newStream(
         0xfe, 0x4c,
         0x00, 0x00,
@@ -223,14 +223,12 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readDouble())
   }
 
-  @Test def should_provide_readFully_1_arg_3_arg(): Unit = {
+  @Test def readFullyOneArgThreeArg(): Unit = {
     val stream = newStream(-100 to 99: _*)
     val buf = new Array[Byte](50)
 
     stream.readFully(buf)
     assertArrayEquals(toByteArray(-100 to -51), buf)
-
-    assertThrows(classOf[Exception], stream.readFully(null))
 
     stream.readFully(buf, 40, 10)
     assertArrayEquals(toByteArray((-100 to -61) ++ (-50 to -41)), buf)
@@ -249,10 +247,28 @@ trait DataInputStreamTest {
     assertThrows(classOf[Exception], stream.readFully(buf))
   }
 
-  @Test def should_provide_readFully_for_bursty_streams(): Unit = {
+  @Test def readFullyOneArgThreeArgNull(): Unit = {
+    assumeTrue("assuming compliant null pointer checks", hasCompliantNullPointers)
+
+    val stream = newStream(-100 to 99: _*)
+    val buf = new Array[Byte](50)
+
+    stream.readFully(buf)
+    assertArrayEquals(toByteArray(-100 to -51), buf)
+
+    assertThrows(classOf[NullPointerException], stream.readFully(null))
+    assertThrows(classOf[NullPointerException], stream.readFully(null, 70, 1))
+
+    stream.readFully(buf, 40, 10)
+    assertArrayEquals(toByteArray((-100 to -61) ++ (-50 to -41)), buf)
+  }
+
+  @Test def readFullyForBurstyStreams(): Unit = {
     class BurstyStream(length: Int, burst: Int) extends InputStream {
       private var i: Int = 0
-      def read(): Int = if (i < length) { i += 1; i } else -1
+      def read(): Int =
+        if (i < length) { i += 1; i }
+        else -1
       override def read(buf: Array[Byte], off: Int, reqLen: Int): Int = {
         val len = Math.min(Math.min(reqLen, burst), length - i)
         if (reqLen == 0) 0
@@ -260,7 +276,7 @@ trait DataInputStreamTest {
         else {
           var j: Int = 0
           while (j < len) {
-            buf(off+j) = read().toByte
+            buf(off + j) = read().toByte
             j += 1
           }
           len
@@ -280,7 +296,7 @@ trait DataInputStreamTest {
     assertThrows(classOf[EOFException], stream.readFully(buf))
   }
 
-  @Test def should_provide_readUTF(): Unit = {
+  @Test def readUTF(): Unit = {
     val stream = newStream(
         0x00, 0x10, 0x48, 0xc3, 0xb6, 0x6c, 0x6c, 0xc3,
         0xb6, 0x20, 0x57, 0xc4, 0x83, 0x72, 0xc8, 0xb4,
@@ -292,11 +308,11 @@ trait DataInputStreamTest {
     assertEquals("poo -> 💩", stream.readUTF)
     assertEquals("愛", stream.readUTF)
 
-    val badStream = newStream(0x00, 0x01, 0xC0, 0x82)
+    val badStream = newStream(0x00, 0x01, 0xc0, 0x82)
     assertThrows(classOf[UTFDataFormatException], badStream.readUTF)
   }
 
-  @Test def readUTF_with_very_long_string(): Unit = {
+  @Test def readUTFWithVeryLongString(): Unit = {
     val length = 40000
     val inputBytes = new Array[Byte](2 + length)
     inputBytes(0) = (length >> 8).toByte
@@ -311,7 +327,7 @@ trait DataInputStreamTest {
     assertEquals(-1, stream.read())
   }
 
-  @Test def should_provide_readLine(): Unit = {
+  @Test def readLine(): Unit = {
     val stream = newStream(
         "Hello World\nUNIX\nWindows\r\nMac (old)\rStuff".map(_.toInt): _*)
 
@@ -323,7 +339,7 @@ trait DataInputStreamTest {
     assertEquals(null, stream.readLine())
   }
 
-  @Test def should_allow_marking_even_when_readLine_has_to_push_back(): Unit = {
+  @Test def markReadLinePushBack(): Unit = {
     assumeFalse("Not supported on JDK", executingInJVM)
 
     val stream = newStream(

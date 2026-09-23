@@ -72,7 +72,8 @@ import java.io.Serializable
  */
 final class TaskDef(_fullyQualifiedName: String, _fingerprint: Fingerprint,
     _explicitlySpecified: Boolean,
-    _selectors: Array[Selector]) extends Serializable {
+    _selectors: Array[Selector])
+    extends Serializable {
 
   if (_fullyQualifiedName == null)
     throw new NullPointerException("fullyQualifiedName was null");
@@ -111,12 +112,12 @@ final class TaskDef(_fullyQualifiedName: String, _fingerprint: Fingerprint,
 
   override def equals(that: Any): Boolean = that match {
     case that: TaskDef =>
-      this.fullyQualifiedName  == that.fullyQualifiedName &&
-      this.fingerprint         == that.fingerprint &&
-      this.explicitlySpecified == that.explicitlySpecified &&
+      this.fullyQualifiedName() == that.fullyQualifiedName() &&
+      this.fingerprint() == that.fingerprint() &&
+      this.explicitlySpecified() == that.explicitlySpecified() &&
       Arrays.equals(
-          this.selectors.asInstanceOf[Array[AnyRef]],
-          that.selectors.asInstanceOf[Array[AnyRef]])
+          this.selectors().asInstanceOf[Array[AnyRef]],
+          that.selectors().asInstanceOf[Array[AnyRef]])
     case _ => false
   }
 

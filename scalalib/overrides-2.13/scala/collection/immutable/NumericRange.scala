@@ -72,10 +72,14 @@ sealed class NumericRange[T](
   import num._
 
   // See comment in Range for why this must be lazy.
-  override lazy val length: Int = NumericRange.count(start, end, step, isInclusive)
-  override def isEmpty = length == 0
+  override lazy val length: Int     = NumericRange.count(start, end, step, isInclusive)
+  override lazy val isEmpty: Boolean = (
+    (num.gt(start, end) && num.gt(step, num.zero))
+      || (num.lt(start, end) && num.lt(step, num.zero))
+      || (num.equiv(start, end) && !isInclusive)
+    )
   override def last: T =
-    if (length == 0) Nil.head
+    if (isEmpty) Nil.head
     else locationAfterN(length - 1)
   override def init: NumericRange[T] =
     if (isEmpty) Nil.init
@@ -128,6 +132,75 @@ sealed class NumericRange[T](
   // are forgiving: therefore the checks are with the methods.
   private def locationAfterN(n: Int): T = start + (step * fromInt(n))
 
+  private def crossesTheEndAfterN(n: Int): Boolean = {
+    // if we're sure that subtraction in the context of T won't overflow, we use this function
+    // to calculate the length of the range
+    def unsafeRangeLength(r: NumericRange[T]): T = {
+      val diff = num.minus(r.end, r.start)
+      val quotient = num.quot(diff, r.step)
+      val remainder = num.rem(diff, r.step)
+      if (!r.isInclusive && num.equiv(remainder, num.zero))
+        num.max(quotient, num.zero)
+      else
+        num.max(num.plus(quotient, num.one), num.zero)
+    }
+
+    // detects whether value can survive a bidirectional trip to -and then from- Int.
+    def fitsInInteger(value: T): Boolean = num.equiv(num.fromInt(num.toInt(value)), value)
+
+    val stepIsInTheSameDirectionAsStartToEndVector =
+      (num.gt(end, start) && num.gt(step, num.zero)) || (num.lt(end, start) && num.sign(step) == -num.one)
+
+    if (num.equiv(start, end) || n <= 0 || !stepIsInTheSameDirectionAsStartToEndVector) return n >= 1
+
+    val sameSign = num.equiv(num.sign(start), num.sign(end))
+
+    if (sameSign) { // subtraction is safe
+      val len = unsafeRangeLength(this)
+      if (fitsInInteger(len)) n >= num.toInt(len) else num.gteq(num.fromInt(n), len)
+    } else {
+      // split to two ranges, which subtraction is safe in both of them (around zero)
+      val stepsRemainderToZero = num.rem(start, step)
+      val walksOnZero = num.equiv(stepsRemainderToZero, num.zero)
+      val closestToZero = if (walksOnZero) -step else stepsRemainderToZero
+
+      /*
+      When splitting into two ranges, we should be super-careful about one of the sides hitting MinValue of T,
+      so we take two steps smaller than zero to ensure unsafeRangeLength won't overflow (taking one step may overflow depending on the step).
+      Same thing happens for MaxValue from zero, so we take one step further to ensure the safety of unsafeRangeLength.
+      After performing such operation, there are some elements remaining in between and around zero,
+      which their length is represented by carry.
+       */
+      val (l: NumericRange[T], r: NumericRange[T], carry: Int) =
+        if (num.lt(start, num.zero)) {
+          if (walksOnZero) {
+            val twoStepsAfterLargestNegativeNumber = num.plus(closestToZero, num.times(step, num.fromInt(2)))
+            (NumericRange(start, closestToZero, step), copy(twoStepsAfterLargestNegativeNumber, end, step), 2)
+          } else {
+            (NumericRange(start, closestToZero, step), copy(num.plus(closestToZero, step), end, step), 1)
+          }
+        } else {
+          if (walksOnZero) {
+            val twoStepsAfterZero = num.times(step, num.fromInt(2))
+            (copy(twoStepsAfterZero, end, step), NumericRange.inclusive(start, -step, step), 2)
+          } else {
+            val twoStepsAfterSmallestPositiveNumber = num.plus(closestToZero, num.times(step, num.fromInt(2)))
+            (copy(twoStepsAfterSmallestPositiveNumber, end, step), NumericRange.inclusive(start, closestToZero, step), 2)
+          }
+        }
+
+      val leftLength = unsafeRangeLength(l)
+      val rightLength = unsafeRangeLength(r)
+
+      // instead of `n >= rightLength + leftLength + curry` which may cause addition overflow,
+      // this can be used `(n - leftLength - curry) >= rightLength` (Both in Int and T, depends on whether the lengths fit in Int)
+      if (fitsInInteger(leftLength) && fitsInInteger(rightLength))
+        n - num.toInt(leftLength) - carry >= num.toInt(rightLength)
+      else
+        num.gteq(num.minus(num.minus(num.fromInt(n), leftLength), num.fromInt(carry)), rightLength)
+    }
+  }
+
   // When one drops everything.  Can't ever have unchecked operations
   // like "end + 1" or "end - 1" because ranges involving Int.{ MinValue, MaxValue }
   // will overflow.  This creates an exclusive range where start == end
@@ -135,21 +208,27 @@ sealed class NumericRange[T](
   private def newEmptyRange(value: T) = NumericRange(value, value, step)
 
   override def take(n: Int): NumericRange[T] = {
-    if (n <= 0 || length == 0) newEmptyRange(start)
-    else if (n >= length) this
+    if (n <= 0 || isEmpty) newEmptyRange(start)
+    else if (crossesTheEndAfterN(n)) this
     else new NumericRange.Inclusive(start, locationAfterN(n - 1), step)
   }
 
   override def drop(n: Int): NumericRange[T] = {
-    if (n <= 0 || length == 0) this
-    else if (n >= length) newEmptyRange(end)
+    if (n <= 0 || isEmpty) this
+    else if (crossesTheEndAfterN(n)) newEmptyRange(end)
     else copy(locationAfterN(n), end, step)
   }
 
   override def splitAt(n: Int): (NumericRange[T], NumericRange[T]) = (take(n), drop(n))
 
   override def reverse: NumericRange[T] =
-    if (isEmpty) this else new NumericRange.Inclusive(last, start, -step)
+    if (isEmpty) this
+    else {
+      val newStep = -step
+      if (num.sign(newStep) == num.sign(step)) {
+        throw new ArithmeticException("number type is unsigned, and .reverse requires a negative step")
+      } else new NumericRange.Inclusive(last, start, newStep)
+    }
 
   import NumericRange.defaultOrdering
 
@@ -231,7 +310,7 @@ sealed class NumericRange[T](
   override def equals(other: Any): Boolean = other match {
     case x: NumericRange[_] =>
       (x canEqual this) && (length == x.length) && (
-        (length == 0) ||                      // all empty sequences are equal
+        (isEmpty) ||                            // all empty sequences are equal
           (start == x.start && last == x.last)  // same length and same endpoints implies equality
         )
     case _ =>
@@ -328,10 +407,18 @@ object NumericRange {
           // Jump in three pieces:
           //   * start to -1 or 1, whichever is closer (waypointA)
           //   * one step, which will take us at least to 0 (ends at waypointB)
+          //   * (except with really small numbers)
           //   * there to the end
           val negone = num.fromInt(-1)
           val startlim  = if (posStep) negone else one
-          val startdiff = num.minus(startlim, start)
+          //Use start value if the start value is closer to zero than startlim
+          //   * e.g. .5 is closer to zero than 1 and -.5 is closer to zero than -1
+          val startdiff = {
+            if ((posStep && num.lt(startlim, start)) || (!posStep && num.gt(startlim, start)))
+              start
+            else
+              num.minus(startlim, start)
+          }
           val startq    = check(num.quot(startdiff, step))
           val waypointA = if (startq == zero) start else num.plus(start, num.times(startq, step))
           val waypointB = num.plus(waypointA, step)

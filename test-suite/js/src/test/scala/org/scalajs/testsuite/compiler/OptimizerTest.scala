@@ -19,30 +19,30 @@ import org.junit.Test
 import org.junit.Assert._
 import org.junit.Assume._
 
-import org.scalajs.testsuite.utils.Platform._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
 
 class OptimizerTest {
   import OptimizerTest._
 
   // Inlineable classes
 
-  @Test def must_update_fields_of_this_in_the_computation_of_other_fields_issue_1153(): Unit = {
+  @Test def updateFieldsOfThisInTheComputationOfOtherFields_Issue1153(): Unit = {
     val foo = new InlineClassDependentFields(5)
     assertEquals(5, foo.x)
     assertTrue(foo.b)
     assertEquals(11, foo.y)
   }
 
-  @Test def must_not_break_code_that_assigns_this_to_a_field(): Unit = {
+  @Test def assignThisToField(): Unit = {
     val foo = new InlineClassThisAlias(5)
     assertEquals(5, foo.z)
   }
 
   // Optimizer regression tests
 
-  @Test def `must_not_break_*_(-1)_for_Int_issue_1453`(): Unit = {
+  @Test def timesNegativeOneForInt_Issue1453(): Unit = {
     @noinline
-    def start0: Int = (() => 10) ()
+    def start0: Int = (() => 10)()
 
     val start = start0
     val step = -1
@@ -51,19 +51,19 @@ class OptimizerTest {
     assertEquals(2, lastElement)
   }
 
-  @Test def `must_not_break_*_(-1)_for_Float_and_Double_issue_1478`(): Unit = {
+  @Test def timesNegativeOneForFloatAndDouble_Issue1478(): Unit = {
     @noinline
-    def a: Float = (() => 5.0f) ()
+    def a: Float = (() => 5.0f)()
     assertEquals(-5.0f, a * -1.0f, 0.0)
 
     @noinline
-    def b: Double = (() => 7.0) ()
+    def b: Double = (() => 7.0)()
     assertEquals(-7.0, b * -1.0, 0.0)
   }
 
-  @Test def must_not_break_foreach_on_downward_Range_issue_1453(): Unit = {
+  @Test def foreachOnDownwardRange_Issue1453(): Unit = {
     @noinline
-    def start0: Int = (() => 10) ()
+    def start0: Int = (() => 10)()
 
     val elements = js.Array[Int]()
     for (i <- start0 to 2 by -1) {
@@ -74,7 +74,7 @@ class OptimizerTest {
     assertArrayEquals(Array(10, 9, 8, 7, 6, 5, 4, 3, 2), elements.toArray)
   }
 
-  @Test def must_not_break_classOf_T_eqeq_classOf_U_issue_1658(): Unit = {
+  @Test def classOfTEqEqClassOfU_Issue1658(): Unit = {
     assertEquals(classOf[String], classOf[String])
     assertEquals(classOf[Int], classOf[Int])
     assertEquals(classOf[Array[Int]], classOf[Array[Int]])
@@ -88,12 +88,12 @@ class OptimizerTest {
     assertFalse(classOf[Array[Array[Object]]] == classOf[Array[Object]])
   }
 
-  @Test def side_effect_discard_in_eliminated_binding_issue_2467(): Unit = {
+  @Test def sideEffectDiscardInEliminatedBinding_Issue2467(): Unit = {
     val b = Array.newBuilder[AnyRef]
     def mockPrintln(x: Any): Unit =
       b += ("" + x)
 
-    def get[T](x: T) = { mockPrintln("get: "+ x); x }
+    def get[T](x: T) = { mockPrintln("get: " + x); x }
 
     def bn2(a: Int, b: => Int)(c: Int = b) = a + b
     mockPrintln(bn2(b = get(2), a = get(1))()) // should get: 1, 2, 2
@@ -102,7 +102,7 @@ class OptimizerTest {
         b.result())
   }
 
-  @Test def must_not_break_bitset_oreq_issue_2523(): Unit = {
+  @Test def testBitsetOrEq_Issue2523(): Unit = {
     import scala.collection.mutable.BitSet
 
     val b0 = BitSet(5, 6)
@@ -123,7 +123,7 @@ class OptimizerTest {
     assertEquals("BitSet(5, 6, 7)", b0.toString)
   }
 
-  @Test def must_not_eliminate_break_to_label_within_finally_block_issue2689(): Unit = {
+  @Test def keepBreakToLabelWithinFinallyBlock_Issue2689(): Unit = {
     // scalastyle:off return
     val logs = js.Array[String]()
 
@@ -156,9 +156,43 @@ class OptimizerTest {
     // scalastyle:on return
   }
 
+  @Test def preserveSideEffectsInWrapAsThrowable(): Unit = {
+    var i: Int = 1
+    val x =
+      if (i > 0) js.special.wrapAsThrowable { i += 1; i } else 42
+
+    x match {
+      case js.JavaScriptException(y) =>
+        assertEquals(2, y)
+    }
+    assertEquals(2, i)
+  }
+
+  @Test def preserveSideEffectsInUnwrapFromThrowable(): Unit = {
+    var i: Int = 1
+    val x =
+      if (i > 0) js.special.unwrapFromThrowable { i += 1; new js.JavaScriptException(i) } else 42
+    assertEquals(2, x)
+    assertEquals(2, i)
+  }
+
+  @Test def preserveSideEffectsInUnwrapFromThrowableInThrow(): Unit = {
+    var i: Int = 1
+    try {
+      if (i > 0)
+        throw ({ i += 1; new js.JavaScriptException(i) })
+      i = -1 // unreachable
+    } catch {
+      case js.JavaScriptException(x) =>
+        assertEquals(2, x)
+        assertEquals(2, i)
+    }
+    assertEquals(2, i)
+  }
+
   // === constant folding
 
-  @Test def constant_folding_===(): Unit = {
+  @Test def constantFoldingEqEqEq(): Unit = {
     @inline def test(expectEq: Boolean, lhs: Any, rhs: Any): Unit = {
       assertEquals(expectEq,
           lhs.asInstanceOf[AnyRef] eq rhs.asInstanceOf[AnyRef])
@@ -194,7 +228,7 @@ class OptimizerTest {
     test(usingBigIntForLongs, 5L, 5L)
   }
 
-  @Test def constant_folding_==(): Unit = {
+  @Test def constantFoldingEqEq(): Unit = {
     @inline def testChar(expectEq: Boolean, lhs: Char, rhs: Char): Unit = {
       assertEquals(expectEq, lhs == rhs)
       assertEquals(!expectEq, lhs != rhs)
@@ -230,73 +264,70 @@ class OptimizerTest {
 
   // +[string] constant folding
 
-  @Test def must_not_break_when_folding_two_constant_strings(): Unit = {
+  @Test def foldingTwoConstantStrings(): Unit = {
     @inline def str: String = "I am "
     assertEquals("I am constant", str + "constant")
   }
 
-  @Test def must_not_break_when_folding_the_empty_string_when_associated_with_a_string(): Unit = {
+  @Test def foldingTheEmptyStringWithString(): Unit = {
     @noinline def str: String = "hello"
     assertEquals("hello", str + "")
     assertEquals("hello", "" + str)
   }
 
-  @Test def `must_not_break_when_folding_1.4f_and_a_stringLit`(): Unit = {
+  @Test def folding1Point4fAndString(): Unit = {
     assertEquals("1.399999976158142hello", 1.4f + "hello")
     assertEquals("hello1.399999976158142", "hello" + 1.4f)
   }
 
-  @Test def must_not_break_when_folding_cascading_+[string](): Unit = {
+  @Test def foldingCascadingPlusString(): Unit = {
     @noinline def str: String = "awesome! 10/10"
     assertEquals("Scala.js is awesome! 10/10", "Scala.js" + (" is " + str))
     assertEquals("awesome! 10/10 is Scala.js", (str + " is ") + "Scala.js")
   }
 
-  @Test def must_not_break_when_folding_a_chain_of_+[string](): Unit = {
+  @Test def foldingChainOfPlusString(): Unit = {
     @inline def b: String = "b"
     @inline def d: String = "d"
     @inline def f: String = "f"
     assertEquals("abcdefg", "a" + b + "c" + d + "e" + f + "g")
   }
 
-  @Test def must_not_break_when_folding_integer_in_double_and_stringLit(): Unit = {
+  @Test def foldingDouble1Point0AndString(): Unit = {
     assertEquals("1hello", 1.0 + "hello")
     assertEquals("hello1", "hello" + 1.0)
   }
 
-  @Test def must_not_break_when_folding_zero_and_stringLit(): Unit = {
+  @Test def foldingZeroAndString(): Unit = {
     assertEquals("0hello", 0.0 + "hello")
     assertEquals("hello0", "hello" + 0.0)
     assertEquals("0hello", -0.0 + "hello")
     assertEquals("hello0", "hello" + (-0.0))
   }
 
-  @Test def must_not_break_when_folding_Infinities_and_stringLit(): Unit = {
+  @Test def foldingInfinitiesAndString(): Unit = {
     assertEquals("Infinityhello", Double.PositiveInfinity + "hello")
     assertEquals("helloInfinity", "hello" + Double.PositiveInfinity)
     assertEquals("-Infinityhello", Double.NegativeInfinity + "hello")
     assertEquals("hello-Infinity", "hello" + Double.NegativeInfinity)
   }
 
-  @Test def must_not_break_when_folding_NaN_and_stringLit(): Unit = {
+  @Test def foldingNaNAndString(): Unit = {
     assertEquals("NaNhello", Double.NaN + "hello")
     assertEquals("helloNaN", "hello" + Double.NaN)
   }
 
-  @Test def must_not_break_when_folding_double_with_decimal_and_stringLit(): Unit = {
-    assumeFalse("Assumed not executing in FullOpt", isInFullOpt)
-    assertEquals("1.2323919403474454e+21hello", 1.2323919403474454E21 + "hello")
-    assertEquals("hello1.2323919403474454e+21", "hello" + 1.2323919403474454E21)
+  @Test def foldingDoubleWithDecimalAndString(): Unit = {
+    assertEquals("1.2323919403474454e+21hello", 1.2323919403474454e21 + "hello")
+    assertEquals("hello1.2323919403474454e+21", "hello" + 1.2323919403474454e21)
   }
 
-  @Test def must_not_break_when_folding_double_that_JVM_would_print_in_scientific_notation_and_stringLit(): Unit = {
-    assumeFalse("Assumed not executing in FullOpt", isInFullOpt)
+  @Test def foldingDoubleThatJVMWouldPrintInScientificNotationAndString(): Unit = {
     assertEquals("123456789012345hello", 123456789012345d + "hello")
     assertEquals("hello123456789012345", "hello" + 123456789012345d)
   }
 
-  @Test def must_not_break_when_folding_doubles_to_String(): Unit = {
-    assumeFalse("Assumed not executing in FullOpt", isInFullOpt)
+  @Test def foldingDoublesToString(): Unit = {
     @noinline def toStringNoInline(v: Double): String = v.toString
     @inline def test(v: Double): Unit =
       assertEquals(toStringNoInline(v), v.toString)
@@ -396,7 +427,7 @@ class OptimizerTest {
 
     // special cases when ulp > 1
     test(18271179521433728.0)
-    test(1.15292150460684685E18)
+    test(1.15292150460684685e18)
     test(1234567890123456770.0)
     test(2234567890123456770.0)
     test(4234567890123450000.0)
@@ -405,38 +436,63 @@ class OptimizerTest {
     test(607681513323520000000.0)
   }
 
-  @Test def must_not_break_when_folding_long_and_stringLit(): Unit = {
+  @Test def foldingLongAndString(): Unit = {
     assertEquals("1hello", 1L + "hello")
     assertEquals("hello1", "hello" + 1L)
   }
 
-  @Test def must_not_break_when_folding_integer_and_stringLit(): Unit = {
+  @Test def foldingIntegerAndString(): Unit = {
     assertEquals("42hello", 42 + "hello")
     assertEquals("hello42", "hello" + 42)
   }
 
-  @Test def must_not_break_when_folding_boolean_and_stringLit(): Unit = {
-    assertEquals("false is not true", false + " is not true")
+  @Test def foldingBooleanAndString(): Unit =
     assertEquals("false is not true", "false is not " + true)
-  }
 
-  @Test def must_not_break_when_folding_unit_and_stringLit(): Unit = {
-    assertEquals("undefined is undefined?", () + " is undefined?")
-    assertEquals("undefined is undefined", "undefined is " +())
-  }
+  @Test def foldingUnitAndString(): Unit =
+    assertEquals("undefined is undefined", "undefined is " + ())
 
-  @Test def must_not_break_when_folding_null_and_stringLit(): Unit = {
+  @Test def foldingNullAndString(): Unit =
     assertEquals("Damien is not null", "Damien is not " + null)
-  }
 
-  @Test def must_not_break_when_folding_char_and_stringLit(): Unit = {
+  @Test def foldingCharAndString(): Unit = {
     assertEquals("Scala.js", 'S' + "cala.js")
     assertEquals("Scala.js", "Scala.j" + 's')
   }
 
+  // Division by zero
+
+  @Test def divideByZero_Issue4604(): Unit = {
+    // Ints
+
+    @noinline def intDivByZeroInExpressionPosition(): Int =
+      0 / 0
+
+    @noinline def intDivByZeroInStatementPosition(): Unit = {
+      0 / 0
+      fail("should be unreachable")
+    }
+
+    assertThrows(classOf[ArithmeticException], intDivByZeroInExpressionPosition())
+    assertThrows(classOf[ArithmeticException], intDivByZeroInStatementPosition())
+
+    // Longs
+
+    @noinline def longDivByZeroInExpressionPosition(): Long =
+      0L / 0L
+
+    @noinline def longDivByZeroInStatementPosition(): Unit = {
+      0L / 0L
+      fail("should be unreachable")
+    }
+
+    assertThrows(classOf[ArithmeticException], longDivByZeroInExpressionPosition())
+    assertThrows(classOf[ArithmeticException], longDivByZeroInStatementPosition())
+  }
+
   // Virtualization of JSArrayConstr
 
-  @Test def must_not_break_virtualized_jsarrayconstr(): Unit = {
+  @Test def virtualizedJSArrayConstr(): Unit = {
     @noinline def b = 42
 
     val a = js.Array[Any]("hello", b)
@@ -448,7 +504,7 @@ class OptimizerTest {
     assertEquals(js.undefined, a(2))
   }
 
-  @Test def must_not_break_escaped_jsarrayconstr(): Unit = {
+  @Test def escapedJSArrayConstr(): Unit = {
     @noinline def escape[A](a: A): A = a
 
     val a = js.Array[Any]("hello", 42)
@@ -462,7 +518,7 @@ class OptimizerTest {
     assertEquals(2, escape(a).length)
   }
 
-  @Test def must_not_break_modified_jsarrayconstr(): Unit = {
+  @Test def modifiedJSArrayConstr(): Unit = {
     @noinline def escape[A](a: A): A = a
 
     val a = js.Array[Any]("hello", 42)
@@ -478,7 +534,7 @@ class OptimizerTest {
     assertEquals("bar", a(0))
   }
 
-  @Test def must_not_break_virtualized_jsarrayconstr_in_spread(): Unit = {
+  @Test def virtualizedJSArrayConstrInSpread(): Unit = {
     class Foo extends js.Object {
       def check(a: Int, b: String, rest: Any*): Unit = {
         assertEquals(5, a)
@@ -494,7 +550,7 @@ class OptimizerTest {
     foo.check(5, "foobar", a.toIndexedSeq: _*)
   }
 
-  @Test def must_not_break_virtualized_tuple(): Unit = {
+  @Test def virtualizedTuple(): Unit = {
     @noinline def b = 42
 
     val a = js.Tuple2("hello", b)
@@ -503,7 +559,7 @@ class OptimizerTest {
     assertEquals(42, a._2)
   }
 
-  @Test def must_not_break_escaped_tuple(): Unit = {
+  @Test def escapedTuple(): Unit = {
     @noinline def escape[A](a: A): A = a
 
     val a = js.Tuple2("hello", 42)
@@ -516,7 +572,7 @@ class OptimizerTest {
 
   // Bug #3415
 
-  @Test def infinite_recursion_inlining_issue3415_original(): Unit = {
+  @Test def infiniteRecursionInlining_Issue3415(): Unit = {
     assumeTrue("linking only", false)
     doWhile1("foo")(f => f(true))
   }
@@ -531,7 +587,7 @@ class OptimizerTest {
     }
   }
 
-  @Test def infinite_recursion_inlining_issue3415_minimized(): Unit = {
+  @Test def infiniteRecursionInliningPlaceholder_Issue3415(): Unit = {
     assumeTrue("linking only", false)
     doWhile(???)
   }
@@ -543,6 +599,140 @@ class OptimizerTest {
     }
   }
 
+  @Test def keepQualifierSideEffectsOfEliminatedField(): Unit = {
+    @noinline
+    class Foo(var x: Int)
+
+    val foo = new Foo(2)
+
+    var called = false
+
+    @noinline
+    def getFoo() = {
+      called = true
+      foo
+    }
+
+    getFoo().x = 1
+
+    assertTrue(called)
+  }
+
+  @Test def keepQualifierSideEffectsOfEliminatedFieldInline(): Unit = {
+    @inline
+    class Foo(var x: Int)
+
+    val foo = new Foo(2)
+
+    var called = false
+
+    @inline
+    def getFoo() = {
+      called = true
+      foo
+    }
+
+    getFoo().x = 1
+
+    assertTrue(called)
+  }
+
+  @Test def keepQualifierSideEffectsOfKeptFieldOfInlineClass_Issue5383(): Unit = {
+    @inline
+    class Foo(var x: Int)
+
+    val foo = new Foo(2)
+
+    var called = false
+
+    @inline
+    def getFoo(): Foo = {
+      called = true
+      foo
+    }
+
+    getFoo().x = 1
+
+    assertTrue(called)
+    assertEquals(1, foo.x) // keep x
+  }
+
+  @Test def keepQualifierSideEffectsOfKeptFieldOfNoinlineClass(): Unit = {
+    @noinline
+    class Foo(var x: Int)
+
+    val foo = new Foo(2)
+
+    var called = false
+
+    @inline // the method is inline regardless, to create a selection from a block
+    def getFoo(): Foo = {
+      called = true
+      foo
+    }
+
+    getFoo().x = 1
+
+    assertTrue(called)
+    assertEquals(1, foo.x) // keep x
+  }
+
+  @Test def keepQualifierSideEffectsOfEliminatedJSField(): Unit = {
+    class Foo extends js.Object {
+      private[this] var x: Int = 1
+
+      @inline
+      final private[OptimizerTest] def set() =
+        x = 2
+    }
+
+    val foo = new Foo
+    var called = false
+
+    def getFoo() = {
+      called = true
+      foo
+    }
+
+    getFoo().set()
+
+    assertTrue(called)
+  }
+
+  @Test def expandedRTAssertionOriginal_Issue5231(): Unit = {
+    def expandedRTLongBug: (Array[Int], Long) => Long = { (array, z) =>
+      array.foldRight(z)(_ - _)
+    }
+
+    assertEquals(-3L, expandedRTLongBug(Array(1, 2, 3), 5L))
+  }
+
+  @Test def expandedRTAssertionMinimal_Issue5231(): Unit = {
+    @noinline def hideLong(x: Long): Long = x
+    @noinline def hide(x: Any): Any = x
+
+    val z0: Long = hideLong(5L)
+    var i = 0
+    var z: Any = z0
+    while (i < 2) {
+      z = hide(i.toLong)
+      i += 1
+    }
+    assertEquals(1L, z)
+  }
+
+  @noinline // just to be sure
+  @Test def inlineClassLabeledReturnDiscardStatementPos_Issue5246(): Unit = {
+    @inline def makeBug(x: Int): Bug5246 = {
+      // Use an explicit `return` to cause a Labeled block and its Return node
+      return new Bug5246(x) // scalastyle:ignore
+    }
+
+    // Assign to val to cause a pretransform
+    val bug = makeBug(5)
+    // but then discard it and leave it in statement position
+    val _ = bug
+  }
 }
 
 object OptimizerTest {
@@ -550,7 +740,7 @@ object OptimizerTest {
   @inline
   class InlineClassDependentFields(val x: Int) {
     val b = x > 3
-    val y = if (b) x + 6 else x-2
+    val y = if (b) x + 6 else x - 2
   }
 
   @inline
@@ -559,5 +749,8 @@ object OptimizerTest {
     val y = x
     val z = t.y
   }
+
+  @inline
+  final class Bug5246(val x: Int)
 
 }

@@ -17,8 +17,8 @@ import java.net.{URI, URISyntaxException}
 import org.junit.Assert._
 import org.junit.Test
 
-import org.scalajs.testsuite.utils.AssertThrows._
-import org.scalajs.testsuite.utils.Platform.executingInJVM
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.Platform._
 
 class URITest {
 
@@ -50,7 +50,7 @@ class URITest {
     assertEquals(isOpaque, uri.isOpaque())
   }
 
-  @Test def should_parse_vanilla_absolute_URIs(): Unit = {
+  @Test def absoluteURIs(): Unit = {
     expectURI(new URI("http://java.sun.com/j2se/1.3/"), true, false)(
         scheme = "http",
         host = "java.sun.com",
@@ -59,7 +59,7 @@ class URITest {
         schemeSpecificPart = "//java.sun.com/j2se/1.3/")()
   }
 
-  @Test def should_parse_absolute_URIs_with_empty_path(): Unit = {
+  @Test def absoluteURIsEmptyPath(): Unit = {
     expectURI(new URI("http://foo:bar"), true, false)(
         authority = "foo:bar",
         path = "",
@@ -67,7 +67,7 @@ class URITest {
         schemeSpecificPart = "//foo:bar")()
   }
 
-  @Test def should_parse_absolute_URIs_with_IPv6(): Unit = {
+  @Test def absoluteURIsIPv6(): Unit = {
     val uri = new URI("http://hans@[ffff::0:128.4.5.3]:345/~hans/")
     expectURI(uri, true, false)(
         scheme = "http",
@@ -79,21 +79,21 @@ class URITest {
         schemeSpecificPart = "//hans@[ffff::0:128.4.5.3]:345/~hans/")()
   }
 
-  @Test def should_parse_absolute_URIs_without_authority(): Unit = {
+  @Test def absolutURIsNoAuthority(): Unit = {
     expectURI(new URI("file:/~/calendar"), true, false)(
         scheme = "file",
         path = "/~/calendar",
         schemeSpecificPart = "/~/calendar")()
   }
 
-  @Test def should_parse_absolute_URIs_with_empty_authority(): Unit = {
+  @Test def absoluteURIsEmptyAuthority(): Unit = {
     expectURI(new URI("file:///~/calendar"), true, false)(
         scheme = "file",
         path = "/~/calendar",
         schemeSpecificPart = "///~/calendar")()
   }
 
-  @Test def should_parse_opaque_URIs(): Unit = {
+  @Test def opaqueURIs(): Unit = {
     expectURI(new URI("mailto:java-net@java.sun.com"), true, true)(
         scheme = "mailto",
         schemeSpecificPart = "java-net@java.sun.com")()
@@ -107,7 +107,7 @@ class URITest {
         schemeSpecificPart = "isbn:096139210x")()
   }
 
-  @Test def should_parse_relative_URIs(): Unit = {
+  @Test def relativeURIs(): Unit = {
     expectURI(new URI("docs/guide/collections/designfaq.html#28"), false, false)(
         path = "docs/guide/collections/designfaq.html",
         fragment = "28",
@@ -117,7 +117,7 @@ class URITest {
         schemeSpecificPart = "../../../demo/jfc/SwingSet2/src/SwingSet2.java")()
   }
 
-  @Test def should_parse_relative_URIs_with_IPv4(): Unit = {
+  @Test def relativeURIsIPv4(): Unit = {
     expectURI(new URI("//123.5.6.3:45/bar"), false, false)(
         authority = "123.5.6.3:45",
         host = "123.5.6.3",
@@ -126,14 +126,14 @@ class URITest {
         schemeSpecificPart = "//123.5.6.3:45/bar")()
   }
 
-  @Test def should_parse_relative_URIs_with_registry_based_authority(): Unit = {
+  @Test def relativeURIsRegistryBasedAuthority(): Unit = {
     expectURI(new URI("//foo:bar"), false, false)(
         authority = "foo:bar",
         path = "",
         schemeSpecificPart = "//foo:bar")()
   }
 
-  @Test def should_parse_relative_URIs_with_escapes(): Unit = {
+  @Test def relativeURIsWithEscapes(): Unit = {
     expectURI(new URI("//ma%5dx:secret@example.com:8000/foo"), false, false)(
         authority = "ma]x:secret@example.com:8000",
         userInfo = "ma]x:secret",
@@ -146,14 +146,14 @@ class URITest {
         rawSchemeSpecificPart = "//ma%5dx:secret@example.com:8000/foo")
   }
 
-  @Test def should_parse_relative_URIs_with_fragment_only(): Unit = {
+  @Test def relativeURIsFragmentOnly(): Unit = {
     expectURI(new URI("#foo"), false, false)(
         fragment = "foo",
         path = "",
         schemeSpecificPart = "")()
   }
 
-  @Test def should_parse_relative_URIs_with_query_and_fragment(): Unit = {
+  @Test def relativeURIsQueryAndFragment(): Unit = {
     expectURI(new URI("?query=1#foo"), false, false)(
         query = "query=1",
         fragment = "foo",
@@ -161,13 +161,16 @@ class URITest {
         schemeSpecificPart = "?query=1")()
   }
 
-  @Test def should_provide_compareTo(): Unit = {
+  @Test def compareTo(): Unit = {
     val x = new URI("http://example.com/asdf%6a")
     val y = new URI("http://example.com/asdf%6A")
     val z = new URI("http://example.com/asdfj")
     val rel = new URI("/foo/bar")
+    val rel2 = new URI("/foo/aaa")
+    val rel3 = new URI("/foo/ccc")
 
-    assertTrue(x.compareTo(y) > 0)
+    assertTrue(x.compareTo(y) == 0)
+
     assertTrue(x.compareTo(z) < 0)
     assertTrue(y.compareTo(z) < 0)
     assertEquals(0, x.compareTo(x))
@@ -177,9 +180,11 @@ class URITest {
     assertTrue(y.compareTo(rel) > 0)
     assertTrue(z.compareTo(rel) > 0)
     assertEquals(0, rel.compareTo(rel))
+    assertTrue(rel.compareTo(rel2) > 0)
+    assertTrue(rel.compareTo(rel3) < 0)
   }
 
-  @Test def should_provide_equals(): Unit = {
+  @Test def testEquals(): Unit = {
     val x = new URI("http://example.com/asdf%6a")
     val y = new URI("http://example.com/asdf%6A")
     val z = new URI("http://example.com/asdfj")
@@ -190,11 +195,36 @@ class URITest {
     assertTrue(x == x)
     assertTrue(y == y)
     assertTrue(z == z)
-
-    assertNotEquals(new URI("foo:helloWorld%6b%6C"), new URI("foo:helloWorld%6C%6b"))
   }
 
-  @Test def should_provide_normalize(): Unit = {
+  @Test def equalsHashCodeSame(): Unit = {
+    val equalsPairs: Seq[(URI, URI)] = Seq(
+      (new URI("http://example.com"), new URI("http://Example.CoM")),
+      (new URI("http://Example.Com@example.com"), new URI("http://Example.Com@Example.Com")),
+      (new URI("http://example.com/foo"), new URI("http://ExaMple.CoM/foo")),
+      (new URI("http://example.com/asdf%6a"), new URI("http://example.com/asdf%6A")),
+      (new URI("MAILTO:john"), new URI("mailto:john"))
+    )
+    equalsPairs.foreach { case (a, b) =>
+      assertEquals(a, b)
+      assertEquals(b, a)
+      assertEquals(a.hashCode(), b.hashCode())
+    }
+
+    val nonEqualPairs: Seq[(URI, URI)] = Seq(
+      (new URI("http://example.com/example-com"), new URI("http://Example.CoM/eXAMplE-cOm")),
+      (new URI("http://example.com@example.com"), new URI("http://EXAMPLE.COM@EXAMPLE.Com")),
+      (new URI("foo:helloWorld%6b%6C"), new URI("foo:helloWorld%6C%6b"))
+    )
+    nonEqualPairs.foreach { case (a, b) =>
+      assertNotEquals(a, b)
+      // Note: hashCode is not restricted to produce same result even if a.equals(b) is false.
+      assertNotEquals("a does not equal to b, but produces same hashCode. Pick different test data",
+          a.hashCode(), b.hashCode())
+    }
+  }
+
+  @Test def normalize(): Unit = {
     expectURI(new URI("http://example.com/../asef/../../").normalize, true, false)(
         scheme = "http",
         host = "example.com",
@@ -221,7 +251,7 @@ class URITest {
     assertTrue(x.normalize eq x)
   }
 
-  @Test def should_provide_resolve__JavaDoc_examples(): Unit = {
+  @Test def resolveJavaDocExamples(): Unit = {
     val base = "http://java.sun.com/j2se/1.3/"
     val relative1 = "docs/guide/collections/designfaq.html#28"
     val resolved1 =
@@ -236,7 +266,7 @@ class URITest {
     assertEquals("/a/", new URI("/a/").resolve("").toString)
   }
 
-  @Test def should_provide_resolve_RFC2396_examples(): Unit = {
+  @Test def resolveRFC2396Examples(): Unit = {
     val base = new URI("http://a/b/c/d;p?q")
     def resTest(ref: String, trg: String): Unit =
       assertEquals(trg, base.resolve(ref).toString)
@@ -287,7 +317,7 @@ class URITest {
     resTest("http:g", "http:g")
   }
 
-  @Test def should_provide_resolve_when_authority_is_empty__issue_2048(): Unit = {
+  @Test def resolveAuthorityEmpty_Issue2048(): Unit = {
     val base = new URI("http://foo/a")
     def resTest(ref: String, trg: String): Unit =
       assertEquals(trg, base.resolve(ref).toString)
@@ -297,7 +327,7 @@ class URITest {
     resTest("/b/../d", "http://foo/b/../d")
   }
 
-  @Test def should_provide_normalize__examples_derived_from_RFC_relativize(): Unit = {
+  @Test def normalizeExamplesDerivedFromRfcRelativize(): Unit = {
     expectURI(new URI("http://a/b/c/..").normalize, true, false)(
         scheme = "http",
         host = "a",
@@ -313,7 +343,7 @@ class URITest {
         schemeSpecificPart = "//a/b/c/")()
   }
 
-  @Test def should_provide_relativize(): Unit = {
+  @Test def relativize(): Unit = {
     val x = new URI("http://f%4Aoo@asdf/a")
     val y = new URI("http://fJoo@asdf/a/b/")
     val z = new URI("http://f%4aoo@asdf/a/b/")
@@ -336,14 +366,16 @@ class URITest {
     relTest("file:/c", "file:///c/d/", "d/")
   }
 
-  @Test def should_provide_hashCode(): Unit = {
-    if (!executingInJVM) { // Fails on JDK6 and JDK7
-      assertEquals(new URI("http://example.com/asdf%6a").hashCode,
-          new URI("http://example.com/asdf%6A").hashCode)
-    }
+  @Test def testHashCode(): Unit = {
+    assertEquals(new URI("http://example.com/asdf%6a").hashCode,
+        new URI("http://example.com/asdf%6A").hashCode)
+    assertEquals(new URI("http://example.com").hashCode(),
+        new URI("http://Example.CoM").hashCode())
+    assertNotEquals(new URI("http://example.com/example-com").hashCode(),
+        new URI("http://Example.CoM/eXAMplE-cOm").hashCode())
   }
 
-  @Test def should_allow_non_ASCII_characters(): Unit = {
+  @Test def allowNonASCIICharacters(): Unit = {
     expectURI(new URI("http://cs.dbpedia.org/resource/Víno"), true, false)(
         scheme = "http",
         host = "cs.dbpedia.org",
@@ -352,7 +384,7 @@ class URITest {
         schemeSpecificPart = "//cs.dbpedia.org/resource/Víno")()
   }
 
-  @Test def should_decode_UTF_8(): Unit = {
+  @Test def decodeUTF8(): Unit = {
     expectURI(new URI("http://cs.dbpedia.org/resource/V%C3%ADno"), true, false)(
         scheme = "http",
         host = "cs.dbpedia.org",
@@ -369,7 +401,7 @@ class URITest {
         rawSchemeSpecificPart = "%e3%81%93a%e3%82%93%e3%81%AB%e3%81%a1%e3%81%af")
   }
 
-  @Test def should_support_toASCIIString(): Unit = {
+  @Test def toASCIIString(): Unit = {
     def cmp(base: String, encoded: String): Unit =
       assertEquals(encoded, new URI(base).toASCIIString())
 
@@ -381,7 +413,7 @@ class URITest {
         "foo://bar/%F0%90%83%B5/")
   }
 
-  @Test def should_replace_when_bad_surrogates_are_present(): Unit = {
+  @Test def replaceBadSurrogates(): Unit = {
     expectURI(new URI("http://booh/%E3a"), true, false)(
         scheme = "http",
         host = "booh",
@@ -411,21 +443,33 @@ class URITest {
         rawPath = "/%E3%81a",
         rawSchemeSpecificPart = "//booh/%E3%81a")
 
-    if (!executingInJVM) { // Fails on JDK6 and JDK7
-      // %E3%E3 is considered as 2 malformed
-      expectURI(new URI("http://booh/%E3%E3a"), true, false)(
-          scheme = "http",
-          host = "booh",
-          path = "/��a",
-          authority = "booh",
-          schemeSpecificPart = "//booh/��a")(
-          rawPath = "/%E3%E3a",
-          rawSchemeSpecificPart = "//booh/%E3%E3a")
-    }
+    // %E3%E3 is considered as 2 malformed
+    expectURI(new URI("http://booh/%E3%E3a"), true, false)(
+        scheme = "http",
+        host = "booh",
+        path = "/��a",
+        authority = "booh",
+        schemeSpecificPart = "//booh/��a")(
+        rawPath = "/%E3%E3a",
+        rawSchemeSpecificPart = "//booh/%E3%E3a")
   }
 
-  @Test def should_throw_on_bad_escape_sequences(): Unit = {
-    expectThrows(classOf[URISyntaxException], new URI("http://booh/%E"))
-    expectThrows(classOf[URISyntaxException], new URI("http://booh/%Ep"))
+  @Test def badEscapeSequenceThrows(): Unit = {
+    assertThrows(classOf[URISyntaxException], new URI("http://booh/%E"))
+    assertThrows(classOf[URISyntaxException], new URI("http://booh/%Ep"))
+  }
+
+  @Test def validIPv4(): Unit =
+    assertEquals(new URI("http", "000.001.01.0", "", "").getHost, "000.001.01.0")
+
+  @Test def invalidIPv4Throws(): Unit = {
+    assertThrows(classOf[URISyntaxException], new URI("http", "256.1.1.1", "", ""))
+    assertThrows(classOf[URISyntaxException], new URI("http", "123.45.67.890", "", ""))
+  }
+
+  @Test def opaqueUrlEqualityHandlesCase(): Unit = {
+    assertTrue("scheme case-insensitive", new URI("MAILTO:john") == new URI("mailto:john"))
+    assertTrue("SSP case-sensitive", new URI("mailto:john") != new URI("mailto:JOHN"))
+    assertTrue(new URI("mailto:john") != new URI("MAILTO:jim"))
   }
 }

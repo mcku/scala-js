@@ -18,8 +18,9 @@ import scala.scalajs.js
 
 final class LoadableModuleClass private[reflect] (
     val runtimeClass: Class[_],
-    loadModuleFun: js.Function0[Any]
+    loadModuleFun: () => Any
 ) {
+
   /** Loads the module instance and returns it. */
   def loadModule(): Any = loadModuleFun()
 }
@@ -28,6 +29,7 @@ final class InstantiatableClass private[reflect] (
     val runtimeClass: Class[_],
     val declaredConstructors: List[InvokableConstructor]
 ) {
+
   /** Instantiates a new instance of this class using the zero-argument
    *  constructor.
    *
@@ -53,38 +55,76 @@ final class InstantiatableClass private[reflect] (
     declaredConstructors.find(_.parameterTypes.sameElements(parameterTypes))
 }
 
-final class InvokableConstructor private[reflect]  (
+final class InvokableConstructor private[reflect] (
     val parameterTypes: List[Class[_]],
-    newInstanceFun: js.Function
+    newInstanceFun: Array[Any] => Any
 ) {
   def newInstance(args: Any*): Any = {
     /* Check the number of actual arguments. We let the casts and unbox
      * operations inside `newInstanceFun` take care of the rest.
      */
     require(args.size == parameterTypes.size)
-    newInstanceFun.asInstanceOf[js.Dynamic].apply(
-        args.asInstanceOf[Seq[js.Any]]: _*)
+    newInstanceFun(args.toArray)
   }
 }
 
 object Reflect {
   private val loadableModuleClasses =
-    js.Dictionary.empty[LoadableModuleClass]
+    mutable.HashMap.empty[String, LoadableModuleClass]
 
   private val instantiatableClasses =
-    js.Dictionary.empty[InstantiatableClass]
+    mutable.HashMap.empty[String, InstantiatableClass]
 
-  // `protected[reflect]` makes it public in the IR
+  @deprecated("used only by deprecated code", since = "1.20.0")
+  @js.native
+  private trait JSFunctionVarArgs extends js.Function {
+    def apply(args: Any*): Any
+  }
+
+  /* `protected[reflect]` makes these methods public in the IR.
+   *
+   * These methods are part of the "public ABI" used by the compiler codegen.
+   * We must preserve backward binary compatibility for them, like for public
+   * methods.
+   */
+
+  @deprecated("use registerLoadableModuleClassV2 instead", since = "1.20.0")
   protected[reflect] def registerLoadableModuleClass[T](
       fqcn: String, runtimeClass: Class[T],
       loadModuleFun: js.Function0[T]): Unit = {
+    registerLoadableModuleClassV2(fqcn, runtimeClass, loadModuleFun)
+  }
+
+  protected[reflect] def registerLoadableModuleClassV2[T](
+      fqcn: String, runtimeClass: Class[T],
+      loadModuleFun: () => T): Unit = {
     loadableModuleClasses(fqcn) =
       new LoadableModuleClass(runtimeClass, loadModuleFun)
   }
 
+  @deprecated("use registerInstantiatableClassV2 instead", since = "1.20.0")
   protected[reflect] def registerInstantiatableClass[T](
       fqcn: String, runtimeClass: Class[T],
       constructors: js.Array[js.Tuple2[js.Array[Class[_]], js.Function]]): Unit = {
+
+    registerInstantiatableClassV2(fqcn, runtimeClass, constructors.map { c =>
+      val paramClassesArray = c._1.toArray
+      val newInstanceJSFun = c._2.asInstanceOf[JSFunctionVarArgs]
+
+      val newInstanceFun: Array[Any] => Any = { (args: Array[Any]) =>
+        // The shenanigans in this function are required to be compatible across all Scala patch versions
+        import scala.scalajs.runtime.toRefVarArgs // this is fine because we are inside scalajs-library
+        val argsAsRefArray = args.asInstanceOf[Array[AnyRef]] // no-op because Array[Any] also erases to jl.Object[]
+        newInstanceJSFun.apply(toRefVarArgs(argsAsRefArray): _*)
+      }
+
+      (paramClassesArray, newInstanceFun)
+    }.toArray)
+  }
+
+  protected[reflect] def registerInstantiatableClassV2[T](
+      fqcn: String, runtimeClass: Class[T],
+      constructors: Array[(Array[Class[_]], Array[Any] => Any)]): Unit = {
     val invokableConstructors = constructors.map { c =>
       new InvokableConstructor(c._1.toList, c._2)
     }

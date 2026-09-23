@@ -17,8 +17,6 @@ import org.scalajs.nscplugin.test.util._
 import org.junit.Test
 import org.junit.Ignore
 
-// scalastyle:off line.size.limit
-
 class JSOptionalTest extends DirectTest with TestHelpers {
 
   override def preamble: String = {
@@ -61,6 +59,37 @@ class JSOptionalTest extends DirectTest with TestHelpers {
       |newSource1.scala:13: error: Members of non-native JS traits must either be abstract, or their right-hand-side must be `js.undefined`.
       |      var c2: Int = 5
       |                    ^
+    """
+  }
+
+  @Test // #4319
+  def optionalDefaultParamRequiresUndefinedRHS: Unit = {
+    s"""
+    trait A extends js.Object {
+      def a(x: js.UndefOr[Int] = 1): Int
+      def b(x: String = "foo"): Unit
+      def c(x: js.UndefOr[Int] = js.undefined): Int // ok
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:6: error: Members of non-native JS traits may not have default parameters unless their default is `js.undefined`.
+      |      def a(x: js.UndefOr[Int] = 1): Int
+      |                                 ^
+      |newSource1.scala:7: error: Members of non-native JS traits may not have default parameters unless their default is `js.undefined`.
+      |      def b(x: String = "foo"): Unit
+      |                        ^
+    """
+
+    // Also for custom JS function types
+    s"""
+    trait A extends js.Function {
+      def apply(x: js.UndefOr[Int] = 1): Int
+    }
+    """ hasErrors
+    """
+      |newSource1.scala:6: error: Members of non-native JS traits may not have default parameters unless their default is `js.undefined`.
+      |      def apply(x: js.UndefOr[Int] = 1): Int
+      |                                     ^
     """
   }
 

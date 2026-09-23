@@ -118,8 +118,7 @@ import scala.collection.mutable
  *  its own JS class.
  */
 abstract class ExplicitLocalJS[G <: Global with Singleton](val global: G)
-    extends plugins.PluginComponent with Transform with TypingTransformers
-    with CompatComponent {
+    extends plugins.PluginComponent with Transform with TypingTransformers with CompatComponent {
 
   val jsAddons: JSGlobalAddons {
     val global: ExplicitLocalJS.this.global.type
@@ -127,7 +126,7 @@ abstract class ExplicitLocalJS[G <: Global with Singleton](val global: G)
 
   import global._
   import jsAddons._
-  import jsInterop.jsclassAccessorFor
+  import jsInterop.{jsclassAccessorFor, JSCallingConvention}
   import definitions._
   import rootMirror._
   import jsDefinitions._
@@ -171,16 +170,19 @@ abstract class ExplicitLocalJS[G <: Global with Singleton](val global: G)
 
   /** Is the given clazz a local JS class or object? */
   private def isLocalJSClassOrObject(clazz: Symbol): Boolean = {
-    def isJSLambda =
-      clazz.isAnonymousClass && AllJSFunctionClasses.exists(clazz.isSubClass(_))
+    def isJSLambda: Boolean = {
+      // See GenJSCode.isJSFunctionDef
+      clazz.isAnonymousClass &&
+      clazz.superClass == JSFunctionClass &&
+      clazz.info.decl(nme.apply).filter(JSCallingConvention.isCall(_)).exists
+    }
 
     clazz.isLocalToBlock &&
-    !clazz.isTrait && clazz.hasAnnotation(JSTypeAnnot) &&
-    !isJSLambda
+      !clazz.isTrait && clazz.hasAnnotation(JSTypeAnnot) &&
+      !isJSLambda
   }
 
-  class ExplicitLocalJSTransformer(unit: CompilationUnit)
-      extends TypingTransformer(unit) {
+  class ExplicitLocalJSTransformer(unit: CompilationUnit) extends TypingTransformer(unit) {
 
     private val nestedObject2superClassTpe = mutable.Map.empty[Symbol, Type]
     private val localClass2jsclassVal = mutable.Map.empty[Symbol, TermSymbol]
@@ -312,16 +314,16 @@ abstract class ExplicitLocalJS[G <: Global with Singleton](val global: G)
          */
         case Apply(fun @ Select(sup: Super, _), _)
             if !fun.symbol.isConstructor &&
-                isInnerOrLocalJSClass(sup.symbol.superClass) =>
-          wrapWithContextualJSClassValue(sup.symbol.superClass.tpe_*) {
+              isInnerOrLocalJSClass(sup.symbol.superClass) =>
+          wrapWithContextualSuperJSClassValue(sup.symbol.superClass) {
             super.transform(tree)
           }
 
         // Same for a super call with type parameters
         case Apply(TypeApply(fun @ Select(sup: Super, _), _), _)
             if !fun.symbol.isConstructor &&
-                isInnerOrLocalJSClass(sup.symbol.superClass) =>
-          wrapWithContextualJSClassValue(sup.symbol.superClass.tpe_*) {
+              isInnerOrLocalJSClass(sup.symbol.superClass) =>
+          wrapWithContextualSuperJSClassValue(sup.symbol.superClass) {
             super.transform(tree)
           }
 
@@ -335,7 +337,7 @@ abstract class ExplicitLocalJS[G <: Global with Singleton](val global: G)
         // Translate x.isInstanceOf[T] for inner and local JS classes
         case Apply(TypeApply(fun @ Select(obj, _), List(tpeArg)), Nil)
             if fun.symbol == Any_isInstanceOf &&
-                isInnerOrLocalJSClass(tpeArg.tpe.typeSymbol) =>
+              isInnerOrLocalJSClass(tpeArg.tpe.typeSymbol) =>
           val newObj = transform(obj)
           val newTpeArg = transform(tpeArg)
           val jsCtorOf = genJSConstructorOf(tree, newTpeArg.tpe)
@@ -350,8 +352,7 @@ abstract class ExplicitLocalJS[G <: Global with Singleton](val global: G)
       }
     }
 
-    /** Generates the desugared version of `js.constructorOf[tpe]`.
-     */
+    /** Generates the desugared version of `js.constructorOf[tpe]`. */
     private def genJSConstructorOf(tree: Tree, tpe: Type): Tree = {
       val clazz = tpe.typeSymbol
 
@@ -387,6 +388,38 @@ abstract class ExplicitLocalJS[G <: Global with Singleton](val global: G)
             gen.mkMethodCall(Runtime_constructorOf, List(classValue))
           }
         }
+      }
+    }
+
+    /** Wraps with the contextual super JS class value for super calls. */
+    private def wrapWithContextualSuperJSClassValue(superClass: Symbol)(
+        tree: Tree): Tree = {
+      /* #4801 We need to interpret the superClass type as seen from the
+       * current class' thisType.
+       *
+       * For example, in the test NestedJSClassTest.extendInnerJSClassInClass,
+       * the original `superClass.tpe_*` is
+       *
+       *   OuterNativeClass_Issue4402.this.InnerClass
+       *
+       * because `InnerClass` is path-dependent. However, the path
+       * `OuterNativeClass.this` is only valid within `OuterNativeClass`
+       * itself. In the context of the current local class `Subclass`, this
+       * path must be replaced by the actual path `outer.`. This is precisely
+       * the role of `asSeenFrom`. We tell it to replace any `superClass.this`
+       * by `currentClass.this`, and it also transitively replaces paths for
+       * outer classes of `superClass`, matching them with the corresponding
+       * outer paths of `currentClass.thisType` if necessary. The result for
+       * that test case is
+       *
+       *   outer.InnerClass
+       */
+      val jsClassTypeInSuperClass = superClass.tpe_*
+      val jsClassTypeAsSeenFromThis =
+        jsClassTypeInSuperClass.asSeenFrom(currentClass.thisType, superClass)
+
+      wrapWithContextualJSClassValue(jsClassTypeAsSeenFromThis) {
+        tree
       }
     }
 

@@ -12,9 +12,6 @@
 
 package java.util
 
-import scala.collection._
-import scala.concurrent.duration._
-
 class Timer() {
   private[util] var canceled: Boolean = false
 
@@ -25,21 +22,21 @@ class Timer() {
   def this(name: String, isDaemon: Boolean) = this()
 
   private def acquire(task: TimerTask): Unit = {
-    if (canceled)
+    if (canceled) {
       throw new IllegalStateException("Timer already cancelled.")
-    else if (task.owner != null || task.canceled) {
+    } else if (task.owner != null || task.canceled) {
       throw new IllegalStateException("TimerTask already scheduled or canceled.")
     }
     task.owner = this
   }
 
   private def checkDelay(delay: Long): Unit = {
-    if (delay < 0 || (delay + System.currentTimeMillis) < 0)
+    if (delay < 0 || (delay + System.currentTimeMillis()) < 0)
       throw new IllegalArgumentException("Negative delay.")
   }
 
   private def checkTime(time: Date): Unit = {
-    if (time.getTime < 0)
+    if (time.getTime() < 0)
       throw new IllegalArgumentException(s"Negative time: $time.")
   }
 
@@ -50,14 +47,14 @@ class Timer() {
 
   private def scheduleOnce(task: TimerTask, delay: Long): Unit = {
     acquire(task)
-    task.timeout(delay.millis) {
+    task.timeout(delay) { () =>
       task.scheduledOnceAndStarted = true
       task.doRun()
     }
   }
 
   private def getMillisUntil(time: Date): Long =
-    math.max(0L, time.getTime - System.currentTimeMillis())
+    Math.max(0L, time.getTime() - System.currentTimeMillis())
 
   def schedule(task: TimerTask, delay: Long): Unit = {
     checkDelay(delay)
@@ -73,16 +70,18 @@ class Timer() {
   private def schedulePeriodically(
       task: TimerTask, delay: Long, period: Long): Unit = {
     acquire(task)
-    task.timeout(delay.millis) {
-      def loop(): Unit = {
-        val startTime = System.nanoTime()
-        task.doRun()
-        val endTime = System.nanoTime()
-        val duration = (endTime - startTime) / 1000000
-        task.timeout((period - duration).millis) {
-          loop()
-        }
+
+    def loop(): Unit = {
+      val startTime = System.nanoTime()
+      task.doRun()
+      val endTime = System.nanoTime()
+      val duration = (endTime - startTime) / 1000000
+      task.timeout(period - duration) { () =>
+        loop()
       }
+    }
+
+    task.timeout(delay) { () =>
       loop()
     }
   }
@@ -103,22 +102,24 @@ class Timer() {
   private def scheduleFixed(
       task: TimerTask, delay: Long, period: Long): Unit = {
     acquire(task)
-    task.timeout(delay.millis) {
-      def loop(scheduledTime: Long): Unit = {
-        task.doRun()
-        val nextScheduledTime = scheduledTime + period
-        val nowTime = System.nanoTime / 1000000L
-        if (nowTime >= nextScheduledTime) {
-          // Re-run immediately.
+
+    def loop(scheduledTime: Long): Unit = {
+      task.doRun()
+      val nextScheduledTime = scheduledTime + period
+      val nowTime = System.nanoTime() / 1000000L
+      if (nowTime >= nextScheduledTime) {
+        // Re-run immediately.
+        loop(nextScheduledTime)
+      } else {
+        // Re-run after a timeout.
+        task.timeout(nextScheduledTime - nowTime) { () =>
           loop(nextScheduledTime)
-        } else {
-          // Re-run after a timeout.
-          task.timeout((nextScheduledTime - nowTime).millis) {
-            loop(nextScheduledTime)
-          }
         }
       }
-      loop(System.nanoTime / 1000000L + period)
+    }
+
+    task.timeout(delay) { () =>
+      loop(System.nanoTime() / 1000000L + period)
     }
   }
 

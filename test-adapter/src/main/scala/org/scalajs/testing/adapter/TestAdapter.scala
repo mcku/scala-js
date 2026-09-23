@@ -12,6 +12,8 @@
 
 package org.scalajs.testing.adapter
 
+import scala.annotation.nowarn
+
 import scala.concurrent._
 import scala.concurrent.duration._
 import scala.collection.concurrent.TrieMap
@@ -25,9 +27,13 @@ import org.scalajs.testing.common._
 
 import sbt.testing.Framework
 
-final class TestAdapter(jsEnv: JSEnv, input: Input, config: TestAdapter.Config) {
+final class TestAdapter(jsEnv: JSEnv, input: Seq[Input], config: TestAdapter.Config) {
 
   import TestAdapter._
+
+  require(input.nonEmpty,
+      "Attempted to create a TestAdapter with empty input. " +
+      "This will not work, since the TestAdapter expects replies from the JS end.")
 
   /** Map of ThreadId -> ManagedRunner */
   private[this] val runners = TrieMap.empty[Long, ManagedRunner]
@@ -40,8 +46,23 @@ final class TestAdapter(jsEnv: JSEnv, input: Input, config: TestAdapter.Config) 
   /** A custom execution context that delegates to the global one for execution,
    *  but handles failures internally.
    */
-  private implicit val executionContext =
+  private implicit val executionContext: ExecutionContext =
     ExecutionContext.fromExecutor(ExecutionContext.global, reportFailure)
+
+  /** Accessor to the deprecated method `jl.Thread.getId()`.
+   *
+   *  Since JDK 19, Thread.getId() is deprecated in favor of Thread.threadId().
+   *  The only reason is that getId() was not marked `final`, and hence there
+   *  was no guarantee that subclasses wouldn't override it with something that
+   *  is not the thread's ID.
+   *
+   *  We cannot directly use Thread.threadId() since it was only added in JDK 19.
+   *  Since we probably don't need to care about the potential "threat", we
+   *  silence the warning.
+   */
+  @nowarn
+  private def getCurrentThreadId(): Long =
+    Thread.currentThread().getId()
 
   /** Creates an `sbt.testing.Framework` for each framework that can be found.
    *
@@ -109,7 +130,7 @@ final class TestAdapter(jsEnv: JSEnv, input: Input, config: TestAdapter.Config) 
   }
 
   private[adapter] def getRunnerForThread(): ManagedRunner = {
-    val threadId = Thread.currentThread().getId()
+    val threadId = getCurrentThreadId()
 
     // Note that this is thread safe, since each thread can only operate on
     // the value associated to its thread id.
@@ -121,8 +142,7 @@ final class TestAdapter(jsEnv: JSEnv, input: Input, config: TestAdapter.Config) 
     // Otherwise we might leak runners.
     require(!closed, "We are closed. Cannot create new runner.")
 
-    val runConfig = RunConfig().withLogger(config.logger)
-    val com = new JSEnvRPC(jsEnv, input, runConfig)
+    val com = new JSEnvRPC(jsEnv, input, config.logger, config.env)
     val mux = new RunMuxRPC(com)
 
     new ManagedRunner(threadId, com, mux)
@@ -131,21 +151,27 @@ final class TestAdapter(jsEnv: JSEnv, input: Input, config: TestAdapter.Config) 
 
 object TestAdapter {
   final class Config private (
-      val logger: Logger
+      val logger: Logger,
+      val env: Map[String, String]
   ) {
     private def this() = {
       this(
-          logger = NullLogger
+        logger = NullLogger,
+        env = Map.empty
       )
     }
 
     def withLogger(logger: Logger): Config =
       copy(logger = logger)
 
+    def withEnv(env: Map[String, String]): Config =
+      copy(env = env)
+
     private def copy(
-        logger: Logger = logger
+        logger: Logger = logger,
+        env: Map[String, String] = env
     ): Config = {
-      new Config(logger)
+      new Config(logger, env)
     }
   }
 
@@ -158,4 +184,8 @@ object TestAdapter {
       val com: RPCCore,
       val mux: RunMuxRPC
   )
+
+  private abstract class ThreadIDAccessor {
+    def getCurrentThreadId(): Long
+  }
 }

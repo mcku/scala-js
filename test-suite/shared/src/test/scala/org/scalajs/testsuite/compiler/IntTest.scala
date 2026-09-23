@@ -30,7 +30,7 @@ import org.scalajs.testsuite.utils.AssertThrows.assertThrows
 class IntTest {
   import IntTest._
 
-  @Test def `should_support_unary_minus`(): Unit = {
+  @Test def unaryMinus(): Unit = {
     def test(a: Int, expected: Int): Unit =
       assertEquals(expected, -a)
 
@@ -45,7 +45,7 @@ class IntTest {
     test(AlmostMaxVal, -AlmostMaxVal)
   }
 
-  @Test def `should_support_plus`(): Unit = {
+  @Test def plus(): Unit = {
     def test(a: Int, b: Int, expected: Int): Unit =
       assertEquals(expected, a + b)
 
@@ -60,7 +60,7 @@ class IntTest {
     test(AlmostMaxVal, 123, AlmostMaxVal + 123)
   }
 
-  @Test def `should_support_minus`(): Unit = {
+  @Test def minus(): Unit = {
     def test(a: Int, b: Int, expected: Int): Unit =
       assertEquals(expected, a - b)
 
@@ -75,7 +75,7 @@ class IntTest {
     test(AlmostMaxVal, -123, AlmostMaxVal + 123)
   }
 
-  @Test def `should_support_times`(): Unit = {
+  @Test def times(): Unit = {
     @inline def test(a: Int, b: Int, expected: Int): Unit = {
       @noinline def hideFromOptimizer(x: Int): Int = x
 
@@ -262,7 +262,7 @@ class IntTest {
     test(536870912, 20668, -2147483648)
   }
 
-  @Test def `should_support_division`(): Unit = {
+  @Test def division(): Unit = {
     def test(a: Int, b: Int, expected: Int): Unit =
       assertEquals(expected, a / b)
 
@@ -309,6 +309,33 @@ class IntTest {
     assertThrows(classOf[ArithmeticException], 5 / 0)
   }
 
+  @Test def remainder(): Unit = {
+    def test(a: Int, b: Int, expected: Int): Unit =
+      assertEquals(expected, a % b)
+
+    test(654, 56, 654 % 56)
+    test(0, 25, 0 % 25)
+    test(-36, 13, -36 % 13)
+    test(-55, -6, -55 % -6)
+
+    test(MinVal, 1, MinVal % 1)
+    test(MinVal, -1, MinVal % -1)
+    test(MaxVal, 1, MaxVal % 1)
+    test(MaxVal, -1, MaxVal % -1)
+
+    test(MaxVal, MinVal, MaxVal % MinVal)
+    test(MaxVal, MaxVal, MaxVal % MaxVal)
+    test(MinVal, MaxVal, MinVal % MaxVal)
+    test(MinVal, MinVal, MinVal % MinVal)
+
+    test(AlmostMaxVal, 2, AlmostMaxVal % 2)
+    test(AlmostMaxVal, 5, AlmostMaxVal % 5)
+    test(AlmostMaxVal, -7, AlmostMaxVal % -7)
+    test(AlmostMaxVal, -14, AlmostMaxVal % -14)
+    test(AlmostMinVal, 100, AlmostMinVal % 100)
+    test(AlmostMaxVal, -123, AlmostMaxVal % -123)
+  }
+
   @Test def moduloByZero(): Unit = {
     @noinline def modNoInline(x: Int, y: Int): Int = x % y
 
@@ -329,12 +356,12 @@ class IntTest {
     assertThrows(classOf[ArithmeticException], 5 % 0)
   }
 
-  @Test def `percent_should_never_produce_a_negative_0_#1984`(): Unit = {
+  @Test def remainderNegative0_Issue1984(): Unit = {
     @noinline def value: Int = -8
-    assertTrue((value % 8).asInstanceOf[java.lang.Integer].equals(0))
+    assertEquals(0, value % 8)
   }
 
-  @Test def `should_support_shift_left`(): Unit = {
+  @Test def shiftLeft(): Unit = {
     def test(a: Int, b: Int, expected: Int): Unit =
       assertEquals(expected, a << b)
 
@@ -350,7 +377,7 @@ class IntTest {
     test(MaxVal, 1, MaxVal << 1)
   }
 
-  @Test def `should_support_shift_right`(): Unit = {
+  @Test def shiftRight(): Unit = {
     def test(a: Int, b: Int, expected: Int): Unit =
       assertEquals(expected, a >> b)
 
@@ -366,7 +393,7 @@ class IntTest {
     test(MaxVal, 1, MaxVal >> 1)
   }
 
-  @Test def `should_support_shift_right_sign_extend`(): Unit = {
+  @Test def shiftRightSignExtend(): Unit = {
     def test(a: Int, b: Int, expected: Int): Unit =
       assertEquals(expected, a >>> b)
 
@@ -382,22 +409,13 @@ class IntTest {
     test(MaxVal, 1, MaxVal >>> 1)
   }
 
-  private def scalacCorrectlyHandlesIntShiftLong: Boolean =
-    !Platform.scalaVersion.startsWith("2.11.")
-
   @Test def intShiftLeftLongConstantFolded(): Unit = {
-    assumeTrue("scalac must correctly handle int shift long",
-        scalacCorrectlyHandlesIntShiftLong)
-
     assert(0x01030507 << 36L == 271601776)
     val r = 0x01030507 << 36L
     assert(r == 271601776)
   }
 
   @Test def intShiftLeftLongAtRuntime(): Unit = {
-    assumeTrue("On the JVM, scalac must correctly handle int shift long",
-        !Platform.executingInJVM || scalacCorrectlyHandlesIntShiftLong)
-
     var x: Int = 0x01030507
     var y: Long = 36L
     assert(x << y == 271601776)
@@ -406,18 +424,12 @@ class IntTest {
   }
 
   @Test def intShiftLogicalRightLongConstantFolded(): Unit = {
-    assumeTrue("scalac must correctly handle int shift long",
-        scalacCorrectlyHandlesIntShiftLong)
-
     assert(0x90503010 >>> 36L == 151323393)
     val r = 0x90503010 >>> 36L
     assert(r == 151323393)
   }
 
   @Test def intShiftLogicalRightLongAtRuntime(): Unit = {
-    assumeTrue("On the JVM, scalac must correctly handle int shift long",
-        !Platform.executingInJVM || scalacCorrectlyHandlesIntShiftLong)
-
     var x: Int = 0x90503010
     var y: Long = 36L
     assert(x >>> y == 151323393)
@@ -426,18 +438,12 @@ class IntTest {
   }
 
   @Test def intShiftArithmeticRightLongConstantFolded(): Unit = {
-    assumeTrue("scalac must correctly handle int shift long",
-        scalacCorrectlyHandlesIntShiftLong)
-
     assert(0x90503010 >> 36L == -117112063)
     val r = 0x90503010 >> 36L
     assert(r == -117112063)
   }
 
   @Test def intShiftArithmeticRightLongAtRuntime(): Unit = {
-    assumeTrue("On the JVM, scalac must correctly handle int shift long",
-        !Platform.executingInJVM || scalacCorrectlyHandlesIntShiftLong)
-
     var x: Int = 0x90503010
     var y: Long = 36L
     assert(x >> y == -117112063)

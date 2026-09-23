@@ -166,7 +166,7 @@ object PromiseMock {
     // 25.4.1.3.2 Promise Resolve Functions
     private[this] def resolve(resolution: A | Thenable[A]): Unit = {
       if (state == Pending) {
-        if ((resolution: AnyRef) eq (this: AnyRef)) {
+        if (resolution.asInstanceOf[AnyRef] eq this) {
           reject(new js.TypeError("Self resolution"))
         } else if (isNotAnObject(resolution)) {
           fulfill(resolution.asInstanceOf[A])
@@ -206,10 +206,9 @@ object PromiseMock {
         onFulfilled: js.Function1[A, B | Thenable[B]],
         onRejected: js.UndefOr[js.Function1[scala.Any, B | Thenable[B]]]): MockPromise[B] = {
 
-      new MockPromise[B](
-        { (innerResolve: js.Function1[B | Thenable[B], _],
+      new MockPromise[B]({
+        (innerResolve: js.Function1[B | Thenable[B], _],
             innerReject: js.Function1[scala.Any, _]) =>
-
           def doFulfilled(value: A): Unit = {
             tryCatchAny[Unit] {
               innerResolve(onFulfilled(value))
@@ -241,8 +240,7 @@ object PromiseMock {
             case Rejected(reason) =>
               enqueue(() => doRejected(reason))
           }
-        }
-      )
+      })
     }
 
     def `then`[B >: A](

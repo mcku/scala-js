@@ -87,19 +87,32 @@ private[emitter] final case class WithGlobals[+A](
 }
 
 private[emitter] object WithGlobals {
+
   /** Constructs a `WithGlobals` with an empty set `globalVarNames`. */
   def apply[A](value: A): WithGlobals[A] =
     new WithGlobals(value, Set.empty)
+
+  val nil: WithGlobals[Nil.type] = WithGlobals(Nil)
 
   def list[A](xs: List[WithGlobals[A]]): WithGlobals[List[A]] = {
     /* This could be a cascade of flatMap's, but the following should be more
      * efficient.
      */
     val values = xs.map(_.value)
-    val globalVarNames = xs.foldLeft(Set.empty[String]) { (prev, x) =>
+    val globalVarNames = collectNames(xs)
+    WithGlobals(values, globalVarNames)
+  }
+
+  def flatten[A](xs: List[WithGlobals[List[A]]]): WithGlobals[List[A]] = {
+    val values = xs.flatMap(_.value)
+    val globalVarNames = collectNames(xs)
+    WithGlobals(values, globalVarNames)
+  }
+
+  private def collectNames(xs: List[WithGlobals[_]]): Set[String] = {
+    xs.foldLeft(Set.empty[String]) { (prev, x) =>
       unionPreserveEmpty(prev, x.globalVarNames)
     }
-    WithGlobals(values, globalVarNames)
   }
 
   def option[A](xs: Option[WithGlobals[A]]): WithGlobals[Option[A]] =

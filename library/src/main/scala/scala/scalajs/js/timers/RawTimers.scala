@@ -15,13 +15,17 @@ package scala.scalajs.js.timers
 import scala.scalajs.js
 import js.annotation.JSGlobalScope
 
-/**
- *  <span class="badge badge-non-std" style="float: right;">Non-Standard</span>
+/** <span class="badge badge-non-std" style="float: right;">Non-Standard</span>
  *  Raw JavaScript timer methods.
  *
  *  The methods on this object expose the raw JavaScript methods for timers. In
  *  general it is more advisable to use the methods directly defined on
  *  [[timers]] as they are more Scala-like.
+ *
+ *  The methods exposed by this object are not standard in ECMAScript.
+ *  Different JavaScript environments support all, some or none of them.
+ *
+ *  Browsers support all those methods as part the of the DOM standard.
  */
 @js.native
 @JSGlobalScope

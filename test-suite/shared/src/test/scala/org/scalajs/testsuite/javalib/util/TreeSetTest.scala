@@ -14,15 +14,11 @@ package org.scalajs.testsuite.javalib.util
 
 import org.junit.Assert._
 
-import scala.language.implicitConversions
-
-import scala.collection.JavaConverters._
-
 import org.junit.Test
 import org.junit.Assert._
 import org.junit.Assume._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.{assertThrows, _}
 import org.scalajs.testsuite.utils.Platform._
 
 import java.{util => ju}
@@ -31,9 +27,19 @@ import ju.Comparator
 
 import scala.reflect.ClassTag
 
+class TreeSetComparatorTest {
+
+  @Test def naturalComparator_issue4796(): Unit = {
+    val cmp = ju.Comparator.naturalOrder[String]()
+
+    assertSame(cmp, new TreeSet[String](cmp).comparator())
+  }
+
+}
+
 class TreeSetWithoutNullTest extends TreeSetTest(new TreeSetFactory) {
 
-  @Test def should_check_that_comparator_is_always_null(): Unit = {
+  @Test def comparatorNull(): Unit = {
     val ts1 = factory.empty[Int]
 
     assertNull(ts1.comparator())
@@ -45,7 +51,7 @@ class TreeSetWithoutNullTest extends TreeSetTest(new TreeSetFactory) {
 }
 
 class TreeSetWithNullTest extends TreeSetTest(new TreeSetWithNullFactory) {
-  @Test def should_check_that_comparator_is_never_null(): Unit = {
+  @Test def comparatorNotNull(): Unit = {
     val ts1 = factory.empty[Int]
 
     assertFalse(ts1.comparator() == null)
@@ -57,11 +63,9 @@ class TreeSetWithNullTest extends TreeSetTest(new TreeSetWithNullFactory) {
 }
 
 abstract class TreeSetTest(val factory: TreeSetFactory)
-    extends AbstractSetTest
-    with SortedSetTest
-    with NavigableSetTest {
+    extends AbstractSetTest with SortedSetTest with NavigableSetTest {
 
-  @Test def should_store_and_remove_ordered_integers(): Unit = {
+  @Test def addRemoveInt(): Unit = {
     val ts = factory.empty[Int]
 
     assertEquals(0, ts.size())
@@ -79,7 +83,7 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     assertEquals(0, ts.size())
     assertTrue(ts.isEmpty)
     assertFalse(ts.remove(333))
-    expectThrows(classOf[NoSuchElementException], ts.first)
+    assertThrows(classOf[NoSuchElementException], ts.first)
 
     if (factory.allowsNullElement) {
       assertTrue(ts.asInstanceOf[TreeSet[Any]].add(null))
@@ -89,7 +93,7 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     }
   }
 
-  @Test def should_store_and_remove_ordered_strings(): Unit = {
+  @Test def addRemoveString(): Unit = {
     val ts = factory.empty[String]
 
     assertEquals(0, ts.size())
@@ -116,7 +120,7 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     }
   }
 
-  @Test def should_store_objects_with_custom_comparables(): Unit = {
+  @Test def addRemoveCustomComparator(): Unit = {
     case class Rect(x: Int, y: Int)
 
     val areaComp = new ju.Comparator[Rect] {
@@ -151,7 +155,7 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     assertTrue(ts.isEmpty)
   }
 
-  @Test def should_store_ordered_Double_even_in_corner_cases(): Unit = {
+  @Test def addRemoveDoubleCornerCases(): Unit = {
     val ts = factory.empty[Double]
 
     assertTrue(ts.add(1.0))
@@ -178,8 +182,8 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     assertTrue(ts.isEmpty)
   }
 
-  @Test def could_be_instantiated_with_a_prepopulated_Collection(): Unit = {
-    val l = Set(1, 5, 2, 3, 4).asJavaCollection
+  @Test def newFromCollectionInt(): Unit = {
+    val l = TrivialImmutableCollection(1, 5, 2, 3, 4)
     val ts = factory.newFrom(l)
 
     assertEquals(5, ts.size())
@@ -190,8 +194,8 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     assertTrue(ts.isEmpty)
   }
 
-  @Test def should_be_cleared_in_a_single_operation(): Unit = {
-    val l = Set(1, 5, 2, 3, 4).asJavaCollection
+  @Test def clearTreeSet(): Unit = {
+    val l = TrivialImmutableCollection(1, 5, 2, 3, 4)
     val ts = factory.empty[Int]
 
     ts.addAll(l)
@@ -201,8 +205,8 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     assertEquals(0, ts.size())
   }
 
-  @Test def should_add_multiple_element_in_one_operation(): Unit = {
-    val l = Set(1, 5, 2, 3, 4).asJavaCollection
+  @Test def addAllCollectionIntAndAddInt(): Unit = {
+    val l = TrivialImmutableCollection(1, 5, 2, 3, 4)
     val ts = factory.empty[Int]
 
     assertEquals(0, ts.size())
@@ -212,7 +216,7 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     assertEquals(6, ts.size())
   }
 
-  @Test def should_check_contained_values_even_in_double_corner_cases(): Unit = {
+  @Test def containsDoubleCornerCasesTreeSet(): Unit = {
     val ts = factory.empty[Double]
 
     assertTrue(ts.add(11111.0))
@@ -247,7 +251,7 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     assertTrue(ts.contains(-0.0))
   }
 
-  @Test def should_throws_exception_in_case_of_null_elements_and_default_ordering(): Unit = {
+  @Test def addNullOrNullNotSupportedThrows(): Unit = {
     val hs = factory.empty[String]
 
     assertTrue(hs.add("ONE"))
@@ -258,55 +262,52 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
       assertTrue(hs.add(null))
       assertTrue(hs.contains(null))
     } else {
-      expectThrows(classOf[Exception], hs.add(null))
+      assertThrowsNPEIfCompliant(hs.add(null))
     }
   }
 
-  @Test def should_not_put_a_whole_Collection_with_null_elements_into(): Unit = {
-    val l = List[String]("ONE", "TWO", (null: String))
+  @Test def addAllNullOrNullNotSupportedThrows(): Unit = {
+    val l = TrivialImmutableCollection("ONE", "TWO", (null: String))
     val ts1 = factory.empty[String]
 
     if (factory.allowsNullElement) {
-      assertTrue(ts1.addAll(l.asJava))
+      assertTrue(ts1.addAll(l))
       assertTrue(ts1.contains(null))
       assertTrue(ts1.contains("ONE"))
       assertFalse(ts1.contains("THREE"))
     } else {
-      expectThrows(classOf[Exception], {
-        ts1.addAll(l.asJavaCollection)
-      })
+      assertThrowsNPEIfCompliant(ts1.addAll(l))
     }
   }
 
-  @Test def should_throw_exception_on_non_comparable_objects(): Unit = {
+  @Test def addNonComparableObjectThrows(): Unit = {
     assumeTrue("Assumed compliant asInstanceOf", hasCompliantAsInstanceOfs)
-    assumeTrue("Assumed JDK8 implementation", !executingInJVMOnJDK6)
 
     class TestObj(num: Int)
 
     val ts1 = factory.empty[TestObj]
     assertEquals(0, ts1.size())
-    expectThrows(classOf[ClassCastException], ts1.add(new TestObj(111)))
+    assertThrows(classOf[ClassCastException], ts1.add(new TestObj(111)))
   }
 
-  @Test def should_throw_exceptions_on_access_outside_bound_on_views(): Unit = {
+  @Test def headSetTailSetSubSetThrowsOnAddElementOutOfBounds(): Unit = {
     assumeTrue("Assumed compliant asInstanceOf", hasCompliantAsInstanceOfs)
 
-    val l = Set(2, 3, 6).asJavaCollection
+    val l = TrivialImmutableCollection(2, 3, 6)
     val ts = factory.empty[Int]
     ts.addAll(l)
 
     val hs1 = ts.headSet(5, true)
     assertTrue(hs1.add(4))
     assertTrue(hs1.add(5))
-    expectThrows(classOf[IllegalArgumentException], hs1.add(6))
+    assertThrows(classOf[IllegalArgumentException], hs1.add(6))
 
     ts.clear()
     ts.addAll(l)
 
     val hs2 = ts.headSet(5, false)
     assertTrue(hs2.add(4))
-    expectThrows(classOf[IllegalArgumentException], hs2.add(5))
+    assertThrows(classOf[IllegalArgumentException], hs2.add(5))
 
     ts.clear()
     ts.addAll(l)
@@ -314,14 +315,14 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     val ts1 = ts.tailSet(1, true)
     assertTrue(ts1.add(7))
     assertTrue(ts1.add(1))
-    expectThrows(classOf[IllegalArgumentException], ts1.add(0))
+    assertThrows(classOf[IllegalArgumentException], ts1.add(0))
 
     ts.clear()
     ts.addAll(l)
 
     val ts2 = ts.tailSet(1, false)
     assertTrue(ts2.add(7))
-    expectThrows(classOf[IllegalArgumentException], ts2.add(1))
+    assertThrows(classOf[IllegalArgumentException], ts2.add(1))
 
     ts.clear()
     ts.addAll(l)
@@ -329,27 +330,21 @@ abstract class TreeSetTest(val factory: TreeSetFactory)
     val ss1 = ts.subSet(1, true, 5, true)
     assertTrue(ss1.add(4))
     assertTrue(ss1.add(1))
-    expectThrows(classOf[IllegalArgumentException], ss1.add(0))
+    assertThrows(classOf[IllegalArgumentException], ss1.add(0))
     assertTrue(ss1.add(5))
-    expectThrows(classOf[IllegalArgumentException], ss1.add(6))
+    assertThrows(classOf[IllegalArgumentException], ss1.add(6))
 
     ts.clear()
     ts.addAll(l)
 
     val ss2 = ts.subSet(1, false, 5, false)
     assertTrue(ss2.add(4))
-    expectThrows(classOf[IllegalArgumentException], ss2.add(1))
-    expectThrows(classOf[IllegalArgumentException], ss2.add(5))
+    assertThrows(classOf[IllegalArgumentException], ss2.add(1))
+    assertThrows(classOf[IllegalArgumentException], ss2.add(5))
   }
 }
 
-object TreeSetFactory extends TreeSetFactory {
-  def allFactories: Iterator[TreeSetFactory] =
-    Iterator(new TreeSetFactory, new TreeSetWithNullFactory)
-}
-
-class TreeSetFactory extends AbstractSetFactory with NavigableSetFactory
-    with SortedSetFactory {
+class TreeSetFactory extends AbstractSetFactory with NavigableSetFactory with SortedSetFactory {
   def implementationName: String =
     "java.util.TreeSet"
 
@@ -372,18 +367,11 @@ class TreeSetWithNullFactory extends TreeSetFactory {
   override def implementationName: String =
     super.implementationName + " {allows null}"
 
-  case class EvenNullComp[E]() extends Comparator[E] {
-    def compare(a: E, b: E): Int =
-      (Option(a), Option(b)) match {
-        case (Some(e1), Some(e2)) => e1.asInstanceOf[Comparable[E]].compareTo(e2)
-        case (Some(e1), None) => -1
-        case (None, Some(e2)) => 1
-        case (None, None) => 0
-      }
-    }
-
-  override def empty[E: ClassTag]: ju.TreeSet[E] =
-    new TreeSet[E](EvenNullComp[E]())
+  override def empty[E: ClassTag]: ju.TreeSet[E] = {
+    val natural = Comparator.comparing[E, Comparable[Any]](
+        ((_: E).asInstanceOf[Comparable[Any]]): ju.function.Function[E, Comparable[Any]])
+    new TreeSet[E](Comparator.nullsFirst(natural))
+  }
 
   override def allowsNullElement: Boolean = true
 

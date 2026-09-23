@@ -22,11 +22,9 @@ object Platform {
    */
   final val executingInJVM = true
 
-  def executingInJVMOnJDK6: Boolean = jdkVersion == 6
+  def executingInJVMOnLowerThanJDK(version: Int): Boolean = jdkVersion < version
 
-  def executingInJVMOnJDK7OrLower: Boolean = jdkVersion <= 7
-
-  def executingInJVMOnJDK8OrLower: Boolean = jdkVersion <= 8
+  def executingInJVMWithJDKIn(range: Range): Boolean = range.contains(jdkVersion)
 
   private lazy val jdkVersion = {
     val v = System.getProperty("java.version")
@@ -34,10 +32,21 @@ object Platform {
     else Integer.parseInt(v.takeWhile(_.isDigit))
   }
 
-  def isInFullOpt: Boolean = false
+  final val executingInWebAssembly = false
+
+  def usesClosureCompiler: Boolean = false
+
+  def hasMinifiedNames: Boolean = false
 
   def hasCompliantAsInstanceOfs: Boolean = true
   def hasCompliantArrayIndexOutOfBounds: Boolean = true
+  def hasCompliantArrayStores: Boolean = true
+  def hasCompliantNegativeArraySizes: Boolean = true
+  def hasCompliantNullPointers: Boolean = true
+  def hasCompliantStringIndexOutOfBounds: Boolean = true
   def hasCompliantModule: Boolean = true
-  def hasStrictFloats: Boolean = true
+
+  def regexSupportsUnicodeCase: Boolean = true
+  def regexSupportsUnicodeCharacterClasses: Boolean = true
+  def regexSupportsLookBehinds: Boolean = true
 }

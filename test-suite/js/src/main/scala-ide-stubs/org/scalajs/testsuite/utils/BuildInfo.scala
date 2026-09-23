@@ -22,11 +22,18 @@ private[utils] object BuildInfo {
   final val isNoModule = false
   final val isESModule = false
   final val isCommonJSModule = false
-  final val isFullOpt = false
+  final val usesClosureCompiler = false
+  final val hasMinifiedNames = false
   final val compliantAsInstanceOfs = false
   final val compliantArrayIndexOutOfBounds = false
+  final val compliantArrayStores = false
+  final val compliantNegativeArraySizes = false
+  final val compliantNullPointers = false
+  final val compliantStringIndexOutOfBounds = false
   final val compliantModuleInit = false
-  final val strictFloats = false
   final val productionMode = false
-  final val es2015 = false
+  final val esVersion = 0
+  final val useECMAScript2015Semantics = false
+  final val isWebAssembly = false
+  final val hasWasmCustomDescriptors = false
 }

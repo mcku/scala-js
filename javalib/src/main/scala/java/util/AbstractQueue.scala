@@ -12,8 +12,7 @@
 
 package java.util
 
-abstract class AbstractQueue[E] protected ()
-    extends AbstractCollection[E] with Queue[E] {
+abstract class AbstractQueue[E] protected () extends AbstractCollection[E] with Queue[E] {
 
   override def add(e: E): Boolean =
     if (offer(e)) true
@@ -27,12 +26,11 @@ abstract class AbstractQueue[E] protected ()
     if (!isEmpty()) peek()
     else throw new NoSuchElementException()
 
-  override def clear(): Unit = {
+  override def clear(): Unit =
     while (poll() != null) {}
-  }
 
   override def addAll(c: Collection[_ <: E]): Boolean = {
-    val iter = c.iterator
+    val iter = c.iterator()
     var changed = false
     while (iter.hasNext())
       changed = add(iter.next()) || changed

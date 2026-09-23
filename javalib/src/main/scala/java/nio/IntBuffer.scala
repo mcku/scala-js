@@ -17,8 +17,10 @@ import scala.scalajs.js.typedarray._
 object IntBuffer {
   private final val HashSeed = 39599817 // "java.nio.IntBuffer".##
 
-  def allocate(capacity: Int): IntBuffer =
+  def allocate(capacity: Int): IntBuffer = {
+    BoundsChecks.checkCapacity(capacity)
     wrap(new Array[Int](capacity))
+  }
 
   def wrap(array: Array[Int], offset: Int, length: Int): IntBuffer =
     HeapIntBuffer.wrap(array, 0, array.length, offset, length, false)
@@ -28,8 +30,8 @@ object IntBuffer {
 
   // Extended API
 
-  def wrap(array: Int32Array): IntBuffer =
-    TypedArrayIntBuffer.wrap(array)
+  def wrapInt32Array(array: Int32Array): IntBuffer =
+    TypedArrayIntBuffer.wrapInt32Array(array)
 }
 
 abstract class IntBuffer private[nio] (
@@ -136,7 +138,7 @@ abstract class IntBuffer private[nio] (
 
   @noinline
   def compareTo(that: IntBuffer): Int =
-    GenBuffer(this).generic_compareTo(that)(_.compareTo(_))
+    GenBuffer(this).generic_compareTo(that)(Integer.compare(_, _))
 
   def order(): ByteOrder
 
@@ -148,11 +150,13 @@ abstract class IntBuffer private[nio] (
 
   @inline
   private[nio] def load(startIndex: Int,
-      dst: Array[Int], offset: Int, length: Int): Unit =
+      dst: Array[Int], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   private[nio] def store(startIndex: Int,
-      src: Array[Int], offset: Int, length: Int): Unit =
+      src: Array[Int], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }

@@ -17,30 +17,18 @@ import java.{util => ju, lang => jl}
 import org.junit.Test
 import org.junit.Assert._
 
-import scala.collection.JavaConverters._
-
-import org.scalajs.testsuite.utils.AssertThrows._
-
+import org.scalajs.testsuite.javalib.lang.IterableFactory
+import org.scalajs.testsuite.javalib.lang.IterableTest
+import org.scalajs.testsuite.utils.AssertThrows.{assertThrows, _}
 import scala.reflect.ClassTag
 
-trait CollectionTest {
+import Utils._
+
+trait CollectionTest extends IterableTest {
 
   def factory: CollectionFactory
 
-  def testCollectionApi(): Unit = {
-    shouldStoreStrings()
-    shouldStoreIntegers()
-    shouldStoreDoubles()
-    shouldStoreCustomObjects()
-    shouldRemoveStoredElements()
-    shouldRemoveStoredElementsOnDoubleCornerCases()
-    shouldBeClearedWithOneOperation()
-    shouldCheckContainedPresence()
-    shouldCheckContainedPresenceForDoubleCornerCases()
-    shouldGiveProperIteratorOverElements()
-  }
-
-  @Test def shouldStoreStrings(): Unit = {
+  @Test def testWithString(): Unit = {
     val coll = factory.empty[String]
 
     assertEquals(0, coll.size())
@@ -49,18 +37,18 @@ trait CollectionTest {
 
     coll.clear()
     assertEquals(0, coll.size())
-    assertFalse(coll.addAll(Seq.empty[String].asJava))
+    assertFalse(coll.addAll(TrivialImmutableCollection[String]()))
     assertEquals(0, coll.size())
 
-    assertTrue(coll.addAll(Seq("one").asJava))
+    assertTrue(coll.addAll(TrivialImmutableCollection("one")))
     assertEquals(1, coll.size())
 
     coll.clear()
-    assertTrue(coll.addAll(Seq("one", "two", "one").asJava))
+    assertTrue(coll.addAll(TrivialImmutableCollection("one", "two", "one")))
     assertTrue(coll.size() >= 1)
   }
 
-  @Test def shouldStoreIntegers(): Unit = {
+  @Test def testWithInt(): Unit = {
     val coll = factory.empty[Int]
 
     assertEquals(0, coll.size())
@@ -69,18 +57,18 @@ trait CollectionTest {
 
     coll.clear()
     assertEquals(0, coll.size())
-    assertFalse(coll.addAll(Seq.empty[Int].asJava))
+    assertFalse(coll.addAll(TrivialImmutableCollection[Int]()))
     assertEquals(0, coll.size())
 
-    assertTrue(coll.addAll(Seq(1).asJava))
+    assertTrue(coll.addAll(TrivialImmutableCollection(1)))
     assertEquals(1, coll.size())
 
     coll.clear()
-    assertTrue(coll.addAll(Seq(1, 2, 1).asJava))
+    assertTrue(coll.addAll(TrivialImmutableCollection(1, 2, 1)))
     assertTrue(coll.size() >= 1)
   }
 
-  @Test def shouldStoreDoubles(): Unit = {
+  @Test def testWithDouble(): Unit = {
     val coll = factory.empty[Double]
 
     assertEquals(0, coll.size())
@@ -89,14 +77,14 @@ trait CollectionTest {
 
     coll.clear()
     assertEquals(0, coll.size())
-    assertFalse(coll.addAll(Seq.empty[Double].asJava))
+    assertFalse(coll.addAll(TrivialImmutableCollection[Double]()))
     assertEquals(0, coll.size())
 
-    assertTrue(coll.addAll(Seq(1.234).asJava))
+    assertTrue(coll.addAll(TrivialImmutableCollection(1.234)))
     assertEquals(1, coll.size())
 
     coll.clear()
-    assertTrue(coll.addAll(Seq(1.234, 2.345, 1.234).asJava))
+    assertTrue(coll.addAll(TrivialImmutableCollection(1.234, 2.345, 1.234)))
     assertTrue(coll.size() >= 1)
 
     coll.clear()
@@ -115,7 +103,7 @@ trait CollectionTest {
     assertTrue(coll.contains(Double.NaN))
   }
 
-  @Test def shouldStoreCustomObjects(): Unit = {
+  @Test def testWithCustomClass(): Unit = {
     case class TestObj(num: Int) extends jl.Comparable[TestObj] {
       def compareTo(o: TestObj): Int =
         o.num.compareTo(num)
@@ -129,7 +117,17 @@ trait CollectionTest {
     assertFalse(coll.contains(TestObj(200)))
   }
 
-  @Test def shouldRemoveStoredElements(): Unit = {
+  @Test def isEmpty(): Unit = {
+    val coll = factory.empty[Int]
+    assertTrue(coll.size() == 0)
+    assertTrue(coll.isEmpty())
+
+    val nonEmpty = factory.fromElements[Int](1)
+    assertTrue(nonEmpty.size() == 1)
+    assertFalse(nonEmpty.isEmpty())
+  }
+
+  @Test def removeString(): Unit = {
     val coll = factory.empty[String]
 
     coll.add("one")
@@ -146,7 +144,7 @@ trait CollectionTest {
     assertEquals(initialSize - 2, coll.size())
   }
 
-  @Test def shouldRemoveStoredElementsOnDoubleCornerCases(): Unit = {
+  @Test def removeDoubleCornerCases(): Unit = {
     val coll = factory.empty[Double]
 
     coll.add(1.234)
@@ -174,7 +172,7 @@ trait CollectionTest {
     assertTrue(coll.isEmpty)
   }
 
-  @Test def shouldBeClearedWithOneOperation(): Unit = {
+  @Test def clear(): Unit = {
     val coll = factory.empty[String]
 
     coll.add("one")
@@ -184,7 +182,7 @@ trait CollectionTest {
     assertEquals(0, coll.size)
   }
 
-  @Test def shouldCheckContainedPresence(): Unit = {
+  @Test def containsString(): Unit = {
     val coll = factory.empty[String]
 
     coll.add("one")
@@ -193,11 +191,11 @@ trait CollectionTest {
     if (factory.allowsNullElementQuery) {
       assertFalse(coll.contains(null))
     } else {
-      expectThrows(classOf[Exception], coll.contains(null))
+      assertThrowsNPEIfCompliant(coll.contains(null))
     }
   }
 
-  @Test def shouldCheckContainedPresenceForDoubleCornerCases(): Unit = {
+  @Test def containsDoubleCornerCases(): Unit = {
     val coll = factory.empty[Double]
 
     coll.add(-0.0)
@@ -211,7 +209,7 @@ trait CollectionTest {
     assertTrue(coll.contains(+0.0))
   }
 
-  @Test def shouldGiveProperIteratorOverElements(): Unit = {
+  @Test def iteratorString(): Unit = {
     val coll = factory.empty[String]
     coll.add("one")
     coll.add("two")
@@ -219,7 +217,42 @@ trait CollectionTest {
     coll.add("three")
     coll.add("three")
 
-    assertEquals(coll.iterator().asScala.toSet, Set("one", "two", "three"))
+    assertIteratorSameElementsAsSetDupesAllowed("one", "two", "three")(
+        coll.iterator())
+  }
+
+  @Test def toArrayObject(): Unit = {
+    val coll = factory.fromElements("one", "two", "three", "four", "five")
+
+    val result = coll.toArray()
+    assertSame(classOf[Array[AnyRef]], result.getClass())
+    assertArraySameElementsAsSet[AnyRef]("one", "two", "three", "four", "five")(result)
+  }
+
+  @Test def toArraySpecific(): Unit = {
+    val coll = factory.fromElements("one", "two", "three", "four", "five")
+
+    val arrayString3 = new Array[String](3)
+    val result1 = coll.toArray(arrayString3)
+    assertNotSame(arrayString3, result1)
+    assertSame(classOf[Array[String]], result1.getClass())
+    assertArraySameElementsAsSet[String]("one", "two", "three", "four", "five")(result1)
+
+    val arrayString5 = new Array[String](5)
+    val result2 = coll.toArray(arrayString5)
+    assertSame(arrayString5, result2)
+    assertSame(classOf[Array[String]], result2.getClass())
+    assertArraySameElementsAsSet[String]("one", "two", "three", "four", "five")(result2)
+
+    val arrayString7 = new Array[String](7)
+    arrayString7(5) = "foo"
+    arrayString7(6) = "bar"
+    val result3 = coll.toArray(arrayString7)
+    assertSame(arrayString7, result3)
+    assertSame(classOf[Array[String]], result3.getClass())
+    assertArraySameElementsAsSet[String]("one", "two", "three", "four", "five", null, "bar")(result3)
+    assertNull(result3(5))
+    assertEquals("bar", result3(6))
   }
 
   @Test def removeIf(): Unit = {
@@ -230,30 +263,84 @@ trait CollectionTest {
       def test(x: Int): Boolean = x >= 50
     }))
     assertEquals(5, coll.size())
-    assertEquals(coll.iterator().asScala.toSet, Set(-45, 0, 12, 32, 42))
+    assertIteratorSameElementsAsSet(-45, 0, 12, 32, 42)(coll.iterator())
 
     assertFalse(coll.removeIf(new java.util.function.Predicate[Int] {
       def test(x: Int): Boolean = x >= 45
     }))
     assertEquals(5, coll.size())
-    assertEquals(coll.iterator().asScala.toSet, Set(-45, 0, 12, 32, 42))
+    assertIteratorSameElementsAsSet(-45, 0, 12, 32, 42)(coll.iterator())
   }
+
+  @Test def toStringCollectionDoubleEmpty(): Unit = {
+    val coll = factory.empty[Double]
+    assertEquals("[]", coll.toString())
+  }
+
+  @Test def toStringCollectionDoubleOneElement(): Unit = {
+    val coll = factory.fromElements[Double](1.01)
+    // JavaScript displays n.0 as n, so one trailing digit must be non-zero.
+    assertEquals("[1.01]", coll.toString())
+  }
+
+  @Test def toStringCollectionDoubleHasCommaSpace(): Unit = {
+    // Choose Doubles which display the same in Java and Scala.js.
+    // JavaScript displays n.0 as n, so one trailing digit must be non-zero.
+    val elements = Seq(88.42, -23.36, 60.173)
+
+    val coll = factory.fromElements[Double](elements: _*)
+
+    val result = coll.toString()
+
+    // The order of elements returned by each collection is defined
+    // by the collection. Be prepared to handle the general case of any
+    // order here. Specific collections should test the order they specify.
+    val expected = elements.permutations.map(_.mkString("[", ", ", "]")).toSet
+
+    assertTrue(s"result '${result}' not in expected set '${expected}'",
+        expected.contains(result))
+  }
+
+  @Test def toStringCollectionAnyWithNull(): Unit = {
+    if (factory.allowsNullElement) {
+      val elements = Seq(-1, -2, null, -3)
+
+      val coll = factory.fromElements[Any](elements: _*)
+
+      val result = coll.toString()
+
+      val expected = elements.permutations.map(_.mkString("[", ", ", "]")).toSet
+      assertTrue(s"result '${result}' not in expected set '${expected}'",
+          expected.contains(result))
+    }
+  }
+
+  @Test def toStringCollectionCustomClass(): Unit = {
+    case class Custom(name: String, id: Int) extends Ordered[Custom] {
+      def compare(that: Custom): Int = this.id - that.id
+    }
+
+    val elements = Seq(Custom("A", 1), Custom("b", 2), Custom("C", 3))
+
+    val coll = factory.fromElements[Custom](elements: _*)
+
+    val result = coll.toString()
+    val expected = elements.permutations.map(_.mkString("[", ", ", "]")).toSet
+    assertTrue(s"result '${result}' not in expected set '${expected}'",
+        expected.contains(result))
+  }
+
 }
 
-object CollectionFactory {
-  def allFactories: Iterator[CollectionFactory] =
-    ListFactory.allFactories ++ SetFactory.allFactories
-}
-
-trait CollectionFactory {
-  def implementationName: String
+trait CollectionFactory extends IterableFactory {
   def empty[E: ClassTag]: ju.Collection[E]
   def allowsMutationThroughIterator: Boolean = true
   def allowsNullElementQuery: Boolean = true
+  def allowsNullElement: Boolean = true
 
-  def fromElements[E: ClassTag](elems: E*): ju.Collection[E] = {
+  override def fromElements[E: ClassTag](elems: E*): ju.Collection[E] = {
     val coll = empty[E]
-    coll.addAll(elems.asJavaCollection)
+    coll.addAll(TrivialImmutableCollection(elems: _*))
     coll
   }
 }

@@ -20,7 +20,8 @@ import org.scalajs.testing.common._
 import sbt.testing._
 
 private[adapter] final class TaskAdapter(taskInfo: TaskInfo, runID: RunMux.RunID,
-    runnerGetter: () => RunMuxRPC) extends Task {
+    runnerGetter: () => RunMuxRPC)
+    extends Task {
 
   def taskDef: TaskDef = taskInfo.taskDef
   def tags: Array[String] = taskInfo.tags.toArray
@@ -31,7 +32,7 @@ private[adapter] final class TaskAdapter(taskInfo: TaskInfo, runID: RunMux.RunID
     def log[T](level: Logger => (T => Unit))(log: LogElement[T]) =
       level(loggers(log.index))(log.x)
 
-    runner.attach(JVMEndpoints.event, runID)(handler.handle _)
+    runner.attach(JVMEndpoints.event, runID)(handler.handle(_))
     runner.attach(JVMEndpoints.logError, runID)(log(_.error))
     runner.attach(JVMEndpoints.logWarn, runID)(log(_.warn))
     runner.attach(JVMEndpoints.logInfo, runID)(log(_.info))

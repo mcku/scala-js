@@ -12,23 +12,18 @@
 
 package java.util.concurrent
 
+import java.lang.Cloneable
 import java.util._
+import java.util.Objects.requireNonNull
 
 class ConcurrentSkipListSet[E] private (inner: TreeSet[E])
-    extends AbstractSet[E]
-    with NavigableSet[E]
-    with Cloneable
-    with Serializable {
+    extends AbstractSet[E] with NavigableSet[E] with Cloneable with Serializable {
 
-  def this(collection: Collection[_ <: E]) = {
-    this(new TreeSet[E](collection) {
-      override def add(e: E): Boolean =
-        inner.add(Box(e))
-    })
-  }
+  def this(collection: Collection[_ <: E]) =
+    this(new TreeSet[E](collection))
 
   def this() =
-    this(Collections.emptySet[E]: Collection[E])
+    this(new TreeSet[E]())
 
   def this(comparator: Comparator[_ >: E]) =
     this(new TreeSet[E](comparator))
@@ -40,22 +35,20 @@ class ConcurrentSkipListSet[E] private (inner: TreeSet[E])
     new ConcurrentSkipListSet(this)
 
   def size(): Int =
-    inner.size
+    inner.size()
 
   override def isEmpty(): Boolean =
-    inner.isEmpty
+    inner.isEmpty()
 
   override def contains(o: Any): Boolean =
     if (o == null) false
     else inner.contains(o)
 
   override def add(e: E): Boolean =
-    if (e == null) throw new NullPointerException()
-    else inner.add(e)
+    inner.add(requireNonNull(e))
 
   override def remove(o: Any): Boolean =
-    if (o == null) throw new NullPointerException()
-    else inner.remove(o)
+    inner.remove(requireNonNull(o))
 
   override def clear(): Unit =
     inner.clear()
@@ -91,14 +84,15 @@ class ConcurrentSkipListSet[E] private (inner: TreeSet[E])
     inner.comparator()
 
   def first(): E =
-    inner.first
+    inner.first()
 
   def last(): E =
-    inner.last
+    inner.last()
 
   def subSet(fromElement: E, fromInclusive: Boolean, toElement: E,
-      toInclusive: Boolean): NavigableSet[E] =
+      toInclusive: Boolean): NavigableSet[E] = {
     inner.subSet(fromElement, fromInclusive, toElement, toInclusive)
+  }
 
   def headSet(toElement: E, inclusive: Boolean): NavigableSet[E] =
     inner.headSet(toElement, inclusive)

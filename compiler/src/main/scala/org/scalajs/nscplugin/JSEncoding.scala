@@ -17,20 +17,24 @@ import scala.collection.mutable
 import scala.tools.nsc._
 
 import org.scalajs.ir
-import ir.{Trees => js, Types => jstpe}
+import org.scalajs.ir.{Trees => js, Types => jstpe, WellKnownNames => jswkn}
+import org.scalajs.ir.Names.{
+  LocalName,
+  LabelName,
+  SimpleFieldName,
+  FieldName,
+  SimpleMethodName,
+  MethodName,
+  ClassName
+}
+import org.scalajs.ir.OriginalName
+import org.scalajs.ir.OriginalName.NoOriginalName
+import org.scalajs.ir.UTF8String
 
 import org.scalajs.nscplugin.util.{ScopedVar, VarBox}
 import ScopedVar.withScopedVars
 
-/** Encoding of symbol names for JavaScript
- *
- *  Some issues that this encoding solves:
- *  * Overloading: encode the full signature in the JS name
- *  * Same scope for fields and methods of a class
- *  * Global access to classes and modules (by their full name)
- *
- *  @author Sébastien Doeraene
- */
+/** Encoding of symbol names for the IR. */
 trait JSEncoding[G <: Global with Singleton] extends SubComponent {
   self: GenJSCode[G] =>
 
@@ -51,24 +55,34 @@ trait JSEncoding[G <: Global with Singleton] extends SubComponent {
    *  local name scope using [[reserveLocalName]]. Otherwise, this name can
    *  clash with another local identifier.
    */
-  final val JSSuperClassParamName = "$superClass"
+  final val JSSuperClassParamName = LocalName("superClass$")
+
+  private val xLocalName = LocalName("x")
+
+  private val ScalaRuntimeNullClass = ClassName("scala.runtime.Null$")
+  private val ScalaRuntimeNothingClass = ClassName("scala.runtime.Nothing$")
+
+  private val dynamicImportForwarderSimpleName = SimpleMethodName("dynamicImport$")
 
   // Fresh local name generator ----------------------------------------------
 
-  private val usedLocalNames = new ScopedVar[mutable.Set[String]]
-  private val returnLabelName = new ScopedVar[VarBox[Option[String]]]
-  private val localSymbolNames = new ScopedVar[mutable.Map[Symbol, String]]
-  private val isReserved = Set("arguments", "eval")
+  private val usedLocalNames = new ScopedVar[mutable.Set[LocalName]]
+  private val localSymbolNames = new ScopedVar[mutable.Map[Symbol, LocalName]]
+  private val usedLabelNames = new ScopedVar[mutable.Set[LabelName]]
+  private val labelSymbolNames = new ScopedVar[mutable.Map[Symbol, LabelName]]
+  private val returnLabelName = new ScopedVar[VarBox[Option[LabelName]]]
 
   def withNewLocalNameScope[A](body: => A): A = {
     withScopedVars(
-        usedLocalNames := mutable.Set.empty,
-        returnLabelName := null,
-        localSymbolNames := mutable.Map.empty
+      usedLocalNames := mutable.Set.empty,
+      localSymbolNames := mutable.Map.empty,
+      usedLabelNames := mutable.Set.empty,
+      labelSymbolNames := mutable.Map.empty,
+      returnLabelName := null
     )(body)
   }
 
-  def reserveLocalName(name: String): Unit = {
+  def reserveLocalName(name: LocalName): Unit = {
     require(usedLocalNames.isEmpty,
         s"Trying to reserve the name '$name' but names have already been " +
         "allocated")
@@ -78,137 +92,200 @@ trait JSEncoding[G <: Global with Singleton] extends SubComponent {
   def withNewReturnableScope(tpe: jstpe.Type)(body: => js.Tree)(
       implicit pos: ir.Position): js.Tree = {
     withScopedVars(
-        returnLabelName := new VarBox(None)
+      returnLabelName := new VarBox(None)
     ) {
       val inner = body
       returnLabelName.get.value match {
         case None =>
           inner
         case Some(labelName) =>
-          js.Labeled(js.Ident(labelName), tpe, inner)
+          js.Labeled(labelName, tpe, inner)
       }
     }
   }
 
-  private def freshName(base: String = "x"): String = {
+  private def freshNameGeneric[N <: ir.Names.Name](base: N,
+      usedNamesSet: mutable.Set[N])(
+      withSuffix: (N, String) => N): N = {
+
     var suffix = 1
-    var longName = base
-    while (usedLocalNames(longName) || isReserved(longName)) {
+    var result = base
+    while (usedNamesSet(result)) {
       suffix += 1
-      longName = base+"$"+suffix
+      result = withSuffix(base, "$" + suffix)
     }
-    usedLocalNames += longName
-    mangleJSName(longName)
+    usedNamesSet += result
+    result
   }
 
-  def freshLocalIdent()(implicit pos: ir.Position): js.Ident =
-    js.Ident(freshName(), None)
+  private def freshName(base: LocalName): LocalName =
+    freshNameGeneric(base, usedLocalNames)(_.withSuffix(_))
 
-  def freshLocalIdent(base: String)(implicit pos: ir.Position): js.Ident =
-    js.Ident(freshName(base), Some(base))
+  private def freshName(base: String): LocalName =
+    freshName(LocalName(base))
 
-  private def localSymbolName(sym: Symbol): String =
-    localSymbolNames.getOrElseUpdate(sym, freshName(sym.name.toString))
+  def freshLocalIdent()(implicit pos: ir.Position): js.LocalIdent =
+    js.LocalIdent(freshName(xLocalName))
 
-  def getEnclosingReturnLabel()(implicit pos: ir.Position): js.Ident = {
+  def freshLocalIdent(base: LocalName)(implicit pos: ir.Position): js.LocalIdent =
+    js.LocalIdent(freshName(base))
+
+  def freshLocalIdent(base: String)(implicit pos: ir.Position): js.LocalIdent =
+    freshLocalIdent(LocalName(base))
+
+  private def localSymbolName(sym: Symbol): LocalName = {
+    localSymbolNames.getOrElseUpdate(sym, {
+      /* The emitter does not like local variables that start with a '$',
+       * because it needs to encode them not to clash with emitter-generated
+       * names. There are two common cases, caused by scalac-generated names:
+       * - the `$this` parameter of tailrec methods and "extension" methods of
+       *   AnyVals, which scalac knows as `nme.SELF`, and
+       * - the `$outer` parameter of inner class constructors, which scalac
+       *   knows as `nme.OUTER`.
+       * We choose different base names for those two cases instead, so that
+       * the avoidance mechanism of the emitter doesn't happen as a common
+       * case. It can still happen for user-defined variables, but in that case
+       * the emitter will deal with it.
+       */
+      val base = sym.name match {
+        case nme.SELF  => "this$" // instead of $this
+        case nme.OUTER => "outer" // instead of $outer
+        case name      => name.toString()
+      }
+      freshName(base)
+    })
+  }
+
+  private def freshLabelName(base: LabelName): LabelName =
+    freshNameGeneric(base, usedLabelNames)(_.withSuffix(_))
+
+  def freshLabelName(base: String): LabelName =
+    freshLabelName(LabelName(base))
+
+  private def labelSymbolName(sym: Symbol): LabelName =
+    labelSymbolNames.getOrElseUpdate(sym, freshLabelName(sym.name.toString))
+
+  def getEnclosingReturnLabel()(implicit pos: Position): LabelName = {
     val box = returnLabelName.get
     if (box == null)
       throw new IllegalStateException(s"No enclosing returnable scope at $pos")
     if (box.value.isEmpty)
-      box.value = Some(freshName("_return"))
-    js.Ident(box.value.get)
+      box.value = Some(freshLabelName("_return"))
+    box.value.get
   }
 
   // Encoding methods ----------------------------------------------------------
 
-  def encodeLabelSym(sym: Symbol)(implicit pos: Position): js.Ident = {
+  def encodeLabelSym(sym: Symbol): LabelName = {
     require(sym.isLabel, "encodeLabelSym called with non-label symbol: " + sym)
-    js.Ident(localSymbolName(sym), Some(sym.unexpandedName.decoded))
+    labelSymbolName(sym)
   }
 
-  def encodeFieldSym(sym: Symbol)(implicit pos: Position): js.Ident = {
+  def encodeFieldSym(sym: Symbol)(implicit pos: Position): js.FieldIdent = {
+    requireSymIsField(sym)
+    val className = encodeClassName(sym.owner)
+    val simpleName = SimpleFieldName(sym.name.dropLocal.toString())
+    js.FieldIdent(FieldName(className, simpleName))
+  }
+
+  /** Turns a FieldIdent for a private field an anon JS class into a string literal.
+   *
+   *  Since we only do that for anon JS classes, which cannot be extended, we
+   *  can ignore the `className` qualifier of the field ident.
+   */
+  def anonJSClassFieldIdentToStringLiteral(ident: js.FieldIdent): js.StringLiteral =
+    js.StringLiteral(ident.name.simpleName.nameString)(ident.pos)
+
+  /** Shortcut for `anonJSClassFieldIdentToStringLiteral(encodeFieldSym(sym))`. */
+  def encodeAnonJSClassFieldSymAsStringLiteral(sym: Symbol)(
+      implicit pos: Position): js.StringLiteral = {
+
+    requireSymIsField(sym)
+    js.StringLiteral(sym.name.dropLocal.toString())
+  }
+
+  private def requireSymIsField(sym: Symbol): Unit = {
     require(sym.owner.isClass && sym.isTerm && !sym.isMethod && !sym.isModule,
         "encodeFieldSym called with non-field symbol: " + sym)
-
-    val name0 = encodeMemberNameInternal(sym)
-    val name =
-      if (name0.charAt(name0.length()-1) != ' ') name0
-      else name0.substring(0, name0.length()-1)
-
-    /* Java-defined fields are always accessed as if they were private. This
-     * is necessary because they are defined as private by our .scala source
-     * files, but they are considered `!isPrivate` at use site, since their
-     * symbols come from Java-emitted .class files. Fortunately, we can
-     * easily detect those as `isJavaDefined`. This includes fields of Ref
-     * types (IntRef, ObjectRef, etc.) which were special-cased at use-site
-     * in Scala.js < 0.6.15.
-     * Caveat: because of this, changing the length of the superclass chain of
-     * a Java-defined class is a binary incompatible change.
-     *
-     * We also special case outer fields. This essentially fixes #2382, which
-     * is caused by a class having various $outer pointers in its hierarchy
-     * that point to different outer instances. Without this fix, they all
-     * collapse to the same field in the IR.
-     *
-     * TODO We should probably consider emitting *all* fields with an ancestor
-     * count. We cannot do that in a binary compatible way, though. This is
-     * filed as #2629.
-     */
-    val idSuffix: String = {
-      val usePerClassSuffix = {
-        sym.isPrivate ||
-        sym.isJavaDefined ||
-        sym.isOuterField
-      }
-      if (usePerClassSuffix)
-        sym.owner.ancestors.count(!_.isTraitOrInterface).toString
-      else
-        "f"
-    }
-
-    val encodedName = name + "$" + idSuffix
-    js.Ident(mangleJSName(encodedName), Some(sym.unexpandedName.decoded))
   }
 
   def encodeMethodSym(sym: Symbol, reflProxy: Boolean = false)(
-      implicit pos: Position): js.Ident = {
+      implicit pos: Position): js.MethodIdent = {
 
     require(sym.isMethod,
         "encodeMethodSym called with non-method symbol: " + sym)
 
-    val encodedName =
-      if (sym.isClassConstructor) "init_"
-      else mangleJSName(encodeMemberNameInternal(sym))
+    val tpe = sym.tpe
 
-    val paramsString = makeParamsString(sym, reflProxy)
+    val paramTypeRefs0 = tpe.params.map(p => paramOrResultTypeRef(p.tpe))
 
-    js.Ident(encodedName + paramsString,
-        Some(sym.unexpandedName.decoded + paramsString))
+    val hasExplicitThisParameter = isNonNativeJSClass(sym.owner)
+    val paramTypeRefs =
+      if (!hasExplicitThisParameter) paramTypeRefs0
+      else paramOrResultTypeRef(sym.owner.toTypeConstructor) :: paramTypeRefs0
+
+    val name = sym.name
+    val simpleName = SimpleMethodName(name.toString())
+
+    val methodName = {
+      if (sym.isClassConstructor)
+        MethodName.constructor(paramTypeRefs)
+      else if (reflProxy)
+        MethodName.reflectiveProxy(simpleName, paramTypeRefs)
+      else
+        MethodName(simpleName, paramTypeRefs, paramOrResultTypeRef(tpe.resultType))
+    }
+
+    js.MethodIdent(methodName)
   }
 
-  def encodeStaticMemberSym(sym: Symbol)(implicit pos: Position): js.Ident = {
+  def encodeStaticFieldGetterSym(sym: Symbol)(
+      implicit pos: Position): js.MethodIdent = {
+
     require(sym.isStaticMember,
-        "encodeStaticMemberSym called with non-static symbol: " + sym)
-    js.Ident(
-        mangleJSName(encodeMemberNameInternal(sym)) + "__" + internalName(sym.tpe),
-        Some(sym.unexpandedName.decoded))
+        "encodeStaticFieldGetterSym called with non-static symbol: " + sym)
+
+    val name = sym.name
+    val resultTypeRef = paramOrResultTypeRef(sym.tpe)
+    val methodName = MethodName(name.toString(), Nil, resultTypeRef)
+    js.MethodIdent(methodName)
   }
 
-  def encodeLocalSym(sym: Symbol)(implicit pos: Position): js.Ident = {
+  def encodeDynamicImportForwarderIdent(params: List[Symbol])(
+      implicit pos: Position): js.MethodIdent = {
+    val paramTypeRefs = params.map(sym => paramOrResultTypeRef(sym.tpe))
+    val resultTypeRef = jstpe.ClassRef(jswkn.ObjectClass)
+    val methodName =
+      MethodName(dynamicImportForwarderSimpleName, paramTypeRefs, resultTypeRef)
+
+    js.MethodIdent(methodName)
+  }
+
+  /** Computes the internal name for a type. */
+  private def paramOrResultTypeRef(tpe: Type): jstpe.TypeRef = {
+    toTypeRef(tpe) match {
+      case jstpe.ClassRef(ScalaRuntimeNothingClass) => jstpe.NothingRef
+      case jstpe.ClassRef(ScalaRuntimeNullClass)    => jstpe.NullRef
+      case typeRef                                  => typeRef
+    }
+  }
+
+  def encodeLocalSym(sym: Symbol)(implicit pos: Position): js.LocalIdent =
+    js.LocalIdent(encodeLocalSymName(sym))
+
+  def encodeLocalSymName(sym: Symbol): LocalName = {
     /* The isValueParameter case is necessary to work around an internal bug
      * of scalac: for some @varargs methods, the owner of some parameters is
      * the enclosing class rather the method, so !sym.owner.isClass fails.
      * Go figure ...
      * See #1440
      */
-    require(sym.isValueParameter ||
+    require(
+        sym.isValueParameter ||
         (!sym.owner.isClass && sym.isTerm && !sym.isMethod && !sym.isModule),
         "encodeLocalSym called with non-local symbol: " + sym)
-    js.Ident(localSymbolName(sym), Some(sym.unexpandedName.decoded))
+    localSymbolName(sym)
   }
-
-  def foreignIsImplClass(sym: Symbol): Boolean =
-    sym.isModuleClass && nme.isImplClassName(sym.name)
 
   def encodeClassType(sym: Symbol): jstpe.Type = {
     if (sym == definitions.ObjectClass) jstpe.AnyType
@@ -216,90 +293,53 @@ trait JSEncoding[G <: Global with Singleton] extends SubComponent {
     else {
       assert(sym != definitions.ArrayClass,
           "encodeClassType() cannot be called with ArrayClass")
-      jstpe.ClassType(encodeClassFullName(sym))
+      jstpe.ClassType(encodeClassName(sym), nullable = true, exact = false)
     }
   }
 
-  def encodeClassRef(sym: Symbol): jstpe.ClassRef =
-    jstpe.ClassRef(encodeClassFullName(sym))
+  def encodeClassNameIdent(sym: Symbol)(implicit pos: Position): js.ClassIdent =
+    js.ClassIdent(encodeClassName(sym))
 
-  def encodeClassFullNameIdent(sym: Symbol)(implicit pos: Position): js.Ident = {
-    js.Ident(encodeClassFullName(sym), Some(sym.fullName))
-  }
+  private val BoxedStringModuleClassName = ClassName("java.lang.String$")
 
-  def encodeClassFullName(sym: Symbol): String = {
+  def encodeClassName(sym: Symbol): ClassName = {
     assert(!sym.isPrimitiveValueClass,
-        s"Illegal encodeClassFullName(${sym.fullName}")
+        s"Illegal encodeClassName(${sym.fullName}")
     if (sym == jsDefinitions.HackedStringClass) {
-      ir.Definitions.BoxedStringClass
+      jswkn.BoxedStringClass
     } else if (sym == jsDefinitions.HackedStringModClass) {
-      "jl_String$"
-    } else if (sym == definitions.BoxedUnitClass) {
+      BoxedStringModuleClassName
+    } else if (sym == definitions.BoxedUnitClass || sym == jsDefinitions.BoxedUnitModClass) {
       // Rewire scala.runtime.BoxedUnit to java.lang.Void, as the IR expects
       // BoxedUnit$ is a JVM artifact
-      ir.Definitions.BoxedUnitClass
-    } else if (sym == jsDefinitions.BoxedUnitModClass) {
-      // Same for its module class
-      "jl_Void$"
+      jswkn.BoxedUnitClass
     } else {
-      ir.Definitions.encodeClassName(
-          sym.fullName + (if (needsModuleClassSuffix(sym)) "$" else ""))
+      ClassName(sym.fullName + (if (needsModuleClassSuffix(sym)) "$" else ""))
     }
   }
 
   def needsModuleClassSuffix(sym: Symbol): Boolean =
-    sym.isModuleClass && !foreignIsImplClass(sym)
+    sym.isModuleClass && !sym.isJavaDefined
 
-  def encodeComputedNameIdentity(sym: Symbol): String = {
-    assert(sym.owner.isModuleClass, sym)
-    encodeClassFullName(sym.owner) + "__" + encodeMemberNameInternal(sym)
+  def originalNameOfLocal(sym: Symbol): OriginalName = {
+    val irName = localSymbolName(sym)
+    val originalName = UTF8String(nme.unexpandedName(sym.name).decoded)
+    if (UTF8String.equals(originalName, irName.encoded)) NoOriginalName
+    else OriginalName(originalName)
   }
 
-  private def encodeMemberNameInternal(sym: Symbol): String =
-    sym.name.toString.replace("_", "$und")
+  def originalNameOfField(sym: Symbol): OriginalName =
+    originalNameOf(sym.name.dropLocal)
 
-  // Encoding of method signatures
+  def originalNameOfMethod(sym: Symbol): OriginalName =
+    originalNameOf(sym.name)
 
-  private def makeParamsString(sym: Symbol, reflProxy: Boolean): String = {
-    val tpe = sym.tpe
+  def originalNameOfClass(sym: Symbol): OriginalName =
+    originalNameOf(sym.fullNameAsName('.'))
 
-    val paramTypeNames0 = tpe.params map (p => internalName(p.tpe))
-
-    val hasExplicitThisParameter = isNonNativeJSClass(sym.owner)
-    val paramTypeNames =
-      if (!hasExplicitThisParameter) paramTypeNames0
-      else internalName(sym.owner.toTypeConstructor) :: paramTypeNames0
-
-    val paramAndResultTypeNames = {
-      if (sym.isClassConstructor)
-        paramTypeNames
-      else if (reflProxy)
-        paramTypeNames :+ ""
-      else
-        paramTypeNames :+ internalName(tpe.resultType)
-    }
-    paramAndResultTypeNames.mkString("__", "__", "")
+  private def originalNameOf(name: Name): OriginalName = {
+    val originalName = nme.unexpandedName(name).decoded
+    if (originalName == name.toString) NoOriginalName
+    else OriginalName(originalName)
   }
-
-  /** Computes the internal name for a type. */
-  private def internalName(tpe: Type): String = toTypeRef(tpe) match {
-    case jstpe.ClassRef("sr_Nothing$") => ir.Definitions.NothingClass
-    case jstpe.ClassRef("sr_Null$")    => ir.Definitions.NullClass
-    case jstpe.ClassRef(cls)           => cls
-
-    case jstpe.ArrayTypeRef(cls, depth) =>
-      val builder = new java.lang.StringBuilder(cls.length + depth)
-      for (i <- 0 until depth)
-        builder.append('A')
-      builder.append(cls)
-      builder.toString()
-  }
-
-  /** mangles names that are illegal in JavaScript by prepending a $
-   *  also mangles names that would collide with these mangled names
-   */
-  private def mangleJSName(name: String) =
-    if (js.isKeyword(name) || name(0).isDigit || name(0) == '$')
-      "$" + name
-    else name
 }

@@ -14,25 +14,25 @@ package org.scalajs.linker.backend.emitter
 
 import scala.collection.mutable
 
-import org.scalajs.ir.{ClassKind, Definitions}
+import org.scalajs.ir.ClassKind
+import org.scalajs.ir.Names._
 import org.scalajs.ir.Trees._
 import org.scalajs.ir.Types.Type
+import org.scalajs.ir.Version
+import org.scalajs.ir.WellKnownNames._
 
-import org.scalajs.linker._
+import org.scalajs.linker.interface.ModuleKind
 import org.scalajs.linker.standard._
+import org.scalajs.linker.standard.ModuleSet.ModuleID
 import org.scalajs.linker.CollectionsCompat.MutableMapCompatOps
 
-private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
+import EmitterNames._
+
+private[emitter] final class KnowledgeGuardian(config: Emitter.Config) {
   import KnowledgeGuardian._
 
-  private var firstRun: Boolean = true
-
-  private var isParentDataAccessed: Boolean = _
-
-  private val classes = mutable.Map.empty[String, Class]
-
-  private def askIsParentDataAccessed(invalidatable: Invalidatable): Boolean =
-    isParentDataAccessed
+  private var specialInfo: SpecialInfo = _
+  private val classes = mutable.Map.empty[ClassName, Class]
 
   /** Returns `true` if *all* caches should be invalidated.
    *
@@ -42,33 +42,58 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
    *  maintaining it. It is a better trade-off to invalidate everything in
    *  the rare events where they do change.
    */
-  def update(linkingUnit: LinkingUnit): Boolean = {
-    val hasInlineableInit = computeHasInlineableInit(linkingUnit)
+  def update(moduleSet: ModuleSet): Boolean = {
+    val hasInlineableInit = computeHasInlineableInit(moduleSet)
+    val staticFieldMirrors = computeStaticFieldMirrors(moduleSet)
 
-    var newIsParentDataAccessed = false
+    // Object is optional, because the module splitter might remove everything.
+    var objectClass: Option[LinkedClass] = None
+    var classClass: Option[LinkedClass] = None
+    var arithmeticExceptionClass: Option[LinkedClass] = None
+    var illegalArgumentExceptionClass: Option[LinkedClass] = None
+    val hijackedClasses = Iterable.newBuilder[LinkedClass]
 
     // Update classes
-    for (linkedClass <- linkingUnit.classDefs) {
-      val encodedName = linkedClass.encodedName
-      val thisClassHasInlineableInit = hasInlineableInit(encodedName)
-      classes.get(encodedName).fold[Unit] {
+    for {
+      module <- moduleSet.modules
+      linkedClass <- module.classDefs
+    } {
+      updateClass(linkedClass, Some(module.id))
+    }
+
+    moduleSet.abstractClasses.foreach(updateClass(_, module = None))
+
+    def updateClass(linkedClass: LinkedClass, module: Option[ModuleID]): Unit = {
+      val className = linkedClass.className
+      val thisClassHasInlineableInit = hasInlineableInit(className)
+      val thisClassStaticFieldMirrors =
+        staticFieldMirrors.getOrElse(className, Map.empty)
+
+      classes.get(className).fold[Unit] {
         // new class
-        classes.put(encodedName,
-            new Class(linkedClass, thisClassHasInlineableInit))
+        classes.put(className,
+            new Class(linkedClass, thisClassHasInlineableInit, thisClassStaticFieldMirrors, module))
       } { existingCls =>
-        existingCls.update(linkedClass, thisClassHasInlineableInit)
+        existingCls.update(
+            linkedClass, thisClassHasInlineableInit, thisClassStaticFieldMirrors, module)
       }
 
-      def methodExists(encodedName: String): Boolean = {
-        linkedClass.methods.exists { m =>
-          m.value.flags.namespace == MemberNamespace.Public &&
-          m.value.encodedName == encodedName
-        }
-      }
+      linkedClass.className match {
+        case ClassClass =>
+          classClass = Some(linkedClass)
 
-      linkedClass.encodedName match {
-        case Definitions.ClassClass =>
-          newIsParentDataAccessed = methodExists("getSuperclass__jl_Class")
+        case ObjectClass =>
+          objectClass = Some(linkedClass)
+
+        case ArithmeticExceptionClass =>
+          arithmeticExceptionClass = Some(linkedClass)
+
+        case IllegalArgumentExceptionClass =>
+          illegalArgumentExceptionClass = Some(linkedClass)
+
+        case name if HijackedClasses(name) =>
+          hijackedClasses += linkedClass
+
         case _ =>
       }
     }
@@ -76,37 +101,34 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
     // Garbage collection
     classes.filterInPlace((_, cls) => cls.testAndResetIsAlive())
 
-    val invalidateAll = !firstRun && {
-      newIsParentDataAccessed != isParentDataAccessed
+    val invalidateAll = {
+      if (specialInfo == null) {
+        specialInfo = new SpecialInfo(objectClass, classClass,
+            arithmeticExceptionClass, illegalArgumentExceptionClass,
+            hijackedClasses.result(), moduleSet.globalInfo)
+        false
+      } else {
+        specialInfo.update(objectClass, classClass,
+            arithmeticExceptionClass, illegalArgumentExceptionClass,
+            hijackedClasses.result(), moduleSet.globalInfo)
+      }
     }
-    firstRun = false
-
-    isParentDataAccessed = newIsParentDataAccessed
 
     if (invalidateAll)
-      classes.valuesIterator.foreach(_.unregisterAll())
+      unregisterAll()
+
     invalidateAll
   }
 
-  private def computeHasInlineableInit(linkingUnit: LinkingUnit): Set[String] = {
-    /* Those classes are instantiated in CoreJSLib. Since they have
-     * multiple constructors and/or are not final, CoreJSLib is written
-     * with the assumption that they will not have an inlineable init. We
-     * therefore blacklist them here so that this is always true.
-     *
-     * Note that j.l.Class is not in this list, because it has only one
-     * constructor and is final, so even CoreJSLib can assume it always
-     * has an inlineable init.
-     */
-    val blackList = Set(
-        "jl_ArithmeticException",
-        "jl_ClassCastException",
-        "jl_ArrayIndexOutOfBoundsException",
-        "sjsr_UndefinedBehaviorError",
-        "jl_CloneNotSupportedException"
-    )
+  def unregisterAll(): Unit = {
+    classes.valuesIterator.foreach(_.unregisterAll())
+    specialInfo.unregisterAll()
+  }
 
-    val scalaClassDefs = linkingUnit.classDefs.filter(_.kind.isClass)
+  private def computeHasInlineableInit(moduleSet: ModuleSet): Set[ClassName] = {
+    val scalaClassDefs = moduleSet.modules
+      .flatMap(_.classDefs)
+      .filter(_.kind.isClass)
 
     val classesWithInstantiatedSubclasses = scalaClassDefs
       .withFilter(_.hasInstances)
@@ -116,23 +138,45 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
 
     def enableInlineableInitFor(classDef: LinkedClass): Boolean = {
       /* We can enable inlined init if all of the following apply:
-       * - The class is not blacklisted
        * - It does not have any instantiated subclass
        * - It has exactly one constructor
        *
        * By construction, this is always true for module classes.
        */
-      !blackList(classDef.encodedName) &&
-      !classesWithInstantiatedSubclasses(classDef.encodedName) && {
-        classDef.methods.count(
-            x => x.value.flags.namespace == MemberNamespace.Constructor) == 1
+      !classesWithInstantiatedSubclasses(classDef.className) && {
+        classDef.methods.count(x => x.flags.namespace == MemberNamespace.Constructor) == 1
       }
     }
 
     scalaClassDefs
       .withFilter(enableInlineableInitFor(_))
-      .map(_.encodedName)
+      .map(_.className)
       .toSet
+  }
+
+  private def computeStaticFieldMirrors(
+      moduleSet: ModuleSet): Map[ClassName, Map[FieldName, List[String]]] = {
+    if (config.coreSpec.moduleKind != ModuleKind.NoModule) {
+      Map.empty
+    } else {
+      var result = Map.empty[ClassName, Map[FieldName, List[String]]]
+      for {
+        module <- moduleSet.modules
+        tle <- module.topLevelExports
+      } {
+        tle.tree match {
+          case TopLevelFieldExportDef(_, exportName, FieldIdent(fieldName)) =>
+            val className = tle.owningClass
+            val mirrors = result.getOrElse(className, Map.empty)
+            val newExportNames = exportName :: mirrors.getOrElse(fieldName, Nil)
+            val newMirrors = mirrors.updated(fieldName, newExportNames)
+            result = result.updated(className, newMirrors)
+
+          case _ =>
+        }
+      }
+      result
+    }
   }
 
   abstract class KnowledgeAccessor extends GlobalKnowledge with Invalidatable {
@@ -142,61 +186,104 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
      */
 
     def isParentDataAccessed: Boolean =
-      askIsParentDataAccessed(this)
+      specialInfo.askIsParentDataAccessed(this)
 
-    def isInterface(className: String): Boolean =
+    def isClassClassInstantiated: Boolean =
+      specialInfo.askIsClassClassInstantiated(this)
+
+    def isArithmeticExceptionClassInstantiatedWithStringArg: Boolean =
+      specialInfo.askIsArithmeticExceptionClassInstantiatedWithStringArg(this)
+
+    def isIllegalArgumentExceptionClassInstantiatedWithNoArg: Boolean =
+      specialInfo.askIsIllegalArgumentExceptionClassInstantiatedWithNoArg(this)
+
+    def isInterface(className: ClassName): Boolean =
       classes(className).askIsInterface(this)
 
-    def getAllScalaClassFieldDefs(className: String): List[FieldDef] =
+    def getAllScalaClassFieldDefs(className: ClassName): List[AnyFieldDef] =
       classes(className).askAllScalaClassFieldDefs(this)
 
-    def hasInlineableInit(className: String): Boolean =
+    def hasInlineableInit(className: ClassName): Boolean =
       classes(className).askHasInlineableInit(this)
 
-    def hasStoredSuperClass(className: String): Boolean =
+    def hasStoredSuperClass(className: ClassName): Boolean =
       classes(className).askHasStoredSuperClass(this)
 
-    def getJSClassCaptureTypes(className: String): Option[List[Type]] =
+    def hasInstances(className: ClassName): Boolean =
+      classes(className).askHasInstances(this)
+
+    def getJSClassCaptureTypes(className: ClassName): Option[List[Type]] =
       classes(className).askJSClassCaptureTypes(this)
 
-    def getJSNativeLoadSpec(className: String): Option[JSNativeLoadSpec] =
+    def getJSNativeLoadSpec(className: ClassName): Option[JSNativeLoadSpec] =
       classes(className).askJSNativeLoadSpec(this)
 
-    def getSuperClassOfJSClass(className: String): String =
+    def getJSNativeLoadSpec(className: ClassName, member: MethodName): JSNativeLoadSpec =
+      classes(className).askJSNativeLoadSpec(this, member)
+
+    def getSuperClassOfJSClass(className: ClassName): ClassName =
       classes(className).askJSSuperClass(this)
 
-    def getJSClassFieldDefs(className: String): List[FieldDef] =
-      classes(className).askJSClassFieldDefs(this)
+    def getFieldDefs(className: ClassName): List[AnyFieldDef] =
+      classes(className).askFieldDefs(this)
 
-    def getStaticFieldMirrors(className: String, field: String): List[String] =
-      classes(className).askStaticFieldMirrors(this, field)
+    def getStaticFieldMirrors(field: FieldName): List[String] =
+      classes(field.className).askStaticFieldMirrors(this, field)
+
+    def getModule(className: ClassName): ModuleID =
+      classes(className).askModule(this)
+
+    def methodsInRepresentativeClasses(): List[(MethodName, Set[ClassName])] =
+      specialInfo.askMethodsInRepresentativeClasses(this)
+
+    def methodsInObject(): List[MethodDef] =
+      specialInfo.askMethodsInObject(this)
+
+    def hijackedDescendants(className: ClassName): Set[ClassName] =
+      specialInfo.askHijackedDescendants(this).getOrElse(className, Set.empty)
+
+    def isAncestorOfHijackedClass(className: ClassName): Boolean =
+      specialInfo.askHijackedDescendants(this).contains(className)
   }
 
   private class Class(initClass: LinkedClass,
-      initHasInlineableInit: Boolean)
+      initHasInlineableInit: Boolean,
+      initStaticFieldMirrors: Map[FieldName, List[String]],
+      initModule: Option[ModuleID])
       extends Unregisterable {
+
+    private val className = initClass.className
 
     private var isAlive: Boolean = true
 
     private var isInterface = computeIsInterface(initClass)
     private var hasInlineableInit = initHasInlineableInit
     private var hasStoredSuperClass = computeHasStoredSuperClass(initClass)
+    private var hasInstances = initClass.hasInstances
     private var jsClassCaptureTypes = computeJSClassCaptureTypes(initClass)
     private var jsNativeLoadSpec = computeJSNativeLoadSpec(initClass)
+    private var jsNativeMemberLoadSpecs = computeJSNativeMemberLoadSpecs(initClass)
     private var superClass = computeSuperClass(initClass)
+    private var fieldDefsVersion = computeFieldDefsVersion(initClass)
     private var fieldDefs = computeFieldDefs(initClass)
-    private var staticFieldMirrors = computeStaticFieldMirrors(initClass)
+    private var staticFieldMirrors = initStaticFieldMirrors
+    private var module = initModule
 
     private val isInterfaceAskers = mutable.Set.empty[Invalidatable]
     private val hasInlineableInitAskers = mutable.Set.empty[Invalidatable]
     private val hasStoredSuperClassAskers = mutable.Set.empty[Invalidatable]
+    private val hasInstancesAskers = mutable.Set.empty[Invalidatable]
     private val jsClassCaptureTypesAskers = mutable.Set.empty[Invalidatable]
     private val jsNativeLoadSpecAskers = mutable.Set.empty[Invalidatable]
+    private val jsNativeMemberLoadSpecsAskers = mutable.Set.empty[Invalidatable]
     private val superClassAskers = mutable.Set.empty[Invalidatable]
     private val fieldDefsAskers = mutable.Set.empty[Invalidatable]
     private val staticFieldMirrorsAskers = mutable.Set.empty[Invalidatable]
+    private val moduleAskers = mutable.Set.empty[Invalidatable]
 
-    def update(linkedClass: LinkedClass, newHasInlineableInit: Boolean): Unit = {
+    def update(linkedClass: LinkedClass, newHasInlineableInit: Boolean,
+        newStaticFieldMirrors: Map[FieldName, List[String]],
+        newModule: Option[ModuleID]): Unit = {
       isAlive = true
 
       val newIsInterface = computeIsInterface(linkedClass)
@@ -216,6 +303,12 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
         invalidateAskers(hasStoredSuperClassAskers)
       }
 
+      val newHasInstances = linkedClass.hasInstances
+      if (newHasInstances != hasInstances) {
+        hasInstances = newHasInstances
+        invalidateAskers(hasInstancesAskers)
+      }
+
       val newJSClassCaptureTypes = computeJSClassCaptureTypes(linkedClass)
       if (newJSClassCaptureTypes != jsClassCaptureTypes) {
         jsClassCaptureTypes = newJSClassCaptureTypes
@@ -228,22 +321,33 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
         invalidateAskers(jsNativeLoadSpecAskers)
       }
 
+      val newJSNativeMemberLoadSpecs = computeJSNativeMemberLoadSpecs(linkedClass)
+      if (newJSNativeMemberLoadSpecs != jsNativeMemberLoadSpecs) {
+        jsNativeMemberLoadSpecs = newJSNativeMemberLoadSpecs
+        invalidateAskers(jsNativeMemberLoadSpecsAskers)
+      }
+
       val newSuperClass = computeSuperClass(linkedClass)
       if (newSuperClass != superClass) {
         superClass = newSuperClass
         invalidateAskers(superClassAskers)
       }
 
-      val newFieldDefs = computeFieldDefs(linkedClass)
-      if (newFieldDefs != fieldDefs) {
-        fieldDefs = newFieldDefs
+      val newFieldDefsVersion = computeFieldDefsVersion(linkedClass)
+      if (!newFieldDefsVersion.sameVersion(fieldDefsVersion)) {
+        fieldDefsVersion = newFieldDefsVersion
+        fieldDefs = computeFieldDefs(linkedClass)
         invalidateAskers(fieldDefsAskers)
       }
 
-      val newStaticFieldMirrors = computeStaticFieldMirrors(linkedClass)
       if (newStaticFieldMirrors != staticFieldMirrors) {
         staticFieldMirrors = newStaticFieldMirrors
         invalidateAskers(staticFieldMirrorsAskers)
+      }
+
+      if (newModule != module) {
+        module = newModule
+        invalidateAskers(moduleAskers)
       }
     }
 
@@ -259,42 +363,50 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
     private def computeJSNativeLoadSpec(linkedClass: LinkedClass): Option[JSNativeLoadSpec] =
       linkedClass.jsNativeLoadSpec
 
-    private def computeSuperClass(linkedClass: LinkedClass): String =
-      linkedClass.superClass.fold[String](null)(_.name)
-
-    private def computeFieldDefs(linkedClass: LinkedClass): List[FieldDef] =
-      linkedClass.fields
-
-    private def computeStaticFieldMirrors(
-        linkedClass: LinkedClass): Map[String, List[String]] = {
-      if (config.coreSpec.moduleKind != ModuleKind.NoModule ||
-          linkedClass.topLevelExports.isEmpty) {
+    private def computeJSNativeMemberLoadSpecs(
+        linkedClass: LinkedClass): Map[MethodName, JSNativeLoadSpec] = {
+      if (linkedClass.topLevelImportDefs.isEmpty) {
         // Fast path
         Map.empty
       } else {
-        val result = mutable.Map.empty[String, List[String]]
-        for (export <- linkedClass.topLevelExports) {
-          export.value match {
-            case TopLevelFieldExportDef(exportName, Ident(fieldName, _)) =>
-              result(fieldName) = exportName :: result.getOrElse(fieldName, Nil)
-            case _ =>
-              ()
+        linkedClass.topLevelImportDefs
+          .collect {
+            case JSNativeMemberDef(_, name, loadSpec) => name.name -> loadSpec
           }
-        }
-        result.toMap
+          .toMap
       }
     }
 
-    private def invalidateAskers(askers: mutable.Set[Invalidatable]): Unit = {
-      /* Calling `invalidateAndUnregisterFromAll()` will cause the
-       * `Invalidatable` to call `unregister()` in this class, which will
-       * mutate the `askers` set. Therefore, we cannot directly iterate over
-       * `askers`, and need to take a snapshot instead.
-       */
-      val snapshot = askers.toSeq
-      askers.clear()
-      snapshot.foreach(_.invalidate())
+    private def computeSuperClass(linkedClass: LinkedClass): ClassName =
+      linkedClass.superClass.fold[ClassName](null.asInstanceOf[ClassName])(_.name)
+
+    /** Computes the version of the fields of a `LinkedClass`.
+     *
+     *  The version is composed of
+     *
+     *  - the `version` of the `LinkedClass` itself, which will change every
+     *    time the definition of a field changes,
+     *  - a boolean indicating whether there is at least one `JSFieldDef`,
+     *    which will change every time the reachability analysis of the
+     *    `JSFieldDef`s changes (because we either keep all or none of
+     *    them), and
+     *  - the list of simple names of the `FieldDef`s, which will change every
+     *    time the reachability analysis of the `FieldDef`s changes.
+     *
+     *  We do not try to use the names of `JSFieldDef`s because they are
+     *  `Tree`s, which are not efficiently comparable nor versionable here.
+     */
+    private def computeFieldDefsVersion(linkedClass: LinkedClass): Version = {
+      val hasAnyJSField = linkedClass.fields.exists(_.isInstanceOf[JSFieldDef])
+      val hasAnyJSFieldVersion = Version.fromByte(if (hasAnyJSField) 1 else 0)
+      val scalaFieldNamesVersion = linkedClass.fields.collect {
+        case FieldDef(_, FieldIdent(name), _, _) => Version.fromUTF8String(name.simpleName.encoded)
+      }
+      Version.combine((linkedClass.version :: hasAnyJSFieldVersion :: scalaFieldNamesVersion): _*)
     }
+
+    private def computeFieldDefs(linkedClass: LinkedClass): List[AnyFieldDef] =
+      linkedClass.fields
 
     def testAndResetIsAlive(): Boolean = {
       val result = isAlive
@@ -308,7 +420,7 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
       isInterface
     }
 
-    def askAllScalaClassFieldDefs(invalidatable: Invalidatable): List[FieldDef] = {
+    def askAllScalaClassFieldDefs(invalidatable: Invalidatable): List[AnyFieldDef] = {
       invalidatable.registeredTo(this)
       superClassAskers += invalidatable
       fieldDefsAskers += invalidatable
@@ -330,6 +442,12 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
       hasStoredSuperClass
     }
 
+    def askHasInstances(invalidatable: Invalidatable): Boolean = {
+      invalidatable.registeredTo(this)
+      hasInstancesAskers += invalidatable
+      hasInstances
+    }
+
     def askJSClassCaptureTypes(invalidatable: Invalidatable): Option[List[Type]] = {
       invalidatable.registeredTo(this)
       jsClassCaptureTypesAskers += invalidatable
@@ -342,33 +460,52 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
       jsNativeLoadSpec
     }
 
-    def askJSSuperClass(invalidatable: Invalidatable): String = {
+    def askJSNativeLoadSpec(invalidatable: Invalidatable, member: MethodName): JSNativeLoadSpec = {
+      invalidatable.registeredTo(this)
+      jsNativeMemberLoadSpecsAskers += invalidatable
+      jsNativeMemberLoadSpecs(member)
+    }
+
+    def askJSSuperClass(invalidatable: Invalidatable): ClassName = {
       invalidatable.registeredTo(this)
       superClassAskers += invalidatable
       superClass
     }
 
-    def askJSClassFieldDefs(invalidatable: Invalidatable): List[FieldDef] = {
+    def askFieldDefs(invalidatable: Invalidatable): List[AnyFieldDef] = {
       invalidatable.registeredTo(this)
       fieldDefsAskers += invalidatable
       fieldDefs
     }
 
     def askStaticFieldMirrors(invalidatable: Invalidatable,
-        field: String): List[String] = {
+        field: FieldName): List[String] = {
       invalidatable.registeredTo(this)
       staticFieldMirrorsAskers += invalidatable
       staticFieldMirrors.getOrElse(field, Nil)
+    }
+
+    def askModule(invalidatable: Invalidatable): ModuleID = {
+      invalidatable.registeredTo(this)
+      moduleAskers += invalidatable
+      module.getOrElse {
+        throw new AssertionError(
+            "trying to get module of abstract class " + className.nameString)
+      }
     }
 
     def unregister(invalidatable: Invalidatable): Unit = {
       isInterfaceAskers -= invalidatable
       hasInlineableInitAskers -= invalidatable
       hasStoredSuperClassAskers -= invalidatable
+      hasInstancesAskers -= invalidatable
       jsClassCaptureTypesAskers -= invalidatable
       jsNativeLoadSpecAskers -= invalidatable
+      jsNativeMemberLoadSpecsAskers -= invalidatable
       superClassAskers -= invalidatable
       fieldDefsAskers -= invalidatable
+      staticFieldMirrorsAskers -= invalidatable
+      moduleAskers -= invalidatable
     }
 
     /** Call this when we invalidate all caches. */
@@ -376,11 +513,227 @@ private[emitter] final class KnowledgeGuardian(config: CommonPhaseConfig) {
       isInterfaceAskers.clear()
       hasInlineableInitAskers.clear()
       hasStoredSuperClassAskers.clear()
+      hasInstancesAskers.clear()
       jsClassCaptureTypesAskers.clear()
       jsNativeLoadSpecAskers.clear()
+      jsNativeMemberLoadSpecsAskers.clear()
       superClassAskers.clear()
       fieldDefsAskers.clear()
+      staticFieldMirrorsAskers.clear()
+      moduleAskers.clear()
     }
+  }
+
+  private class SpecialInfo(initObjectClass: Option[LinkedClass],
+      initClassClass: Option[LinkedClass],
+      initArithmeticExceptionClass: Option[LinkedClass],
+      initIllegalArgumentExceptionClass: Option[LinkedClass],
+      initHijackedClasses: Iterable[LinkedClass],
+      initGlobalInfo: LinkedGlobalInfo)
+      extends Unregisterable {
+
+    import SpecialInfo._
+
+    private var instantiatedSpecialClassBitSet = {
+      computeInstantiatedSpecialClassBitSet(initClassClass,
+          initArithmeticExceptionClass, initIllegalArgumentExceptionClass)
+    }
+
+    private var isParentDataAccessed =
+      computeIsParentDataAccessed(initGlobalInfo)
+
+    private var methodsInRepresentativeClasses =
+      computeMethodsInRepresentativeClasses(initObjectClass, initHijackedClasses)
+
+    private var methodsInObject =
+      computeMethodsInObject(initObjectClass)
+
+    private var hijackedDescendants =
+      computeHijackedDescendants(initHijackedClasses)
+
+    // Askers of isXClassInstantiated -- merged for all X because in practice that's only the CoreJSLib
+    private val instantiatedSpecialClassAskers = mutable.Set.empty[Invalidatable]
+
+    private val methodsInRepresentativeClassesAskers = mutable.Set.empty[Invalidatable]
+    private val methodsInObjectAskers = mutable.Set.empty[Invalidatable]
+
+    def update(objectClass: Option[LinkedClass], classClass: Option[LinkedClass],
+        arithmeticExceptionClass: Option[LinkedClass],
+        illegalArgumentExceptionClass: Option[LinkedClass],
+        hijackedClasses: Iterable[LinkedClass],
+        globalInfo: LinkedGlobalInfo): Boolean = {
+      var invalidateAll = false
+
+      val newInstantiatedSpecialClassBitSet = computeInstantiatedSpecialClassBitSet(
+          classClass, arithmeticExceptionClass, illegalArgumentExceptionClass)
+      if (newInstantiatedSpecialClassBitSet != instantiatedSpecialClassBitSet) {
+        instantiatedSpecialClassBitSet = newInstantiatedSpecialClassBitSet
+        invalidateAskers(instantiatedSpecialClassAskers)
+      }
+
+      val newIsParentDataAccessed = computeIsParentDataAccessed(globalInfo)
+      if (newIsParentDataAccessed != isParentDataAccessed) {
+        isParentDataAccessed = newIsParentDataAccessed
+        invalidateAll = true
+      }
+
+      val newMethodsInRepresentativeClasses =
+        computeMethodsInRepresentativeClasses(objectClass, hijackedClasses)
+      if (newMethodsInRepresentativeClasses != methodsInRepresentativeClasses) {
+        methodsInRepresentativeClasses = newMethodsInRepresentativeClasses
+        invalidateAskers(methodsInRepresentativeClassesAskers)
+      }
+
+      /* Usage-sites of methodsInObject never cache.
+       * Therefore, we do not bother comparing (which is expensive), but simply
+       * invalidate.
+       */
+      methodsInObject = computeMethodsInObject(objectClass)
+      invalidateAskers(methodsInObjectAskers)
+
+      val newHijackedDescendants = computeHijackedDescendants(hijackedClasses)
+      if (newHijackedDescendants != hijackedDescendants) {
+        hijackedDescendants = newHijackedDescendants
+        invalidateAll = true
+      }
+
+      invalidateAll
+    }
+
+    private def computeInstantiatedSpecialClassBitSet(
+        classClass: Option[LinkedClass],
+        arithmeticExceptionClass: Option[LinkedClass],
+        illegalArgumentExceptionClass: Option[LinkedClass]): Int = {
+
+      def isInstantiatedWithCtor(linkedClass: Option[LinkedClass], ctor: MethodName): Boolean = {
+        linkedClass.exists { cls =>
+          cls.hasDirectInstances && cls.methods.exists(_.methodName == ctor)
+        }
+      }
+
+      var bitSet: Int = 0
+      if (classClass.exists(_.hasDirectInstances))
+        bitSet |= SpecialClassClass
+      if (isInstantiatedWithCtor(arithmeticExceptionClass, StringArgConstructorName))
+        bitSet |= SpecialClassArithmeticExceptionWithStringArg
+      if (isInstantiatedWithCtor(illegalArgumentExceptionClass, NoArgConstructorName))
+        bitSet |= SpecialClassIllegalArgumentExceptionWithNoArg
+      bitSet
+    }
+
+    private def computeIsParentDataAccessed(globalInfo: LinkedGlobalInfo): Boolean =
+      globalInfo.isClassSuperClassUsed
+
+    private def computeMethodsInRepresentativeClasses(objectClass: Option[LinkedClass],
+        hijackedClasses: Iterable[LinkedClass]): List[(MethodName, Set[ClassName])] = {
+      val representativeClasses =
+        objectClass.iterator ++ hijackedClasses.iterator
+
+      val result = mutable.HashMap.empty[MethodName, mutable.Set[ClassName]]
+
+      for {
+        representativeClass <- representativeClasses
+        method <- representativeClass.methods
+        if method.flags.namespace == MemberNamespace.Public
+      } {
+        result.getOrElseUpdate(method.methodName, mutable.Set.empty) +=
+          representativeClass.className
+      }
+
+      result.toList.sortBy(_._1.nameString).map(kv => (kv._1, kv._2.toSet))
+    }
+
+    private def computeMethodsInObject(objectClass: Option[LinkedClass]): List[MethodDef] = {
+      objectClass.toList.flatMap(
+          _.methods.filter(_.flags.namespace == MemberNamespace.Public))
+    }
+
+    private def computeHijackedDescendants(
+        hijackedClasses: Iterable[LinkedClass]): Map[ClassName, Set[ClassName]] = {
+      val pairs = for {
+        hijackedClass <- hijackedClasses
+        ancestor <- hijackedClass.ancestors
+        if ancestor != hijackedClass.className
+      } yield {
+        (ancestor, hijackedClass)
+      }
+
+      for {
+        (ancestor, pairs) <- pairs.groupBy(_._1)
+      } yield {
+        (ancestor, pairs.map(_._2.className).toSet)
+      }
+    }
+
+    def askIsClassClassInstantiated(invalidatable: Invalidatable): Boolean = {
+      invalidatable.registeredTo(this)
+      instantiatedSpecialClassAskers += invalidatable
+      (instantiatedSpecialClassBitSet & SpecialClassClass) != 0
+    }
+
+    def askIsArithmeticExceptionClassInstantiatedWithStringArg(
+        invalidatable: Invalidatable): Boolean = {
+      invalidatable.registeredTo(this)
+      instantiatedSpecialClassAskers += invalidatable
+      (instantiatedSpecialClassBitSet & SpecialClassArithmeticExceptionWithStringArg) != 0
+    }
+
+    def askIsIllegalArgumentExceptionClassInstantiatedWithNoArg(
+        invalidatable: Invalidatable): Boolean = {
+      invalidatable.registeredTo(this)
+      instantiatedSpecialClassAskers += invalidatable
+      (instantiatedSpecialClassBitSet & SpecialClassIllegalArgumentExceptionWithNoArg) != 0
+    }
+
+    def askIsParentDataAccessed(invalidatable: Invalidatable): Boolean =
+      isParentDataAccessed
+
+    def askMethodsInRepresentativeClasses(
+        invalidatable: Invalidatable): List[(MethodName, Set[ClassName])] = {
+      invalidatable.registeredTo(this)
+      methodsInRepresentativeClassesAskers += invalidatable
+      methodsInRepresentativeClasses
+    }
+
+    def askMethodsInObject(invalidatable: Invalidatable): List[MethodDef] = {
+      invalidatable.registeredTo(this)
+      methodsInObjectAskers += invalidatable
+      methodsInObject
+    }
+
+    def askHijackedDescendants(
+        invalidatable: Invalidatable): Map[ClassName, Set[ClassName]] = {
+      hijackedDescendants
+    }
+
+    def unregister(invalidatable: Invalidatable): Unit = {
+      instantiatedSpecialClassAskers -= invalidatable
+      methodsInRepresentativeClassesAskers -= invalidatable
+      methodsInObjectAskers -= invalidatable
+    }
+
+    /** Call this when we invalidate all caches. */
+    def unregisterAll(): Unit = {
+      instantiatedSpecialClassAskers.clear()
+      methodsInRepresentativeClassesAskers.clear()
+      methodsInObjectAskers.clear()
+    }
+  }
+
+  private object SpecialInfo {
+    private final val SpecialClassClass = 1 << 0
+    private final val SpecialClassArithmeticExceptionWithStringArg = 1 << 1
+    private final val SpecialClassIllegalArgumentExceptionWithNoArg = 1 << 2
+  }
+
+  private def invalidateAskers(askers: mutable.Set[Invalidatable]): Unit = {
+    /* Calling `invalidate` cause the `Invalidatable` to call `unregister()` in
+     * this class, which will mutate the `askers` set. Therefore, we cannot
+     * directly iterate over `askers`, and need to take a snapshot instead.
+     */
+    val snapshot = askers.toSeq
+    askers.clear()
+    snapshot.foreach(_.invalidate())
   }
 }
 

@@ -15,14 +15,11 @@ package org.scalajs.testsuite.javalib.lang
 import org.junit.Test
 import org.junit.Assert._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
 import org.scalajs.testsuite.utils.Platform._
 
 class IntegerTest {
-
-  // Explicitly define these as `var`'s to avoid any compile-time constant folding
-  val MaxValue: Int = Int.MaxValue
-  val MinValue: Int = Int.MinValue
+  import IntegerTest._
 
   @Test def `reverseBytes`(): Unit = {
     assertEquals(0xefbeadde, Integer.reverseBytes(0xdeadbeef))
@@ -451,26 +448,26 @@ class IntegerTest {
   @Test def toBinaryString(): Unit = {
     assertEquals("11111111111111111111111111111111", Integer.toBinaryString(-1))
     assertEquals("11111111111111111101100011101111", Integer.toBinaryString(-10001))
-    assertEquals("10000000000000000000000000000000", Integer.toBinaryString(MinValue))
-    assertEquals("1111111111111111111111111111111", Integer.toBinaryString(MaxValue))
+    assertEquals("10000000000000000000000000000000", Integer.toBinaryString(Int.MinValue))
+    assertEquals("1111111111111111111111111111111", Integer.toBinaryString(Int.MaxValue))
   }
 
   @Test def toHexString(): Unit = {
     assertEquals("ffffffff", Integer.toHexString(-1))
     assertEquals("ffffd8ef", Integer.toHexString(-10001))
-    assertEquals("80000000", Integer.toHexString(MinValue))
+    assertEquals("80000000", Integer.toHexString(Int.MinValue))
     assertEquals("8007613e", Integer.toHexString(-2147000002))
-    assertEquals("7fffffff", Integer.toHexString(MaxValue))
+    assertEquals("7fffffff", Integer.toHexString(Int.MaxValue))
   }
 
   @Test def toOctalString(): Unit = {
     assertEquals("37777777777", Integer.toOctalString(-1))
     assertEquals("37777754357", Integer.toOctalString(-10001))
-    assertEquals("20000000000", Integer.toOctalString(MinValue))
-    assertEquals("17777777777", Integer.toOctalString(MaxValue))
+    assertEquals("20000000000", Integer.toOctalString(Int.MinValue))
+    assertEquals("17777777777", Integer.toOctalString(Int.MaxValue))
   }
 
-  @Test def compareTo(): Unit = {
+  @Test def compareToInteger(): Unit = {
     def compare(x: Int, y: Int): Int =
       new Integer(x).compareTo(new Integer(y))
 
@@ -480,7 +477,7 @@ class IntegerTest {
     assertEquals(0, compare(3, 3))
   }
 
-  @Test def should_be_a_Comparable(): Unit = {
+  @Test def compareTo(): Unit = {
     def compare(x: Any, y: Any): Int =
       x.asInstanceOf[Comparable[Any]].compareTo(y)
 
@@ -490,12 +487,14 @@ class IntegerTest {
     assertEquals(0, compare(3, 3))
   }
 
-  @Test def should_parse_strings(): Unit = {
+  @Test def parseString(): Unit = {
     def test(s: String, v: Int, radix: Int = 10): Unit = {
       assertEquals(v, Integer.parseInt(s, radix))
       assertEquals(v, Integer.valueOf(s, radix).intValue())
-      if (radix == 10)
+      if (radix == 10) {
         assertEquals(v, new Integer(s).intValue())
+        assertEquals(v, Integer.decode(s))
+      }
     }
 
     test("0", 0)
@@ -505,24 +504,25 @@ class IntegerTest {
     test("30000", 30000)
     test("-90000", -90000)
     test("Kona", 411787, 27)
-    if (!executingInJVMOnJDK6)
-      test("+42", 42)
+    test("+42", 42)
     test("-0", 0)
     test("-FF", -255, 16)
 
     test("\u1045\u1043\u1047", 537)
     test("\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040159", 159)
-    if (!executingInJVMOnJDK6)
-      test("+\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040159", 159)
+    test("+\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040159", 159)
     test("-\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040159", -159)
 
     test("\uff21\uff34", 389, 36)
     test("\uff41\uff54", 389, 36)
   }
 
-  @Test def should_reject_invalid_strings_when_parsing(): Unit = {
-    def test(s: String, radix: Int = 10): Unit =
-      expectThrows(classOf[NumberFormatException], Integer.parseInt(s, radix))
+  @Test def parseStringInvalidThrows(): Unit = {
+    def test(s: String, radix: Int = 10): Unit = {
+      assertThrows(classOf[NumberFormatException], Integer.parseInt(s, radix))
+      if (radix == 10 && s != null)
+        assertThrows(classOf[NumberFormatException], Integer.decode(s))
+    }
 
     test("abc")
     test("5a")
@@ -551,31 +551,29 @@ class IntegerTest {
     test("127", 127)
     test("30000", 30000)
     test("Kona", 411787, 27)
-    if (!executingInJVMOnJDK6)
-      test("+42", 42)
+    test("+42", 42)
     test("FF", 255, 16)
     test("4294967295", 0xffffffff)
     test("ffFFffFF", 0xffffffff, 16)
 
     test("\u1045\u1043\u1047", 537)
     test("\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040159", 159)
-    if (!executingInJVMOnJDK6)
-      test("+\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040159", 159)
+    test("+\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040\u1040159", 159)
 
     test("\uff21\uff34", 389, 36)
     test("\uff41\uff54", 389, 36)
   }
 
-  @Test def parseUnsignedIntInvalid(): Unit = {
+  @Test def parseUnsignedIntInvalidThrows(): Unit = {
     def test(s: String, radix: Int = 10): Unit = {
-      expectThrows(classOf[NumberFormatException],
+      assertThrows(classOf[NumberFormatException],
           Integer.parseUnsignedInt(s, radix))
     }
 
     test("abc")
     test("5a")
-    test("4294967296")
-    test("ffFFffFF", 20)
+    test("4294967296") // the last addition of `digit` (the '6') overflows
+    test("ffFFffFF", 20) // the last multiplication by `radix` overflows
     test("99", 8)
     test("-")
     test("")
@@ -594,10 +592,13 @@ class IntegerTest {
     test("\ud804\udcf0")
   }
 
-  @Test def should_parse_strings_in_base_16(): Unit = {
+  @Test def parseStringBase16(): Unit = {
     def test(s: String, v: Int): Unit = {
       assertEquals(v, Integer.parseInt(s, 16))
       assertEquals(v, Integer.valueOf(s, 16).intValue())
+      assertEquals(v, Integer.decode(insertAfterSign("0x", s)))
+      assertEquals(v, Integer.decode(insertAfterSign("0X", s)))
+      assertEquals(v, Integer.decode(insertAfterSign("#", s)))
     }
 
     test("0", 0x0)
@@ -606,6 +607,42 @@ class IntegerTest {
     test("-24", -0x24)
     test("30000", 0x30000)
     test("-90000", -0x90000)
+  }
+
+  @Test def decodeStringBase8(): Unit = {
+    def test(s: String, v: Int): Unit =
+      assertEquals(v, Integer.decode(s))
+
+    test("00", 0)
+    test("012345670", 2739128)
+    test("-012", -10)
+  }
+
+  @Test def decodeStringInvalidThrows(): Unit = {
+    def test(s: String): Unit =
+      assertThrows(classOf[NumberFormatException], Integer.decode(s))
+
+    // sign after another sign or after a base prefix
+    test("++0")
+    test("--0")
+    test("0x+1")
+    test("0X-1")
+    test("#-1")
+    test("0-1")
+
+    // empty string after sign or after base prefix
+    test("")
+    test("+")
+    test("-")
+    test("-0x")
+    test("+0X")
+    test("#")
+
+    // integer too large
+    test("0x80000000")
+    test("-0x800000001")
+    test("020000000000")
+    test("-020000000001")
   }
 
   @Test def highestOneBit(): Unit = {
@@ -631,7 +668,7 @@ class IntegerTest {
     assertEquals(Int.MinValue, Integer.lowestOneBit(Int.MinValue))
   }
 
-  @Test def toString_without_radix(): Unit = {
+  @Test def testToString(): Unit = {
     /* Spec ported from
      * https://github.com/gwtproject/gwt/blob/master/user/test/com/google/gwt/emultest/java/lang/IntegerTest.java
      */
@@ -644,7 +681,7 @@ class IntegerTest {
     assertEquals("0", Integer.toString(0))
   }
 
-  @Test def toString_with_radix(): Unit = {
+  @Test def toStringRadix(): Unit = {
     /* Spec ported from
      * https://github.com/gwtproject/gwt/blob/master/user/test/com/google/gwt/emultest/java/lang/IntegerTest.java
      */
@@ -660,5 +697,213 @@ class IntegerTest {
     assertEquals("-80000000", Integer.toString(-2147483648, 16))
     assertEquals("-10000000000000000000000000000000", Integer.toString(-2147483648, 2))
     assertEquals("-2147483648", Integer.toString(-2147483648, 10))
+  }
+
+  @Test def parseUnsignedIntRadix(): Unit = {
+    def test(s: String, v: Int, radix: Int = 10): Unit =
+      assertEquals(v, Integer.parseUnsignedInt(s, radix))
+
+    test("0", 0)
+    test("5", 5)
+    test("127", 127)
+    test("+100", 100)
+    test("30000", 30000)
+    test("Kona", 411787, 27)
+    test("+42", 42)
+    test("+0", 0)
+    test("FF", 255, 16)
+    test("4000000000", 0xee6b2800)
+    test("4294967295", 0xffffffff)
+  }
+
+  @Test def parseUnsignedIntRadixInvalidThrows(): Unit = {
+    def test(s: String, radix: Int = 10): Unit =
+      assertThrows(classOf[NumberFormatException], Integer.parseUnsignedInt(s, radix))
+
+    test("abc")
+    test("5a")
+    test("99", 8)
+    test("4294967296") // the last addition of `digit` (the '6') overflows
+    test("-30000")
+    test("+")
+    test("-")
+    test("-0")
+    test("0.0")
+  }
+
+  @Test def parseUnsignedIntBase16(): Unit = {
+    def test(s: String, v: Int): Unit =
+      assertEquals(v, Integer.parseUnsignedInt(s, 16))
+
+    test("0", 0x0)
+    test("5", 0x5)
+    test("ff", 0xff)
+    test("24", 0x24)
+    test("30000", 0x30000)
+    test("90000", 0x90000)
+    test("EE6B2800", 0xee6b2800)
+    test("FFFFFFFF", 0xffffffff)
+  }
+
+  @Test def compareUnsigned(): Unit = {
+    def compare(x: Int, y: Int): Int =
+      Integer.compareUnsigned(x, y)
+
+    assertTrue(compare(0, 5) < 0)
+    assertTrue(compare(10, 9) > 0)
+    assertEquals(0, compare(3, 3))
+    assertEquals(0, compare(0xffffffff, 0xffffffff))
+    assertTrue(compare(0xee6b2800, 0xffffffff) < 0)
+    assertTrue(compare(0xffffffff, 0xee6b2800) > 0)
+    assertTrue(compare(0xee6b2800, 3) > 0)
+    assertTrue(compare(3, 0xee6b2800) < 0)
+  }
+
+  @Test def toUnsignedLong(): Unit = {
+    def test(x: Int, y: Long): Unit =
+      assertEquals(y, Integer.toUnsignedLong(x))
+
+    test(0, 0L)
+    test(5, 5L)
+    test(43345, 43345L)
+    test(0xee6b2800, 0xee6b2800L)
+    test(0xffffffff, 0xffffffffL)
+  }
+
+  @Test def divideUnsigned(): Unit = {
+    def test(dividend: Int, divisor: Int, result: Int): Unit =
+      assertEquals(result, Integer.divideUnsigned(dividend, divisor))
+
+    test(1, 1, 1)
+    test(4, 2, 2)
+    test(3, 2, 1)
+    test(0xffffffff, 7, 613566756)
+    test(0xffffffff, 0xee6b2800, 1)
+    test(0xee6b2800, 2, 2000000000)
+
+    assertThrows(classOf[ArithmeticException], Integer.divideUnsigned(5, 0))
+  }
+
+  @Test def remainderUnsigned(): Unit = {
+    def test(dividend: Int, divisor: Int, result: Int): Unit =
+      assertEquals(result, Integer.remainderUnsigned(dividend, divisor))
+
+    test(1, 1, 0)
+    test(4, 2, 0)
+    test(3, 2, 1)
+    test(0xffffffff, 7, 3)
+    test(0xffffffff, 0xee6b2800, 294967295)
+    test(0xee6b2800, 2, 0)
+
+    assertThrows(classOf[ArithmeticException], Integer.remainderUnsigned(5, 0))
+  }
+
+  @Test def toUnsignedString(): Unit = {
+    assertEquals("0", Integer.toUnsignedString(0))
+    assertEquals("12345", Integer.toUnsignedString(12345))
+    assertEquals("242134", Integer.toUnsignedString(242134))
+    assertEquals("2147483647", Integer.toUnsignedString(Integer.MAX_VALUE))
+    assertEquals("4294967295", Integer.toUnsignedString(0xffffffff))
+    assertEquals("4000000000", Integer.toUnsignedString(0xee6b2800))
+  }
+
+  @Test def toUnsignedStringRadix(): Unit = {
+    assertEquals("17777777777", Integer.toUnsignedString(2147483647, 8))
+    assertEquals("7fffffff", Integer.toUnsignedString(2147483647, 16))
+    assertEquals("1111111111111111111111111111111",
+        Integer.toUnsignedString(2147483647, 2))
+    assertEquals("2147483647", Integer.toUnsignedString(2147483647, 10))
+    assertEquals("ffffffff", Integer.toUnsignedString(0xffffffff, 16))
+    assertEquals("4294967295", Integer.toUnsignedString(0xffffffff, 10))
+    assertEquals("ee6b2800", Integer.toUnsignedString(0xee6b2800, 16))
+    assertEquals("4000000000", Integer.toUnsignedString(0xee6b2800, 10))
+  }
+
+  @Test def testStaticHashCode(): Unit = {
+    for (i <- -256 to 256)
+      assertEquals(i.hashCode(), Integer.hashCode(i))
+    assertEquals(Int.MaxValue.hashCode, Integer.hashCode(Int.MaxValue))
+    assertEquals(Int.MinValue.hashCode, Integer.hashCode(Int.MinValue))
+  }
+
+  @Test def sum(): Unit = {
+    // 20 ramdomly generated cases
+    assertEquals(-486527733, Integer.sum(1456847510, -1943375243))
+    assertEquals(-1777185932, Integer.sum(-1675020769, -102165163))
+    assertEquals(-382453283, Integer.sum(-492132773, 109679490))
+    assertEquals(-2145997235, Integer.sum(-894160208, -1251837027))
+    assertEquals(-166873150, Integer.sum(-1194861016, 1027987866))
+    assertEquals(167480017, Integer.sum(-1898001389, 2065481406))
+    assertEquals(673489472, Integer.sum(-311003114, 984492586))
+    assertEquals(-1388364075, Integer.sum(-295074587, -1093289488))
+    assertEquals(2111094009, Integer.sum(2022415614, 88678395))
+    assertEquals(-1328656780, Integer.sum(-245624037, -1083032743))
+    assertEquals(636897760, Integer.sum(-1075180485, 1712078245))
+    assertEquals(820269321, Integer.sum(-1177939094, 1998208415))
+    assertEquals(-1050613003, Integer.sum(-1682860108, 632247105))
+    assertEquals(529249703, Integer.sum(1738870504, -1209620801))
+    assertEquals(-1577064582, Integer.sum(1763433497, 954469217))
+    assertEquals(1134712592, Integer.sum(1576449779, -441737187))
+    assertEquals(1853525167, Integer.sum(2067118443, -213593276))
+    assertEquals(-1850714324, Integer.sum(-1087866031, -762848293))
+    assertEquals(-1545149944, Integer.sum(2107199426, 642617926))
+    assertEquals(1312700933, Integer.sum(-928260456, -2054005907))
+  }
+
+  @Test def max(): Unit = {
+    // 20 ramdomly generated cases
+    assertEquals(-270277483, Integer.max(-1790671798, -270277483))
+    assertEquals(1571368144, Integer.max(1571368144, -695891091))
+    assertEquals(-488353138, Integer.max(-488353138, -1038365399))
+    assertEquals(-1299154858, Integer.max(-1299154858, -1746941781))
+    assertEquals(-415165707, Integer.max(-1330811400, -415165707))
+    assertEquals(-222101245, Integer.max(-222101245, -1612799352))
+    assertEquals(6223768, Integer.max(6223768, -251871910))
+    assertEquals(289107587, Integer.max(-1807128180, 289107587))
+    assertEquals(1419004964, Integer.max(1419004964, 1391551452))
+    assertEquals(1407516948, Integer.max(770531115, 1407516948))
+    assertEquals(127943959, Integer.max(-1353241025, 127943959))
+    assertEquals(1079220095, Integer.max(1079220095, -715415624))
+    assertEquals(-451651341, Integer.max(-1758211842, -451651341))
+    assertEquals(-719501136, Integer.max(-719501136, -720273331))
+    assertEquals(136611495, Integer.max(136611495, 82825750))
+    assertEquals(-572096554, Integer.max(-572096554, -1266456161))
+    assertEquals(247666619, Integer.max(247666619, -599014758))
+    assertEquals(979958171, Integer.max(979958171, -773699262))
+    assertEquals(915015222, Integer.max(915015222, -895428609))
+    assertEquals(1214239393, Integer.max(-2023661282, 1214239393))
+  }
+
+  @Test def min(): Unit = {
+    // 20 ramdomly generated cases
+    assertEquals(-1360305565, Integer.min(1070612756, -1360305565))
+    assertEquals(-1185998566, Integer.min(-1185998566, -943883433))
+    assertEquals(-1767105808, Integer.min(-741471209, -1767105808))
+    assertEquals(-586878137, Integer.min(-586878137, 1591634109))
+    assertEquals(-1366663787, Integer.min(1017257927, -1366663787))
+    assertEquals(-1769768449, Integer.min(-1769768449, -1206771005))
+    assertEquals(-516274758, Integer.min(-516274758, 125028855))
+    assertEquals(450306051, Integer.min(1929097253, 450306051))
+    assertEquals(-2141159510, Integer.min(1232270613, -2141159510))
+    assertEquals(456228627, Integer.min(1466133314, 456228627))
+    assertEquals(-1549637221, Integer.min(1643492178, -1549637221))
+    assertEquals(535997424, Integer.min(535997424, 1403224346))
+    assertEquals(-1441182511, Integer.min(1100365123, -1441182511))
+    assertEquals(-778397275, Integer.min(1752406139, -778397275))
+    assertEquals(-1083524011, Integer.min(-1083524011, 906792532))
+    assertEquals(-674955836, Integer.min(-674955836, 100476859))
+    assertEquals(-33102740, Integer.min(702254105, -33102740))
+    assertEquals(-1266058648, Integer.min(-1266058648, 1907502126))
+    assertEquals(-1750379520, Integer.min(-1750379520, 1293903630))
+    assertEquals(-641887949, Integer.min(-335824862, -641887949))
+  }
+}
+
+object IntegerTest {
+  def insertAfterSign(prefix: String, s: String): String = {
+    if (s.charAt(0) == '+' || s.charAt(0) == '-')
+      s.substring(0, 1) + prefix + s.substring(1)
+    else
+      prefix + s
   }
 }

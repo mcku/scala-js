@@ -16,677 +16,946 @@ import scala.annotation.tailrec
 
 import scala.collection.mutable
 
-import org.scalajs.ir.{ClassKind, Position}
+import org.scalajs.ir.{ClassKind, Position, Version}
+import org.scalajs.ir.Names._
+import org.scalajs.ir.OriginalName.NoOriginalName
 import org.scalajs.ir.Trees.{JSNativeLoadSpec, MemberNamespace}
-import org.scalajs.ir.Definitions.{ObjectClass, decodeClassName, isConstructorName}
+import org.scalajs.ir.WellKnownNames._
 
 import org.scalajs.logging._
 
-import org.scalajs.linker._
+import org.scalajs.linker.Nullables._
+import org.scalajs.linker.interface._
 import org.scalajs.linker.standard._
+import org.scalajs.linker.standard.ModuleSet.ModuleID
 import org.scalajs.linker.backend.javascript.{Trees => js, _}
 import org.scalajs.linker.CollectionsCompat.MutableMapCompatOps
 
+import EmitterNames._
 import GlobalRefUtils._
 
 /** Emits a desugared JS tree to a builder */
-final class Emitter private (config: CommonPhaseConfig,
-    internalOptions: InternalOptions) {
+final class Emitter(config: Emitter.Config, prePrinter: Emitter.PrePrinter) {
 
   import Emitter._
-  import config.coreSpec._
+  import config._
+  import coreSpec._
 
-  def this(config: CommonPhaseConfig) = {
-    this(config, InternalOptions())
-  }
+  require(!config.minify || prePrinter == PrePrinter.Off,
+      "When using the 'minify' option, the prePrinter must be Off.")
+
+  private implicit val globalRefTracking: GlobalRefTracking =
+    config.topLevelGlobalRefTracking
 
   private val knowledgeGuardian = new KnowledgeGuardian(config)
 
+  private val uncachedKnowledge = new knowledgeGuardian.KnowledgeAccessor {}
+
+  private val nameGen: NameGen = new NameGen
+
   private class State(val lastMentionedDangerousGlobalRefs: Set[String]) {
-    val jsGen: JSGen = {
-      new JSGen(semantics, esFeatures, moduleKind, internalOptions,
-          lastMentionedDangerousGlobalRefs)
+    val nameCompressor =
+      if (minify) Some(new NameCompressor(config))
+      else None
+
+    val sjsGen: SJSGen = {
+      val jsGen = new JSGen(config)
+      val varGen = new VarGen(jsGen, nameGen, lastMentionedDangerousGlobalRefs)
+      new SJSGen(jsGen, nameGen, varGen, nameCompressor)
     }
 
-    val classEmitter: ClassEmitter = new ClassEmitter(jsGen)
+    val classEmitter: ClassEmitter = new ClassEmitter(sjsGen)
 
-    val coreJSLib: WithGlobals[js.Tree] = CoreJSLib.build(jsGen)
+    val everyFileStart: List[js.Tree] = {
+      // This prePrint does not count in the statistics
+      prePrinter.prePrint(sjsGen.declarePrototypeVar, 0)
+    }
+
+    val coreJSLibCache: CoreJSLibCache = new CoreJSLibCache
+
+    val moduleCaches: mutable.Map[ModuleID, ModuleCache] = mutable.Map.empty
+
+    val classCaches: mutable.Map[ClassID, ClassCache] = mutable.Map.empty
   }
 
   private var state: State = new State(Set.empty)
 
-  private def jsGen: JSGen = state.jsGen
-  private def classEmitter: ClassEmitter = state.classEmitter
-  private def coreJSLib: WithGlobals[js.Tree] = state.coreJSLib
+  private def resetState(lastMentionedDangerousGlobalRefs: Set[String]): Unit = {
+    state = new State(lastMentionedDangerousGlobalRefs)
+    knowledgeGuardian.unregisterAll() // free references to old caches (see #5354).
+  }
 
-  private val classCaches = mutable.Map.empty[List[String], ClassCache]
+  private def jsGen: JSGen = state.sjsGen.jsGen
+  private def sjsGen: SJSGen = state.sjsGen
+  private def classEmitter: ClassEmitter = state.classEmitter
+  private def classCaches: mutable.Map[ClassID, ClassCache] = state.classCaches
 
   private[this] var statsClassesReused: Int = 0
   private[this] var statsClassesInvalidated: Int = 0
   private[this] var statsMethodsReused: Int = 0
   private[this] var statsMethodsInvalidated: Int = 0
+  private[this] var statsPrePrints: Int = 0
 
   val symbolRequirements: SymbolRequirement =
-    Emitter.symbolRequirements(config.coreSpec)
+    Emitter.symbolRequirements(config)
 
-  private val needsIIFEWrapper = {
-    moduleKind match {
-      case ModuleKind.NoModule                             => true
-      case ModuleKind.ESModule | ModuleKind.CommonJSModule => false
-    }
-  }
+  val injectedIRFiles: Seq[IRFile] = PrivateLibHolder.files
 
-  // Private API for the Closure backend (could be opened if necessary)
-  private[backend] def withOptimizeBracketSelects(
-      optimizeBracketSelects: Boolean): Emitter = {
-    new Emitter(config,
-        internalOptions.withOptimizeBracketSelects(optimizeBracketSelects))
-  }
+  def emit(moduleSet: ModuleSet, logger: Logger): Result = {
+    val WithGlobals(body, globalRefs) = emitInternal(moduleSet, logger)
 
-  // Private API for the Closure backend (could be opened if necessary)
-  private[backend] def withTrackAllGlobalRefs(
-      trackAllGlobalRefs: Boolean): Emitter = {
-    new Emitter(config,
-        internalOptions.withTrackAllGlobalRefs(trackAllGlobalRefs))
-  }
-
-  def emitAll(unit: LinkingUnit, builder: JSLineBuilder,
-      logger: Logger): Unit = {
-    emitInternal(unit, builder, logger) {
-      val topLevelVars = topLevelVarDeclarations(unit)
-      if (topLevelVars.nonEmpty) {
-        val kw = if (esFeatures.useECMAScript2015) "let " else "var "
-        builder.addLine(topLevelVars.mkString(kw, ", ", ";"))
-      }
-
-      if (needsIIFEWrapper)
-        builder.addLine("(function(){")
-
-      builder.addLine("'use strict';")
-    } {
-      if (needsIIFEWrapper)
-        builder.addLine("}).call(this);")
-    }
-  }
-
-  /** Emits everything but the core JS lib to the builder, and returns the
-   *  top-level var declarations.
-   *
-   *  This is special for the Closure back-end.
-   *
-   *  @return
-   *    A pair whose first element is the list of top-level variables to be
-   *    declared (only non-empty with `NoModule`), and whose second element is
-   *    the set of tracked global variables that are accessed.
-   */
-  private[backend] def emitForClosure(unit: LinkingUnit, builder: JSBuilder,
-      logger: Logger): (List[String], Set[String]) = {
-    val globalRefs = emitInternal(unit, builder, logger) {
-      // no prelude
-    } {
-      /* When emitting for GCC, we must make sure that every referenced
-       * variable is statically declared. This is usually the case, except for
-       * some methods of hijacked classes that are accessed by the dispatch
-       * functions $dp_xyz. If the target methods are not reachable, they will
-       * not be declared, and GCC won't be happy.
-       *
-       * The following code makes sure to provide declarations for those
-       * methods if they are not reachable, to appease GCC.
-       *
-       * It would be valid and appropriate to introduce those declarations for
-       * the non-GCC output as well. However, that is not necessary, so we
-       * avoid it simply so that we do not perform useless work.
-       *
-       * None of this would be necessary if we generated the $dp_xyz functions
-       * programmatically, based on the set of reachable methods of hijacked
-       * classes, which eventually we should do. But in the meantime, this
-       * makes things work.
-       */
-
-      import org.scalajs.ir.Definitions._
-      import org.scalajs.ir.Position.NoPosition
-      import org.scalajs.ir.Trees.MethodDef
-
-      val equals = "equals__O__Z"
-      val hashCode = "hashCode__I"
-      val compareTo = "compareTo__O__I"
-
-      val requiredDefaultMethodDecls = List(
-          BoxedBooleanClass -> List(hashCode, compareTo),
-          BoxedCharacterClass -> List(equals, hashCode, compareTo),
-          BoxedDoubleClass -> List(
-              equals, hashCode, compareTo, "byteValue__B", "shortValue__S",
-              "intValue__I", "longValue__J", "floatValue__F", "doubleValue__D"
-          ),
-          BoxedUnitClass -> List(hashCode),
-          BoxedStringClass -> List(
-              hashCode, compareTo, "length__I", "charAt__I__C",
-              "subSequence__I__I__jl_CharSequence"
-          )
-      )
-
-      for ((className, requiredMethodNames) <- requiredDefaultMethodDecls) {
-        val methods = unit.classDefs
-          .find(_.encodedName == className)
-          .fold[List[Versioned[MethodDef]]](Nil)(_.methods)
-        for {
-          methodName <- requiredMethodNames
-          if !methods.exists { m =>
-            m.value.flags.namespace == MemberNamespace.Public &&
-            m.value.name.encodedName == methodName
-          }
-        } {
-          implicit val pos = NoPosition
-          val field = jsGen.envField("f", className + "__" + methodName).ident
-          builder.addJSTree(js.VarDef(field, None))
-        }
-      }
-
-      // CloneNotSupportedException's nullary constructor
-      locally {
-        val className = "jl_CloneNotSupportedException"
-        val ctorName = "init___"
-        val ctorIsDefined = unit.classDefs
-          .find(_.encodedName == className)
-          .fold(false)(_.methods.exists { m =>
-            m.value.flags.namespace == MemberNamespace.Constructor &&
-            m.value.encodedName == ctorName
-          })
-        if (!ctorIsDefined) {
-          implicit val pos = NoPosition
-          val field = jsGen.envField("ct", className + "__" + ctorName).ident
-          builder.addJSTree(js.VarDef(field, None))
-        }
-      }
-    }
-
-    (topLevelVarDeclarations(unit), globalRefs)
-  }
-
-  private def topLevelVarDeclarations(unit: LinkingUnit): List[String] = {
-    moduleKind match {
+    val result = moduleKind match {
       case ModuleKind.NoModule =>
-        val topLevelExportNames = mutable.Set.empty[String]
-        for {
-          classDef <- unit.classDefs
-          export <- classDef.topLevelExports
-        } {
-          topLevelExportNames += export.value.topLevelExportName
+        assert(moduleSet.modules.size <= 1)
+        val topLevelVars = moduleSet.modules
+          .headOption.toList
+          .flatMap(_.topLevelExports)
+          .map(_.exportName)
+
+        val header = {
+          val maybeTopLevelVarDecls = if (topLevelVars.nonEmpty) {
+            val kw = if (esFeatures.useECMAScript2015Semantics) "let " else "var "
+            topLevelVars.mkString(kw, ",", ";\n")
+          } else {
+            ""
+          }
+          config.jsHeader + maybeTopLevelVarDecls + "(function(){\n"
         }
-        topLevelExportNames.toList
+
+        val footer = "}).call(this);\n"
+
+        new Result(header, body, footer, topLevelVars, globalRefs)
 
       case ModuleKind.ESModule | ModuleKind.CommonJSModule =>
-        Nil
-    }
-  }
-
-  /** Returns the set of tracked global refs. */
-  private def emitInternal(unit: LinkingUnit, builder: JSBuilder,
-      logger: Logger)(
-      emitPrelude: => Unit)(
-      emitPostlude: => Unit): Set[String] = {
-    startRun(unit)
-    try {
-      val orderedClasses = unit.classDefs.sortWith(compareClasses)
-      val WithGlobals(generatedClasses, trackedGlobalRefs) = {
-        logger.time("Emitter: Generate classes") {
-          genAllClasses(orderedClasses, logger, secondAttempt = false)
-        }
-      }
-
-      logger.time("Emitter: Write trees") {
-        emitPrelude
-
-        val WithGlobals(coreJSLibTree, coreJSLibTrackedGlobalRefs) = coreJSLib
-        builder.addJSTree(coreJSLibTree)
-
-        emitModuleImports(orderedClasses, builder, logger)
-
-        emitGeneratedClasses(builder, generatedClasses)
-
-        // Emit the module initializers
-        for (moduleInitializer <- unit.moduleInitializers)
-          emitModuleInitializer(moduleInitializer, builder)
-
-        emitPostlude
-
-        trackedGlobalRefs ++ coreJSLibTrackedGlobalRefs
-      }
-    } finally {
-      endRun(logger)
-    }
-  }
-
-  private def emitGeneratedClasses(builder: JSBuilder,
-      generatedClasses: List[GeneratedClass]): Unit = {
-    /* Emit all the classes, in the appropriate order:
-     *
-     * 1. All class definitions, which depend on nothing but their
-     *    superclasses.
-     * 2. The initialization of $L0, the Long zero, which depends on the
-     *    definition of the RuntimeLong class.
-     * 3. All static field definitions, which depend on nothing, except those
-     *    of type Long which need $L0.
-     * 4. All static initializers, which in the worst case can observe some
-     *    "zero" state of other static field definitions, but must not
-     *    observe a *non-initialized* (undefined) state.
-     * 5. All the exports, during which some JS class creation can happen,
-     *    causing JS static initializers to run. Those also must not observe
-     *    a non-initialized state of other static fields.
-     */
-
-    def emitJSTrees(trees: List[js.Tree]): Unit =
-      trees.foreach(builder.addJSTree(_))
-
-    for (generatedClass <- generatedClasses)
-      emitJSTrees(generatedClass.main)
-
-    if (!jsGen.useBigIntForLongs)
-      builder.addJSTree(emitInitializeL0())
-
-    for (generatedClass <- generatedClasses)
-      emitJSTrees(generatedClass.staticFields)
-
-    for (generatedClass <- generatedClasses)
-      emitJSTrees(generatedClass.staticInitialization)
-
-    for (generatedClass <- generatedClasses)
-      emitJSTrees(generatedClass.topLevelExports)
-  }
-
-  private def emitModuleImports(orderedClasses: List[LinkedClass],
-      builder: JSBuilder, logger: Logger): Unit = {
-
-    def foreachImportedModule(f: (String, Position) => Unit): Unit = {
-      val encounteredModuleNames = mutable.Set.empty[String]
-      for (classDef <- orderedClasses) {
-        def addModuleRef(module: String): Unit = {
-          if (encounteredModuleNames.add(module))
-            f(module, classDef.pos)
-        }
-        classDef.jsNativeLoadSpec match {
-          case None =>
-          case Some(JSNativeLoadSpec.Global(_, _)) =>
-          case Some(JSNativeLoadSpec.Import(module, _)) =>
-            addModuleRef(module)
-          case Some(JSNativeLoadSpec.ImportWithGlobalFallback(
-              JSNativeLoadSpec.Import(module, _), _)) =>
-            addModuleRef(module)
-        }
-      }
+        new Result(config.jsHeader, body, "", Nil, globalRefs)
     }
 
-    moduleKind match {
-      case ModuleKind.NoModule =>
-        var importsFound: Boolean = false
+    for (compressor <- state.nameCompressor) {
+      compressor.allocateNames(moduleSet, logger)
 
-        for (classDef <- orderedClasses) {
-          classDef.jsNativeLoadSpec match {
-            case Some(JSNativeLoadSpec.Import(module, _)) =>
-              val displayName = decodeClassName(classDef.encodedName)
-              logger.error(s"$displayName needs to be imported from module " +
-                  s"'$module' but module support is disabled.")
-              importsFound = true
-
-            case _ =>
-              // ok
-          }
-        }
-
-        if (importsFound) {
-          throw new LinkingException(
-              "There were module imports without fallback to global " +
-              "variables, but module support is disabled.\n" +
-              "To enable module support, set `scalaJSLinkerConfig ~= " +
-              "(_.withModuleKind(ModuleKind.CommonJSModule))`.")
-        }
-
-      case ModuleKind.ESModule =>
-        foreachImportedModule { (module, pos0) =>
-          implicit val pos = pos0
-          val from = js.StringLiteral(module)
-          val moduleBinding = jsGen.envModuleField(module).ident
-          val importStat = js.ImportNamespace(moduleBinding, from)
-          builder.addJSTree(importStat)
-        }
-
-      case ModuleKind.CommonJSModule =>
-        foreachImportedModule { (module, pos0) =>
-          implicit val pos = pos0
-          val rhs = js.Apply(js.VarRef(js.Ident("require")),
-              List(js.StringLiteral(module)))
-          val lhs = jsGen.envModuleField(module)
-          val decl = jsGen.genLet(lhs.ident, mutable = false, rhs)
-          builder.addJSTree(decl)
-        }
+      /* Throw away the whole state, but keep the mentioned dangerous global refs.
+       * Note that instances of the name compressor's entries are still alive
+       * at this point, since they are referenced from `DelayedIdent` nodes in
+       * the result trees.
+       */
+      resetState(state.lastMentionedDangerousGlobalRefs)
     }
+
+    result
   }
 
-  /** Emits the initialization of the global variable `$L0`, which holds the
-   *  zero of type `Long`.
-   */
-  private def emitInitializeL0(): js.Tree = {
-    implicit val pos = Position.NoPosition
-
-    // $L0 = new RuntimeLong(0, 0)
-    js.Assign(
-        jsGen.envField("L0"),
-        js.New(jsGen.encodeClassVar(LongImpl.RuntimeLongClass),
-            List(js.IntLiteral(0), js.IntLiteral(0)))
-    )
-  }
-
-  private def compareClasses(lhs: LinkedClass, rhs: LinkedClass) = {
-    val lhsAC = lhs.ancestors.size
-    val rhsAC = rhs.ancestors.size
-    if (lhsAC != rhsAC) lhsAC < rhsAC
-    else lhs.encodedName.compareTo(rhs.encodedName) < 0
-  }
-
-  private def startRun(unit: LinkingUnit): Unit = {
+  private def emitInternal(moduleSet: ModuleSet,
+      logger: Logger): WithGlobals[Map[ModuleID, (List[js.Tree], Boolean)]] = {
+    // Reset caching stats.
     statsClassesReused = 0
     statsClassesInvalidated = 0
     statsMethodsReused = 0
     statsMethodsInvalidated = 0
+    statsPrePrints = 0
 
-    val invalidateAll = knowledgeGuardian.update(unit)
-    if (invalidateAll)
+    // Update GlobalKnowledge.
+    val invalidateAll = knowledgeGuardian.update(moduleSet)
+    if (invalidateAll) {
+      state.coreJSLibCache.invalidate()
       classCaches.clear()
+    }
 
+    // Inform caches about new run.
     classCaches.valuesIterator.foreach(_.startRun())
+
+    try {
+      emitAvoidGlobalClash(moduleSet, logger, secondAttempt = false)
+    } finally {
+      // Report caching stats (extracted in EmitterTest).
+      logger.debug(
+          s"Emitter: Class tree cache stats: reused: $statsClassesReused -- " +
+          s"invalidated: $statsClassesInvalidated")
+      logger.debug(
+          s"Emitter: Method tree cache stats: reused: $statsMethodsReused -- " +
+          s"invalidated: $statsMethodsInvalidated")
+      logger.debug(s"Emitter: Pre prints: $statsPrePrints")
+
+      // Inform caches about run completion.
+      state.moduleCaches.filterInPlace((_, c) => c.cleanAfterRun())
+      classCaches.filterInPlace((_, c) => c.cleanAfterRun())
+    }
   }
 
-  private def endRun(logger: Logger): Unit = {
-    logger.debug(
-        s"Emitter: Class tree cache stats: reused: $statsClassesReused -- "+
-        s"invalidated: $statsClassesInvalidated")
-    logger.debug(
-        s"Emitter: Method tree cache stats: reused: $statsMethodsReused -- "+
-        s"invalidated: $statsMethodsInvalidated")
-    classCaches.filterInPlace((_, c) => c.cleanAfterRun())
+  private def prePrint(trees: List[js.Tree], indent: Int): List[js.Tree] = {
+    statsPrePrints += 1
+    prePrinter.prePrint(trees, indent)
   }
 
-  /** Generates all the desugared classes.
+  private def prePrint(tree: js.Tree, indent: Int): List[js.Tree] =
+    prePrint(tree :: Nil, indent)
+
+  /** Emits all JavaScript code avoiding clashes with global refs.
    *
    *  If, at the end of the process, the set of accessed dangerous globals has
    *  changed, invalidate *everything* and start over. If at first you don't
    *  succeed, ...
    */
   @tailrec
-  private def genAllClasses(orderedClasses: List[LinkedClass], logger: Logger,
-      secondAttempt: Boolean): WithGlobals[List[GeneratedClass]] = {
-
-    val objectClass = orderedClasses.find(_.name.name == ObjectClass).get
-    val generatedClasses = orderedClasses.map(genClass(_, objectClass))
-    val trackedGlobalRefs = generatedClasses.foldLeft(Set.empty[String]) {
-      (prev, generatedClass) =>
-        unionPreserveEmpty(prev, generatedClass.trackedGlobalRefs)
-    }
+  private def emitAvoidGlobalClash(moduleSet: ModuleSet,
+      logger: Logger, secondAttempt: Boolean): WithGlobals[Map[ModuleID,
+      (List[js.Tree], Boolean)]] = {
+    val result = emitOnce(moduleSet, logger)
 
     val mentionedDangerousGlobalRefs =
-      if (!internalOptions.trackAllGlobalRefs) trackedGlobalRefs
-      else GlobalRefUtils.keepOnlyDangerousGlobalRefs(trackedGlobalRefs)
+      GlobalRefTracking.Dangerous.refineFrom(topLevelGlobalRefTracking, result.globalVarNames)
 
     if (mentionedDangerousGlobalRefs == state.lastMentionedDangerousGlobalRefs) {
-      WithGlobals(generatedClasses, trackedGlobalRefs)
+      result
     } else {
       assert(!secondAttempt,
           "Uh oh! The second attempt gave a different set of dangerous " +
-          "global refs than the first one.")
+          "global refs than the first one.\n" +
+          "Before:" + state.lastMentionedDangerousGlobalRefs.toList.sorted.mkString(
+              "\n  ", "\n  ", "\n") +
+          "After:" + mentionedDangerousGlobalRefs.toList.sorted.mkString("\n  ", "\n  ", ""))
 
+      // !!! This log message is tested in EmitterTest
       logger.debug(
           "Emitter: The set of dangerous global refs has changed. " +
           "Going to re-generate the world.")
 
-      state = new State(mentionedDangerousGlobalRefs)
-      classCaches.clear()
-      genAllClasses(orderedClasses, logger, secondAttempt = true)
+      resetState(mentionedDangerousGlobalRefs)
+      emitAvoidGlobalClash(moduleSet, logger, secondAttempt = true)
     }
   }
 
-  private def genClass(linkedClass: LinkedClass,
-      objectClass: LinkedClass): GeneratedClass = {
-    val className = linkedClass.encodedName
-    val classCache = getClassCache(linkedClass.ancestors)
-    val classTreeCache = classCache.getCache(linkedClass.version)
-    val kind = linkedClass.kind
+  private def emitOnce(moduleSet: ModuleSet,
+      logger: Logger): WithGlobals[Map[ModuleID, (List[js.Tree], Boolean)]] = {
+    // Genreate classes first so we can measure time separately.
+    val generatedClasses = logger.time("Emitter: Generate Classes") {
+      moduleSet.modules.map { module =>
+        val moduleContext = ModuleContext.fromModule(module)
+        val orderedClasses = module.classDefs.sortWith(compareClasses)
+        module.id -> orderedClasses.map(genClass(_, moduleContext))
+      }.toMap
+    }
+
+    var trackedGlobalRefs = Set.empty[String]
+    def extractWithGlobals[T](x: WithGlobals[T]) = {
+      trackedGlobalRefs = unionPreserveEmpty(trackedGlobalRefs, x.globalVarNames)
+      x.value
+    }
+
+    val moduleTrees = logger.time("Emitter: Write trees") {
+      moduleSet.modules.map { module =>
+        var changed = false
+        def extractChangedAndWithGlobals[T](x: (WithGlobals[T], Boolean)): T = {
+          changed ||= x._2
+          extractWithGlobals(x._1)
+        }
+
+        val moduleContext = ModuleContext.fromModule(module)
+        val moduleCache = state.moduleCaches.getOrElseUpdate(module.id, new ModuleCache)
+
+        val moduleClasses = generatedClasses(module.id)
+
+        changed ||= moduleClasses.exists(_.changed)
+
+        val moduleImports = extractChangedAndWithGlobals {
+          moduleCache.getOrComputeImports(
+              module.externalDependencies, module.internalDependencies) {
+            genModuleImports(module).map(prePrint(_, 0))
+          }
+        }
+
+        val topLevelExports = extractChangedAndWithGlobals {
+          /* We cache top level exports all together, rather than individually,
+           * since typically there are few.
+           */
+          moduleCache.getOrComputeTopLevelExports(module.topLevelExports) {
+            classEmitter.genTopLevelExports(module.topLevelExports)(
+                moduleContext, moduleCache).map(prePrint(_, 0))
+          }
+        }
+
+        val moduleInitializers = extractChangedAndWithGlobals {
+          val initializers = module.initializers.toList
+          moduleCache.getOrComputeInitializers(initializers) {
+            WithGlobals.list(initializers.map { initializer =>
+              classEmitter.genModuleInitializer(initializer)(
+                  moduleContext, moduleCache)
+            }).map(prePrint(_, 0))
+          }
+        }
+
+        val coreJSLib =
+          if (module.isRoot) Some(extractWithGlobals(state.coreJSLibCache.build(moduleContext)))
+          else None
+
+        def classIter = moduleClasses.iterator
+
+        def objectClass =
+          if (!module.isRoot) Iterator.empty
+          else classIter.filter(_.className == ObjectClass)
+
+        /* Emit everything but module imports in the appropriate order.
+         *
+         * We do not emit module imports to be able to assert that the
+         * resulting module is non-empty. This is a non-trivial condition that
+         * requires consistency between the Analyzer and the Emitter. As such,
+         * it is crucial that we verify it.
+         */
+        val defTrees: List[js.Tree] = (
+          /* The declaration of the `$p` variable that temporarily holds
+           * prototypes.
+           */
+          state.everyFileStart.iterator ++
+
+            /* The definitions of the CoreJSLib that come before the definition
+             * of `j.l.Object`. They depend on nothing else.
+             */
+            coreJSLib.iterator.flatMap(_.preObjectDefinitions) ++
+
+            /* The definition of `j.l.Object` class. Unlike other classes, this
+             * does not include its instance tests nor metadata.
+             */
+            objectClass.flatMap(_.main) ++
+
+            /* The definitions of the CoreJSLib that come after the definition
+             * of `j.l.Object` because they depend on it. This includes the
+             * definitions of the array classes, as well as type data for
+             * primitive types and for `j.l.Object`.
+             */
+            coreJSLib.iterator.flatMap(_.postObjectDefinitions) ++
+
+            /* All class definitions, except `j.l.Object`, which depend on
+             * nothing but their superclasses.
+             */
+            classIter.filterNot(_.className == ObjectClass).flatMap(_.main) ++
+
+            /* All static field definitions, which depend on nothing, except
+             * those of type Long which need $L0.
+             */
+            classIter.flatMap(_.staticFields) ++
+
+            /* All static initializers, which in the worst case can observe some
+             * "zero" state of other static field definitions, but must not
+             * observe a *non-initialized* (undefined) state.
+             */
+            classIter.flatMap(_.staticInitialization) ++
+
+            /* All the exports, during which some JS class creation can happen,
+             * causing JS static initializers to run. Those also must not observe
+             * a non-initialized state of other static fields.
+             */
+            topLevelExports.iterator ++
+
+            /* Module initializers, which by spec run at the end. */
+            moduleInitializers.iterator
+        ).toList
+
+        // Make sure that there is at least one non-import definition.
+        assert(!defTrees.isEmpty, {
+          val classNames = module.classDefs.map(_.fullName).mkString(", ")
+          s"Module ${module.id} is empty. Classes in this module: $classNames"
+        })
+
+        /* Add module imports, which depend on nothing, at the front.
+         * All classes potentially depend on them.
+         */
+        val allTrees = moduleImports ::: defTrees
+
+        classIter.foreach { genClass =>
+          trackedGlobalRefs = unionPreserveEmpty(trackedGlobalRefs, genClass.trackedGlobalRefs)
+        }
+
+        module.id -> (allTrees, changed)
+      }
+    }
+
+    WithGlobals(moduleTrees.toMap, trackedGlobalRefs)
+  }
+
+  private def genModuleImports(module: ModuleSet.Module): WithGlobals[List[js.Tree]] = {
+    implicit val pos = Position.NoPosition
+
+    def importParts = (
+      (
+        module.externalDependencies.map { x =>
+          sjsGen.varGen.externalModuleFieldIdent(x) -> x
+        }
+      ) ++ (
+        module.internalDependencies.map { x =>
+          sjsGen.varGen.internalModuleFieldIdent(x) -> config.internalModulePattern(x)
+        }
+      )
+    ).toList.sortBy(_._1.name)
+
+    moduleKind match {
+      case ModuleKind.NoModule =>
+        WithGlobals.nil
+
+      case ModuleKind.ESModule =>
+        val imports = importParts.map { case (ident, moduleName) =>
+          val from = js.StringLiteral(moduleName)
+          js.ImportNamespace(ident, from)
+        }
+        WithGlobals(imports)
+
+      case ModuleKind.CommonJSModule =>
+        val imports = importParts.map { case (ident, moduleName) =>
+          for (requireRef <- jsGen.globalRef("require")) yield {
+            val rhs = js.Apply(requireRef, List(js.StringLiteral(moduleName)))
+            jsGen.genLet(ident, mutable = false, rhs)
+          }
+        }
+        WithGlobals.list(imports)
+    }
+  }
+
+  private def compareClasses(lhs: LinkedClass, rhs: LinkedClass) = {
+    val lhsAC = lhs.ancestors.size
+    val rhsAC = rhs.ancestors.size
+    if (lhsAC != rhsAC) lhsAC < rhsAC
+    else lhs.className.compareTo(rhs.className) < 0
+  }
+
+  private def genClass(
+      linkedClass_! : LinkedClass, // scalastyle:ignore
+      moduleContext: ModuleContext): GeneratedClass = {
+
+    /* !!! In this method, *every* time you use linkedClass_!, you must justify
+     * why you have the right to access the fields you are reading.
+     * That's why we give it that dangerous-looking name.
+     */
+
+    // Cache identity; always safe to access
+    val kind = linkedClass_!.kind
+    val isJSClass = kind.isJSClass // we use this one a lot
+    val className = linkedClass_!.className
+    val ancestors = linkedClass_!.ancestors
+
+    val classCache = classCaches.getOrElseUpdate(
+        new ClassID(kind, ancestors, moduleContext), new ClassCache)
+
+    var changed = false
+    def extractChanged[T](x: (T, Boolean)): T = {
+      changed ||= x._2
+      x._1
+    }
+
+    /* The class version itself; it's OK to get that one as long as we don't
+     * use it to *produce* trees, which we should never do anyway.
+     */
+    val classVersion = linkedClass_!.version
+
+    val classTreeCache = extractChanged(classCache.getCache(classVersion))
+
+    /* Information that we can use for uncached decision-making.
+     * We call "decision-making" any if/else branch not covered by an explicit
+     * cache.
+     *
+     * Note that it is *not* safe to use uncachedDecisions in *cached*
+     * decision-making!
+     */
+    val uncachedDecisions = extractChanged(classCache.getUncachedDecisions(linkedClass_!))
+
+    /* Delegate justifications for those two to their use sites.
+     *
+     * - Uses of linkedInlineableInit_! must be protected by the classVersion
+     *   and its own version (see `ctorVersion`).
+     * - The sets of things generated by linkedMethods_! must be independently
+     *   tracked (see `trackStaticLikeMethodChanges` and `fullClassChangeTracker`).
+     */
+    val (linkedInlineableInit_!, linkedMethods_!) =
+      classEmitter.extractInlineableInit(linkedClass_!)(classCache)
 
     // Global ref management
 
     var trackedGlobalRefs: Set[String] = Set.empty
 
-    def addGlobalRefs(globalRefs: Set[String]): Unit =
-      trackedGlobalRefs = unionPreserveEmpty(globalRefs, trackedGlobalRefs)
+    def extractWithGlobals[T](withGlobals: WithGlobals[T]): T = {
+      trackedGlobalRefs = unionPreserveEmpty(trackedGlobalRefs, withGlobals.globalVarNames)
+      withGlobals.value
+    }
+
+    def extractWithGlobalsAndChanged[T](x: (WithGlobals[T], Boolean)): T =
+      extractWithGlobals(extractChanged(x))
 
     // Main part
 
-    var main: List[js.Tree] = Nil
+    val main = List.newBuilder[js.Tree]
 
-    def addToMainBase(tree: js.Tree): Unit = main ::= tree
-
-    def addToMain(treeWithGlobals: WithGlobals[js.Tree]): Unit = {
-      addToMainBase(treeWithGlobals.value)
-      addGlobalRefs(treeWithGlobals.globalVarNames)
+    // Symbols for private JS fields
+    if (isJSClass) {
+      val fieldDefs = classTreeCache.privateJSFields.getOrElseUpdate {
+        classEmitter.genCreatePrivateJSFieldDefsOfJSClass(className)(
+            moduleContext, classCache).map(prePrint(_, 0))
+      }
+      main ++= extractWithGlobals(fieldDefs)
     }
 
-    val (linkedInlineableInit, linkedMethods) =
-      classEmitter.extractInlineableInit(linkedClass)(classCache)
-
     // Static-like methods
-    for (m <- linkedMethods) {
-      val methodDef = m.value
-      val namespace = methodDef.flags.namespace
+    locally {
+      val emitAllAsStaticLike =
+        kind == ClassKind.Interface || kind == ClassKind.HijackedClass
 
-      if (namespace != MemberNamespace.Public) {
+      // The set is tracked explicitly just after
+      val staticLikeMethods = for {
+        methodDef <- linkedMethods_! // versioning per member inside
+        if emitAllAsStaticLike || methodDef.flags.namespace != MemberNamespace.Public
+      } yield {
         val methodCache =
-          classCache.getMethodCache(namespace, methodDef.encodedName)
+          classCache.getStaticLikeMethodCache(methodDef.flags.namespace, methodDef.methodName)
 
-        addToMain(methodCache.getOrElseUpdate(m.version,
-            classEmitter.genMethod(className, m.value)(methodCache)))
+        extractWithGlobalsAndChanged(methodCache.getOrElseUpdate(methodDef.version, {
+          classEmitter.genStaticLikeMethod(className, methodDef)(moduleContext, methodCache)
+            .map(prePrint(_, 0))
+        }))
       }
+
+      // *Non* short-circuiting boolean or; always evaluate the right-hand-side
+      changed |= classCache.trackStaticLikeMethodChanges(staticLikeMethods)
+
+      for (staticLikeMethod <- staticLikeMethods)
+        main ++= staticLikeMethod
     }
 
     // Class definition
-    if (linkedClass.hasInstances && kind.isAnyNonNativeClass) {
+    if (uncachedDecisions.hasInstances && kind.isAnyNonNativeClass) {
+      /* Decision-making in this scope is governed by the `fullClassChangeTracker`
+       * below *instead* of the uncachedDecisions. That means we are not allowed
+       * to use `uncachedDecisions` in this scope.
+       *
+       * The `fullClassChangeTracker` is actually called at the end of the
+       * block, because it needs to track *produced* js.Trees in addition to
+       * *inputs* in the LinkedClass. This way, it essentially tracks the *set*
+       * of methods that are emitted (i.e., that were not dce'ed away before
+       * getting here).
+       *
+       * Nevertheless, since it tracks the class version, we are allowed to
+       * use the following facts for uncached decision-making.
+       */
+
+      val hasJSSuperClass = linkedClass_!.jsSuperClass.isDefined
+
+      /* Whether or not there is a class initializer is a constant across the
+       * pipeline. By construction, if there is one in the original `ClassDef`,
+       * it must still be here now. The `classVersion` covers the *entire*
+       * original `ClassDef` (though it does not cover the entire
+       * `LinkedClass`es after transformations). So the `classVersion` covers
+       * whether or not there is a class initializer.
+       */
+      val hasClassInitializer: Boolean = {
+        linkedClass_!.methods.exists { m =>
+          m.flags.namespace == MemberNamespace.StaticConstructor &&
+          m.methodName.isClassInitializer
+        }
+      }
+
+      /* Is this class compiled as an ECMAScript `class`?
+       *
+       * See JSGen.useClassesForRegularClasses for the rationale here.
+       *
+       * This value is a "constant-per-cache", because it only depends on
+       * - the global linker config, and
+       * - isJSClass/ancestors, which are always safe (part of the cache identity).
+       *
+       * Note that `useClassesForRegularClasses` implies
+       * `useClassesForJSClassesAndThrowables`, so the short-cut is valid.
+       *
+       * Compared to `ClassEmitter.shouldExtendJSError`, which is used below,
+       * we do not check here that `Throwable` directly extends `Object`. If
+       * that is not the case (for some obscure reason), then we are going to
+       * uselessly emit `class`es for Throwables, but that will not make any
+       * observable change; whereas rewiring Throwable to extend `Error` when
+       * it does not actually directly extend `Object` would break everything,
+       * so we need to be more careful there.
+       */
+      val useESClass = if (jsGen.useClassesForRegularClasses) {
+        assert(jsGen.useClassesForJSClassesAndThrowables)
+        true
+      } else {
+        jsGen.useClassesForJSClassesAndThrowables &&
+        (isJSClass || ancestors.contains(ThrowableClass))
+      }
+
+      // Therefore, this is also constant-per-cache
+      val memberIndent = {
+        (if (isJSClass) 1 else 0) + // accessor function
+        (if (useESClass) 1 else 0) // nesting from class
+      }
+
+      val storeJSSuperClass = if (hasJSSuperClass) {
+        extractWithGlobals(classTreeCache.storeJSSuperClass.getOrElseUpdate {
+          // jsSuperClass and pos invalidated by class version
+          val jsSuperClass = linkedClass_!.jsSuperClass.get
+          classEmitter.genStoreJSSuperClass(jsSuperClass)(
+              moduleContext, classCache, linkedClass_!.pos)
+            .map(prePrint(_, 1))
+        })
+      } else {
+        Nil
+      }
+
       // JS constructor
-      val ctor = {
+      val ctorWithGlobals = extractChanged {
         /* The constructor depends both on the class version, and the version
          * of the inlineable init, if there is one.
+         *
+         * If it is a JS class, it depends on the jsConstructorDef.
          */
         val ctorCache = classCache.getConstructorCache()
-        val ctorVersion = linkedInlineableInit.fold[Option[String]] {
-          linkedClass.version.map("1-" + _)
-        } { linkedInit =>
-          mergeVersions(linkedClass.version, linkedInit.version).map("2-" + _)
+
+        if (isJSClass) {
+          assert(linkedInlineableInit_!.isEmpty) // just an assertion, it's fine
+
+          // Explicitly versioned just below
+          val jsConstructorDef = linkedClass_!.jsConstructorDef.getOrElse {
+            throw new IllegalArgumentException(s"$className does not have an exported constructor")
+          }
+
+          val ctorVersion = Version.combine(classVersion, jsConstructorDef.version)
+          ctorCache.getOrElseUpdate(
+            ctorVersion,
+            classEmitter.genJSConstructor(
+              className, // always safe
+              linkedClass_!.superClass, // invalidated by class version
+              linkedClass_!.jsSuperClass.isDefined, // invalidated by class version (*not* local decision-making)
+              useESClass, // always safe
+              jsConstructorDef // part of ctor version
+            )(moduleContext, ctorCache, linkedClass_!.pos) // pos invalidated by class version
+              .map(prePrint(_, memberIndent))
+          )
+        } else {
+          val ctorVersion = linkedInlineableInit_!.fold { // versioning
+            Version.combine(classVersion)
+          } { linkedInit =>
+            Version.combine(classVersion, linkedInit.version)
+          }
+
+          ctorCache.getOrElseUpdate(
+            ctorVersion,
+            classEmitter.genScalaClassConstructor(
+              className, // always safe
+              linkedClass_!.superClass, // invalidated by class version
+              useESClass, // invalidated by class version,
+              linkedInlineableInit_! // part of ctor version
+            )(moduleContext, ctorCache, linkedClass_!.pos) // pos invalidated by class version
+              .map(prePrint(_, memberIndent))
+          )
         }
-        val initToInline = linkedInlineableInit.map(_.value)
-        ctorCache.getOrElseUpdate(ctorVersion,
-            classEmitter.genConstructor(linkedClass, initToInline)(ctorCache))
       }
 
       /* Bridges from Throwable to methods of Object, which are necessary
        * because Throwable is rewired to extend JavaScript's Error instead of
        * j.l.Object.
+       *
+       * Completely uncached; delegate justifications to use sites.
        */
-      val linkedMethodsAndBridges = if (ClassEmitter.shouldExtendJSError(linkedClass)) {
-        val existingMethods = linkedMethods
-          .withFilter(_.value.flags.namespace == MemberNamespace.Public)
-          .map(_.value.name.encodedName)
+      val linkedMethodsAndBridges_! = if (ClassEmitter.shouldExtendJSError(className)) {
+        val existingMethods_! = linkedMethods_!
+          .withFilter(_.flags.namespace == MemberNamespace.Public)
+          .map(_.methodName)
           .toSet
 
-        val bridges = for {
-          m <- objectClass.methods
-          if m.value.flags.namespace == MemberNamespace.Public
-          encodedName = m.value.name.encodedName
-          if !existingMethods.contains(encodedName) && !isConstructorName(encodedName)
+        val bridges_! = for {
+          methodDef <- uncachedKnowledge.methodsInObject()
+          if !existingMethods_!.contains(methodDef.methodName)
         } yield {
           import org.scalajs.ir.Trees._
           import org.scalajs.ir.Types._
 
-          val methodDef = m.value
           implicit val pos = methodDef.pos
 
-          val methodName = methodDef.name.asInstanceOf[Ident]
+          val methodName = methodDef.name
           val newBody = ApplyStatically(ApplyFlags.empty,
-              This()(ClassType(className)),
-              ClassRef(ObjectClass), methodName, methodDef.args.map(_.ref))(
+              This()(ClassType(className, nullable = false, exact = false)),
+              ObjectClass, methodName, methodDef.args.map(_.ref))(
               methodDef.resultType)
-          val newMethodDef = MethodDef(MemberFlags.empty, methodName,
-              methodDef.args, methodDef.resultType, Some(newBody))(
-              OptimizerHints.empty, None)
-          new Versioned(newMethodDef, m.version)
+          MethodDef(MemberFlags.empty, methodName,
+              methodDef.originalName, methodDef.args, methodDef.resultType,
+              Some(newBody))(
+              OptimizerHints.empty, methodDef.version)
         }
 
-        linkedMethods ++ bridges
+        linkedMethods_! ++ bridges_!
       } else {
-        linkedMethods
+        linkedMethods_!
       }
 
-      // Normal methods
-      val memberMethods = for {
-        m <- linkedMethodsAndBridges
-        if m.value.flags.namespace == MemberNamespace.Public
+      // Normal methods -- the set itself is tracked by the fullClassChangeTracker
+      val memberMethodsWithGlobals = for {
+        method <- linkedMethodsAndBridges_! // explicitly versioned below, by member
+        if method.flags.namespace == MemberNamespace.Public
       } yield {
         val methodCache =
-          classCache.getMethodCache(MemberNamespace.Public, m.value.encodedName)
+          classCache.getMemberMethodCache(method.methodName)
 
-        methodCache.getOrElseUpdate(m.version,
-            classEmitter.genMethod(className, m.value)(methodCache))
+        extractChanged(methodCache.getOrElseUpdate(method.version,
+            classEmitter.genMemberMethod(
+              className, // always safe
+              isJSClass, // always safe
+              useESClass, // always safe
+              method // invalidated by method.version
+            )(moduleContext, methodCache).map(prePrint(_, memberIndent))))
       }
 
-      // Exported Members
-      val exportedMembers = classTreeCache.exportedMembers.getOrElseUpdate(
-          classEmitter.genExportedMembers(linkedClass)(classCache))
-
-      addToMain(classEmitter.buildClass(linkedClass, ctor, memberMethods,
-          exportedMembers)(classCache))
-    } else if (kind == ClassKind.Interface) {
-      // Default methods
-      for {
-        m <- linkedMethods
-        if m.value.flags.namespace == MemberNamespace.Public
+      // Exported Members -- the set itself is tracked by the fullClassChangeTracker
+      val exportedMembersWithGlobals = for {
+        (member, idx) <- linkedClass_!.exportedMembers.zipWithIndex // explicitly versioned below, by member
       } yield {
-        val methodCache =
-          classCache.getMethodCache(MemberNamespace.Public, m.value.encodedName)
-        addToMain(methodCache.getOrElseUpdate(m.version,
-            classEmitter.genDefaultMethod(className, m.value)(methodCache)))
+        val memberCache = classCache.getExportedMemberCache(idx)
+        extractChanged(memberCache.getOrElseUpdate(member.version,
+            classEmitter.genExportedMember(
+              className, // always safe
+              isJSClass, // always safe
+              useESClass, // always safe
+              member // invalidated by member.version
+            )(moduleContext, memberCache).map(prePrint(_, memberIndent))))
       }
-    } else if (kind == ClassKind.HijackedClass) {
-      // Hijacked methods
-      for {
-        m <- linkedMethods
-        if m.value.flags.namespace == MemberNamespace.Public
-      } yield {
-        val methodCache =
-          classCache.getMethodCache(MemberNamespace.Public, m.value.encodedName)
-        addToMain(methodCache.getOrElseUpdate(m.version,
-            classEmitter.genHijackedMethod(className, m.value)(methodCache)))
+
+      // Now that we have everything, track changes.
+      val fullClassChangeTracker = classCache.getFullClassChangeTracker()
+      // Put changed state into a val to avoid short circuiting behavior of ||.
+      val classChanged = fullClassChangeTracker.trackChanged(
+          classVersion, ctorWithGlobals,
+          memberMethodsWithGlobals, exportedMembersWithGlobals)
+      changed ||= classChanged
+
+      val fullClass = {
+        for {
+          ctor <- ctorWithGlobals
+          memberMethods <- WithGlobals.flatten(memberMethodsWithGlobals)
+          exportedMembers <- WithGlobals.flatten(exportedMembersWithGlobals)
+          allMembers = ctor ::: memberMethods ::: exportedMembers
+          clazz <- classEmitter.buildClass(
+            className, // always safe
+            isJSClass, // always safe
+            linkedClass_!.jsClassCaptures, // invalidated by class version
+            hasClassInitializer, // scope-local decision-making
+            linkedClass_!.superClass, // invalidated by class version
+            storeJSSuperClass, // invalidated by class version
+            useESClass, // always safe
+            allMembers // invalidated directly
+          )(moduleContext, fullClassChangeTracker, linkedClass_!.pos) // pos invalidated by class version
+        } yield {
+          clazz
+        }
+      }
+
+      main ++= extractWithGlobals(fullClass)
+    }
+
+    if (className != ObjectClass) {
+      /* Instance tests and type data are hardcoded in the CoreJSLib for
+       * j.l.Object. This is important because their definitions depend on the
+       * `$TypeData` definition, which only comes in the `postObjectDefinitions`
+       * of the CoreJSLib. If we wanted to define them here as part of the
+       * normal logic of `ClassEmitter`, we would have to further divide `main`
+       * into two parts. Since the code paths are in fact completely different
+       * for `j.l.Object` anyway, we do not do this, and instead hard-code them
+       * in the CoreJSLib. This explains why we exclude `j.l.Object` as this
+       * level, rather than inside `ClassEmitter.needInstanceTests` and
+       * similar: it is a concern that goes beyond the organization of the
+       * class `j.l.Object`.
+       */
+
+      if (uncachedDecisions.needInstanceTests) {
+        main ++= extractWithGlobals(classTreeCache.instanceTests.getOrElseUpdate {
+          // pos invalidated by class version
+          classEmitter.genInstanceTests(className, kind)(
+              moduleContext, classCache, linkedClass_!.pos)
+            .map(prePrint(_, 0))
+        })
+      }
+
+      if (uncachedDecisions.hasRuntimeTypeInfo) {
+        main ++= extractWithGlobals(classTreeCache.typeData.getOrElseUpdate(
+            linkedClass_!.hasDirectInstances, // versioning
+            classEmitter.genTypeData(
+              className, // always safe
+              kind, // always safe
+              linkedClass_!.superClass, // invalidated by class version
+              ancestors, // always safe
+              linkedClass_!.jsNativeLoadSpec, // invalidated by class version
+              linkedClass_!.hasDirectInstances // invalidated directly (it is the input to `getOrElseUpdate`)
+            )(moduleContext, classCache, linkedClass_!.pos).map(prePrint(_, 0)))) // pos invalidated by class version
       }
     }
 
-    if (classEmitter.needInstanceTests(linkedClass)) {
-      if (!linkedClass.hasInstances && kind.isClass) {
-        /* The isInstanceOf implementation will generate
-         * `x instanceof $c_TheClass`, but `$c_TheClass` won't be declared at
-         * all. Define it as a fake class to avoid `ReferenceError`s.
-         */
-        addToMainBase(classEmitter.genFakeClass(linkedClass))
-      }
-
-      addToMainBase(classTreeCache.instanceTests.getOrElseUpdate(js.Block(
-          classEmitter.genInstanceTests(linkedClass),
-          classEmitter.genArrayInstanceTests(linkedClass)
-      )(linkedClass.pos)))
+    if (kind.hasModuleAccessor && uncachedDecisions.hasInstances) {
+      main ++= extractWithGlobals(classTreeCache.moduleAccessor.getOrElseUpdate {
+        // pos invalidated by class version
+        classEmitter.genModuleAccessor(className, isJSClass)(
+            moduleContext, classCache, linkedClass_!.pos)
+          .map(prePrint(_, 0))
+      })
     }
-
-    if (linkedClass.hasRuntimeTypeInfo) {
-      addToMain(classTreeCache.typeData.getOrElseUpdate(
-          classEmitter.genTypeData(linkedClass)(classCache)))
-    }
-
-    if (linkedClass.hasInstances && kind.isClass && linkedClass.hasRuntimeTypeInfo)
-      addToMainBase(classTreeCache.setTypeData.getOrElseUpdate(
-          classEmitter.genSetTypeData(linkedClass)))
-
-    if (linkedClass.kind.hasModuleAccessor)
-      addToMainBase(classTreeCache.moduleAccessor.getOrElseUpdate(
-          classEmitter.genModuleAccessor(linkedClass)))
 
     // Static fields
 
-    val staticFields = if (linkedClass.kind.isJSType) {
+    val staticFields = if (kind.isJSType) {
       Nil
     } else {
-      val classCache = getClassCache(linkedClass.ancestors)
-      val classTreeCache = classCache.getCache(linkedClass.version)
-
-      classTreeCache.staticFields.getOrElseUpdate(
-          classEmitter.genCreateStaticFieldsOfScalaClass(linkedClass)(classCache))
+      extractWithGlobals(classTreeCache.staticFields.getOrElseUpdate {
+        classEmitter.genCreateStaticFieldsOfScalaClass(className)(moduleContext, classCache)
+          .map(prePrint(_, 0))
+      })
     }
 
     // Static initialization
 
-    val staticInitialization = if (linkedClass.kind.isJSType) {
-      Nil
+    val staticInitialization = if (uncachedDecisions.needStaticInitialization) {
+      classTreeCache.staticInitialization.getOrElseUpdate {
+        // pos invalidated by class version
+        val tree = classEmitter.genStaticInitialization(className)(
+            moduleContext, classCache, linkedClass_!.pos)
+        prePrint(tree, 0)
+      }
     } else {
-      classEmitter.genStaticInitialization(linkedClass)
-    }
-
-    // Top-level exports
-
-    val topLevelExports = if (linkedClass.topLevelExports.isEmpty) {
       Nil
-    } else {
-      val treeWithGlobals = classTreeCache.topLevelExports.getOrElseUpdate(
-          classEmitter.genTopLevelExports(linkedClass)(classCache))
-      addGlobalRefs(treeWithGlobals.globalVarNames)
-      treeWithGlobals.value
     }
 
     // Build the result
 
     new GeneratedClass(
-        main.reverse,
-        staticFields,
-        staticInitialization,
-        topLevelExports,
-        trackedGlobalRefs
+      className,
+      main.result(),
+      staticFields,
+      staticInitialization,
+      trackedGlobalRefs,
+      changed
     )
   }
 
-  /** Emits an [[EntryPoint]].
-   *
-   *  This is done at the very end of the emitted module/script.
-   */
-  private def emitModuleInitializer(moduleInitializer: ModuleInitializer,
-      builder: JSBuilder): Unit = {
-    builder.addJSTree(classEmitter.genModuleInitializer(moduleInitializer))
-  }
-
-  // Helpers
-
-  private def mergeVersions(v1: Option[String],
-      v2: Option[String]): Option[String] = {
-    v1.flatMap(s1 => v2.map(s2 => "" + s1.length + "-" + s1 + s2))
-  }
-
-  private def getClassTreeCache(linkedClass: LinkedClass): DesugaredClassCache =
-    getClassCache(linkedClass.ancestors).getCache(linkedClass.version)
-
-  private def getClassCache(ancestors: List[String]) =
-    classCaches.getOrElseUpdate(ancestors, new ClassCache)
-
   // Caching
 
+  private final class ModuleCache extends knowledgeGuardian.KnowledgeAccessor {
+    private[this] var _cacheUsed: Boolean = false
+
+    private[this] var _importsCache: WithGlobals[List[js.Tree]] = WithGlobals.nil
+    private[this] var _lastExternalDependencies: Set[String] = Set.empty
+    private[this] var _lastInternalDependencies: Set[ModuleID] = Set.empty
+
+    private[this] var _topLevelExportsCache: WithGlobals[List[js.Tree]] = WithGlobals.nil
+    private[this] var _lastTopLevelExports: List[LinkedTopLevelExport] = Nil
+
+    private[this] var _initializersCache: WithGlobals[List[js.Tree]] = WithGlobals.nil
+    private[this] var _lastInitializers: List[ModuleInitializer.Initializer] = Nil
+
+    override def invalidate(): Unit = {
+      super.invalidate()
+
+      /* In order to keep reasoning as local as possible, we also invalidate
+       * the imports cache, although imports do not use any global knowledge.
+       */
+      _importsCache = WithGlobals.nil
+      _lastExternalDependencies = Set.empty
+      _lastInternalDependencies = Set.empty
+
+      _topLevelExportsCache = WithGlobals.nil
+      _lastTopLevelExports = Nil
+
+      _initializersCache = WithGlobals.nil
+      _lastInitializers = Nil
+    }
+
+    def getOrComputeImports(externalDependencies: Set[String], internalDependencies: Set[ModuleID])(
+        compute: => WithGlobals[List[js.Tree]]): (WithGlobals[List[js.Tree]], Boolean) = {
+
+      _cacheUsed = true
+
+      if (externalDependencies != _lastExternalDependencies || internalDependencies != _lastInternalDependencies) {
+        _importsCache = compute
+        _lastExternalDependencies = externalDependencies
+        _lastInternalDependencies = internalDependencies
+        (_importsCache, true)
+      } else {
+        (_importsCache, false)
+      }
+
+    }
+
+    def getOrComputeTopLevelExports(topLevelExports: List[LinkedTopLevelExport])(
+        compute: => WithGlobals[List[js.Tree]]): (WithGlobals[List[js.Tree]], Boolean) = {
+
+      _cacheUsed = true
+
+      if (!sameTopLevelExports(topLevelExports, _lastTopLevelExports)) {
+        _topLevelExportsCache = compute
+        _lastTopLevelExports = topLevelExports
+        (_topLevelExportsCache, true)
+      } else {
+        (_topLevelExportsCache, false)
+      }
+    }
+
+    private def sameTopLevelExports(tles1: List[LinkedTopLevelExport],
+        tles2: List[LinkedTopLevelExport]): Boolean = {
+      import org.scalajs.ir.Trees._
+
+      /* Because of how/when we use this method, we already know that all the
+       * `tles1` and `tles2` have the same `moduleID` (namely the ID of the
+       * module represented by this `ModuleCache`). Therefore, we do not
+       * compare that field.
+       */
+
+      tles1.corresponds(tles2) { (tle1, tle2) =>
+        tle1.tree.pos == tle2.tree.pos && tle1.owningClass == tle2.owningClass && {
+          (tle1.tree, tle2.tree) match {
+            case (TopLevelJSClassExportDef(_, exportName1),
+                    TopLevelJSClassExportDef(_, exportName2)) =>
+              exportName1 == exportName2
+            case (TopLevelModuleExportDef(_, exportName1),
+                    TopLevelModuleExportDef(_, exportName2)) =>
+              exportName1 == exportName2
+            case (TopLevelMethodExportDef(_, methodDef1), TopLevelMethodExportDef(_, methodDef2)) =>
+              methodDef1.version.sameVersion(methodDef2.version)
+            case (TopLevelFieldExportDef(_, exportName1, field1),
+                    TopLevelFieldExportDef(_, exportName2, field2)) =>
+              exportName1 == exportName2 && field1.name == field2.name && field1.pos == field2.pos
+            case _ =>
+              false
+          }
+        }
+      }
+    }
+
+    def getOrComputeInitializers(initializers: List[ModuleInitializer.Initializer])(
+        compute: => WithGlobals[List[js.Tree]]): (WithGlobals[List[js.Tree]], Boolean) = {
+
+      _cacheUsed = true
+
+      if (initializers != _lastInitializers) {
+        _initializersCache = compute
+        _lastInitializers = initializers
+        (_initializersCache, true)
+      } else {
+        (_initializersCache, false)
+      }
+    }
+
+    def cleanAfterRun(): Boolean = {
+      val result = _cacheUsed
+      _cacheUsed = false
+      result
+    }
+  }
+
   private final class ClassCache extends knowledgeGuardian.KnowledgeAccessor {
-    private[this] var _cache: DesugaredClassCache = null
-    private[this] var _lastVersion: Option[String] = None
+    private[this] var _cache: Nullable[DesugaredClassCache] = null
+    private[this] var _lastVersion: Version = Version.Unversioned
     private[this] var _cacheUsed = false
 
+    private[this] var _uncachedDecisions: UncachedDecisions = UncachedDecisions.Invalid
+
     private[this] val _methodCaches =
-      Array.fill(MemberNamespace.Count)(mutable.Map.empty[String, MethodCache])
+      Array.fill(MemberNamespace.Count)(mutable.Map.empty[MethodName, MethodCache])
+
+    private[this] val _memberMethodCache = mutable.Map.empty[MethodName, MethodCache]
 
     private[this] var _constructorCache: Option[MethodCache] = None
+
+    private[this] val _exportedMembersCache = mutable.Map.empty[Int, MethodCache]
+
+    private[this] var _staticLikeMethodsTracker: Option[List[List[js.Tree]]] = None
+    private[this] var _fullClassChangeTracker: Option[FullClassChangeTracker] = None
 
     override def invalidate(): Unit = {
       /* Do not invalidate contained methods, as they have their own
@@ -694,32 +963,57 @@ final class Emitter private (config: CommonPhaseConfig,
        */
       super.invalidate()
       _cache = null
-      _lastVersion = None
+      _lastVersion = Version.Unversioned
+      _uncachedDecisions = UncachedDecisions.Invalid
     }
 
     def startRun(): Unit = {
       _cacheUsed = false
       _methodCaches.foreach(_.valuesIterator.foreach(_.startRun()))
+      _memberMethodCache.valuesIterator.foreach(_.startRun())
       _constructorCache.foreach(_.startRun())
+      _fullClassChangeTracker.foreach(_.startRun())
     }
 
-    def getCache(version: Option[String]): DesugaredClassCache = {
-      if (_cache == null || _lastVersion.isEmpty || _lastVersion != version) {
+    def getCache(version: Version): (DesugaredClassCache, Boolean) = {
+      _cacheUsed = true
+      val prevCache = _cache
+      if (prevCache == null || !_lastVersion.sameVersion(version)) {
         invalidate()
         statsClassesInvalidated += 1
         _lastVersion = version
-        _cache = new DesugaredClassCache
+        val newCache = new DesugaredClassCache
+        _cache = newCache
+        (newCache, true)
       } else {
         statsClassesReused += 1
+        (prevCache, false)
       }
-      _cacheUsed = true
-      _cache
     }
 
-    def getMethodCache(namespace: MemberNamespace,
-        encodedName: String): MethodCache = {
+    def getUncachedDecisions(linkedClass: LinkedClass): (UncachedDecisions, Boolean) = {
+      val needInstanceTests = classEmitter.needInstanceTests(linkedClass)(this)
+      val needStaticInitialization = classEmitter.needStaticInitialization(linkedClass)
+      val result = UncachedDecisions(
+        hasInstances = linkedClass.hasInstances,
+        hasRuntimeTypeInfo = linkedClass.hasRuntimeTypeInfo,
+        hasInstanceTests = linkedClass.hasInstanceTests,
+        needInstanceTests = needInstanceTests,
+        needStaticInitialization = needStaticInitialization
+      )
+      val changed = result != _uncachedDecisions
+      if (changed)
+        _uncachedDecisions = result
+      (result, changed)
+    }
+
+    def getMemberMethodCache(methodName: MethodName): MethodCache =
+      _memberMethodCache.getOrElseUpdate(methodName, new MethodCache)
+
+    def getStaticLikeMethodCache(namespace: MemberNamespace,
+        methodName: MethodName): MethodCache = {
       _methodCaches(namespace.ordinal)
-        .getOrElseUpdate(encodedName, new MethodCache)
+        .getOrElseUpdate(methodName, new MethodCache)
     }
 
     def getConstructorCache(): MethodCache = {
@@ -730,11 +1024,41 @@ final class Emitter private (config: CommonPhaseConfig,
       }
     }
 
+    def getExportedMemberCache(idx: Int): MethodCache =
+      _exportedMembersCache.getOrElseUpdate(idx, new MethodCache)
+
+    /** Track changes to the generated list of static-like methods.
+     *
+     *  Returns `true` iff there were changes since the last run.
+     */
+    def trackStaticLikeMethodChanges(staticLikeMethods: List[List[js.Tree]]): Boolean = {
+      if (_staticLikeMethodsTracker.exists(allSame(_, staticLikeMethods))) {
+        false
+      } else {
+        _staticLikeMethodsTracker = Some(staticLikeMethods)
+        true
+      }
+    }
+
+    def getFullClassChangeTracker(): FullClassChangeTracker = {
+      _fullClassChangeTracker.getOrElse {
+        val cache = new FullClassChangeTracker
+        _fullClassChangeTracker = Some(cache)
+        cache
+      }
+    }
+
     def cleanAfterRun(): Boolean = {
       _methodCaches.foreach(_.filterInPlace((_, c) => c.cleanAfterRun()))
+      _memberMethodCache.filterInPlace((_, c) => c.cleanAfterRun())
 
       if (_constructorCache.exists(!_.cleanAfterRun()))
         _constructorCache = None
+
+      _exportedMembersCache.filterInPlace((_, c) => c.cleanAfterRun())
+
+      if (_fullClassChangeTracker.exists(!_.cleanAfterRun()))
+        _fullClassChangeTracker = None
 
       if (!_cacheUsed)
         invalidate()
@@ -744,30 +1068,33 @@ final class Emitter private (config: CommonPhaseConfig,
   }
 
   private final class MethodCache extends knowledgeGuardian.KnowledgeAccessor {
-    private[this] var _tree: WithGlobals[js.Tree] = null
-    private[this] var _lastVersion: Option[String] = None
+    private[this] var _tree: Nullable[WithGlobals[List[js.Tree]]] = null
+    private[this] var _lastVersion: Version = Version.Unversioned
     private[this] var _cacheUsed = false
 
     override def invalidate(): Unit = {
       super.invalidate()
       _tree = null
-      _lastVersion = None
+      _lastVersion = Version.Unversioned
     }
 
     def startRun(): Unit = _cacheUsed = false
 
-    def getOrElseUpdate(version: Option[String],
-        v: => WithGlobals[js.Tree]): WithGlobals[js.Tree] = {
-      if (_tree == null || _lastVersion.isEmpty || _lastVersion != version) {
+    def getOrElseUpdate(version: Version,
+        v: => WithGlobals[List[js.Tree]]): (WithGlobals[List[js.Tree]], Boolean) = {
+      _cacheUsed = true
+      val prevTree = _tree
+      if (prevTree == null || !_lastVersion.sameVersion(version)) {
         invalidate()
         statsMethodsInvalidated += 1
-        _tree = v
+        val computedTree = v
+        _tree = computedTree
         _lastVersion = version
+        (computedTree, true)
       } else {
         statsMethodsReused += 1
+        (prevTree, false)
       }
-      _cacheUsed = true
-      _tree
     }
 
     def cleanAfterRun(): Boolean = {
@@ -777,38 +1104,305 @@ final class Emitter private (config: CommonPhaseConfig,
       _cacheUsed
     }
   }
-}
 
-private object Emitter {
-  private final class DesugaredClassCache {
-    val exportedMembers = new OneTimeCache[WithGlobals[js.Tree]]
-    val instanceTests = new OneTimeCache[js.Tree]
-    val typeData = new OneTimeCache[WithGlobals[js.Tree]]
-    val setTypeData = new OneTimeCache[js.Tree]
-    val moduleAccessor = new OneTimeCache[js.Tree]
-    val staticFields = new OneTimeCache[List[js.Tree]]
-    val topLevelExports = new OneTimeCache[WithGlobals[List[js.Tree]]]
-  }
+  private class FullClassChangeTracker extends knowledgeGuardian.KnowledgeAccessor {
+    private[this] var _lastVersion: Version = Version.Unversioned
+    private[this] var _lastCtor: Nullable[WithGlobals[List[js.Tree]]] = null
+    private[this] var _lastMemberMethods: Nullable[List[WithGlobals[List[js.Tree]]]] = null
+    private[this] var _lastExportedMembers: Nullable[List[WithGlobals[List[js.Tree]]]] = null
+    private[this] var _trackerUsed = false
 
-  private final class GeneratedClass(
-      val main: List[js.Tree],
-      val staticFields: List[js.Tree],
-      val staticInitialization: List[js.Tree],
-      val topLevelExports: List[js.Tree],
-      val trackedGlobalRefs: Set[String]
-  )
+    override def invalidate(): Unit = {
+      super.invalidate()
+      _lastVersion = Version.Unversioned
+      _lastCtor = null
+      _lastMemberMethods = null
+      _lastExportedMembers = null
+    }
 
-  private final class OneTimeCache[A >: Null] {
-    private[this] var value: A = null
-    def getOrElseUpdate(v: => A): A = {
-      if (value == null)
-        value = v
-      value
+    def startRun(): Unit = _trackerUsed = false
+
+    def trackChanged(version: Version, ctor: WithGlobals[List[js.Tree]],
+        memberMethods: List[WithGlobals[List[js.Tree]]],
+        exportedMembers: List[WithGlobals[List[js.Tree]]]): Boolean = {
+
+      _trackerUsed = true
+
+      val changed = {
+        !version.sameVersion(_lastVersion) ||
+        (_lastCtor ne ctor) ||
+        !allSame(_lastMemberMethods.nn, memberMethods) ||
+        !allSame(_lastExportedMembers.nn, exportedMembers)
+      }
+
+      if (changed) {
+        // Input has changed or we were invalidated.
+        // Clean knowledge tracking and re-track dependencies.
+        invalidate()
+        _lastVersion = version
+        _lastCtor = ctor
+        _lastMemberMethods = memberMethods
+        _lastExportedMembers = exportedMembers
+      }
+
+      changed
+    }
+
+    def cleanAfterRun(): Boolean = {
+      if (!_trackerUsed)
+        invalidate()
+
+      _trackerUsed
     }
   }
 
-  private def symbolRequirements(coreSpec: CoreSpec): SymbolRequirement = {
-    import coreSpec.semantics._
+  private class CoreJSLibCache extends knowledgeGuardian.KnowledgeAccessor {
+    private[this] var _lastModuleContext: Nullable[ModuleContext] = null
+    private[this] var _lib: Nullable[WithGlobals[CoreJSLib.Lib[List[js.Tree]]]] = null
+
+    def build(moduleContext: ModuleContext): WithGlobals[CoreJSLib.Lib[List[js.Tree]]] = {
+      val prevLib = _lib
+      if (prevLib == null || _lastModuleContext != moduleContext) {
+        val lib = CoreJSLib.build(sjsGen, prePrint(_, 0), moduleContext, this)
+        _lib = lib
+        _lastModuleContext = moduleContext
+        lib
+      } else {
+        prevLib
+      }
+    }
+
+    override def invalidate(): Unit = {
+      super.invalidate()
+      _lib = null
+    }
+  }
+}
+
+object Emitter {
+
+  /** Result of an emitter run. */
+  final class Result private[Emitter] (
+      val header: String,
+      val body: Map[ModuleID, (List[js.Tree], Boolean)],
+      val footer: String,
+      val topLevelVarDecls: List[String],
+      val globalRefs: Set[String]
+  )
+
+  /** Configuration for the Emitter. */
+  final class Config private (
+      val coreSpec: CoreSpec,
+      val jsHeader: String,
+      val internalModulePattern: ModuleID => String,
+      val optimizeBracketSelects: Boolean,
+      val trackAllGlobalRefs: Boolean,
+      val minify: Boolean
+  ) {
+    private def this(coreSpec: CoreSpec) = {
+      this(
+        coreSpec,
+        jsHeader = "",
+        internalModulePattern = "./" + _.id,
+        optimizeBracketSelects = true,
+        trackAllGlobalRefs = false,
+        minify = false
+      )
+    }
+
+    private[emitter] val topLevelGlobalRefTracking: GlobalRefTracking =
+      if (trackAllGlobalRefs) GlobalRefTracking.All
+      else GlobalRefTracking.Dangerous
+
+    def withCoreSpec(coreSpec: CoreSpec): Config =
+      copy(coreSpec = coreSpec)
+
+    def withJSHeader(jsHeader: String): Config = {
+      require(StandardConfig.isValidJSHeader(jsHeader), jsHeader)
+      copy(jsHeader = jsHeader)
+    }
+
+    def withInternalModulePattern(internalModulePattern: ModuleID => String): Config =
+      copy(internalModulePattern = internalModulePattern)
+
+    def withOptimizeBracketSelects(optimizeBracketSelects: Boolean): Config =
+      copy(optimizeBracketSelects = optimizeBracketSelects)
+
+    def withTrackAllGlobalRefs(trackAllGlobalRefs: Boolean): Config =
+      copy(trackAllGlobalRefs = trackAllGlobalRefs)
+
+    def withMinify(minify: Boolean): Config =
+      copy(minify = minify)
+
+    private def copy(
+        coreSpec: CoreSpec = coreSpec,
+        jsHeader: String = jsHeader,
+        internalModulePattern: ModuleID => String = internalModulePattern,
+        optimizeBracketSelects: Boolean = optimizeBracketSelects,
+        trackAllGlobalRefs: Boolean = trackAllGlobalRefs,
+        minify: Boolean = minify
+    ): Config = {
+      new Config(coreSpec, jsHeader,
+          internalModulePattern, optimizeBracketSelects, trackAllGlobalRefs,
+          minify)
+    }
+  }
+
+  object Config {
+    def apply(coreSpec: CoreSpec): Config =
+      new Config(coreSpec)
+  }
+
+  sealed trait PrePrinter {
+    private[Emitter] def prePrint(trees: List[js.Tree], indent: Int): List[js.Tree]
+  }
+
+  object PrePrinter {
+    object Off extends PrePrinter {
+      private[Emitter] def prePrint(trees: List[js.Tree], indent: Int): List[js.Tree] = trees
+    }
+
+    object WithoutSourceMap extends PrePrinter {
+      private[Emitter] def prePrint(trees: List[js.Tree], indent: Int): List[js.PrintedTree] = {
+        if (trees.isEmpty) {
+          Nil // Fast path
+        } else {
+          val jsCodeWriter = new ByteArrayWriter()
+          val printer = new Printers.JSTreePrinter(jsCodeWriter, indent)
+
+          trees.foreach(printer.printStat(_))
+
+          js.PrintedTree(jsCodeWriter.toByteArray(), SourceMapWriter.Fragment.Empty) :: Nil
+        }
+      }
+    }
+
+    final class WithSourceMap(fragmentIndex: SourceMapWriter.Index) extends PrePrinter {
+      private[Emitter] def prePrint(trees: List[js.Tree], indent: Int): List[js.PrintedTree] = {
+        if (trees.isEmpty) {
+          Nil // Fast path
+        } else {
+          val jsCodeWriter = new ByteArrayWriter()
+          val smFragmentBuilder = new SourceMapWriter.FragmentBuilder(fragmentIndex)
+          val printer =
+            new Printers.JSTreePrinterWithSourceMap(jsCodeWriter, smFragmentBuilder, indent)
+
+          trees.foreach(printer.printStat(_))
+          smFragmentBuilder.complete()
+
+          js.PrintedTree(jsCodeWriter.toByteArray(), smFragmentBuilder.result()) :: Nil
+        }
+      }
+    }
+  }
+
+  @tailrec
+  private def allSame(xs: List[AnyRef], ys: List[AnyRef]): Boolean = {
+    xs.isEmpty == ys.isEmpty && {
+      xs.isEmpty ||
+      ((xs.head eq ys.head) && allSame(xs.tail, ys.tail))
+    }
+  }
+
+  private final class UncachedDecisions(private val flags: Int) extends AnyVal {
+    import UncachedDecisions._
+
+    def hasInstances: Boolean = hasFlag(HasInstances)
+    def hasRuntimeTypeInfo: Boolean = hasFlag(HasRuntimeTypeInfo)
+    def hasInstanceTests: Boolean = hasFlag(HasInstanceTests)
+    def needInstanceTests: Boolean = hasFlag(NeedInstanceTests)
+    def needStaticInitialization: Boolean = hasFlag(NeedStaticInitialization)
+
+    @inline private def hasFlag(flag: Int): Boolean =
+      (flags & flag) != 0
+  }
+
+  private object UncachedDecisions {
+    private final val HasInstances = 1 << 0
+    private final val HasRuntimeTypeInfo = 1 << 1
+    private final val HasInstanceTests = 1 << 2
+    private final val NeedInstanceTests = 1 << 3
+    private final val NeedStaticInitialization = 1 << 4
+
+    final val Invalid: UncachedDecisions = new UncachedDecisions(-1)
+
+    def apply(
+        hasInstances: Boolean,
+        hasRuntimeTypeInfo: Boolean,
+        hasInstanceTests: Boolean,
+        needInstanceTests: Boolean,
+        needStaticInitialization: Boolean
+    ): UncachedDecisions = {
+      def flagIf(cond: Boolean, flag: Int): Int =
+        if (cond) flag else 0
+
+      new UncachedDecisions(
+        flagIf(hasInstances, HasInstances) |
+        flagIf(hasRuntimeTypeInfo, HasRuntimeTypeInfo) |
+        flagIf(hasInstanceTests, HasInstanceTests) |
+        flagIf(needInstanceTests, NeedInstanceTests) |
+        flagIf(needStaticInitialization, NeedStaticInitialization)
+      )
+    }
+  }
+
+  private final class DesugaredClassCache {
+    val privateJSFields = new OneTimeCache[WithGlobals[List[js.Tree]]]
+    val storeJSSuperClass = new OneTimeCache[WithGlobals[List[js.Tree]]]
+    val instanceTests = new OneTimeCache[WithGlobals[List[js.Tree]]]
+    val typeData = new InputEqualityCache[Boolean, WithGlobals[List[js.Tree]]]
+    val moduleAccessor = new OneTimeCache[WithGlobals[List[js.Tree]]]
+    val staticInitialization = new OneTimeCache[List[js.Tree]]
+    val staticFields = new OneTimeCache[WithGlobals[List[js.Tree]]]
+  }
+
+  private final class GeneratedClass(
+      val className: ClassName,
+      val main: List[js.Tree],
+      val staticFields: List[js.Tree],
+      val staticInitialization: List[js.Tree],
+      val trackedGlobalRefs: Set[String],
+      val changed: Boolean
+  )
+
+  private final class OneTimeCache[A >: NullableLowerBound <: AnyRef] {
+    private[this] var value: Nullable[A] = null
+
+    def getOrElseUpdate(compute: => A): A = {
+      val v = value
+      if (v == null) {
+        val computed = compute
+        value = computed
+        computed
+      } else {
+        v
+      }
+    }
+  }
+
+  /** A cache that depends on an `input: I`, testing with `==`.
+   *
+   *  @tparam I
+   *    the type of input, for which `==` must meaningful
+   */
+  private final class InputEqualityCache[I, A >: NullableLowerBound <: AnyRef] {
+    private[this] var lastInput: Option[I] = None
+    private[this] var value: Nullable[A] = null
+
+    def getOrElseUpdate(input: I, v: => A): A = {
+      if (!lastInput.contains(input)) {
+        value = v
+        lastInput = Some(input)
+      }
+      value.nn
+    }
+  }
+
+  private case class ClassID(
+      kind: ClassKind, ancestors: List[ClassName], moduleContext: ModuleContext)
+
+  private def symbolRequirements(config: Config): SymbolRequirement = {
+    import config.coreSpec.semantics._
     import CheckedBehavior._
 
     val factory = SymbolRequirement.factory("emitter")
@@ -817,42 +1411,67 @@ private object Emitter {
     def cond(p: Boolean)(v: => SymbolRequirement): SymbolRequirement =
       if (p) v else none()
 
-    def assumingES6: Boolean = coreSpec.esFeatures.useECMAScript2015
+    def isAnyFatal(behaviors: CheckedBehavior*): Boolean =
+      behaviors.contains(Fatal)
 
     multiple(
-        instantiateClass("O", "init___"),
-        classData("O"),
+      cond(asInstanceOfs != Unchecked) {
+        instantiateClass(ClassCastExceptionClass, StringArgConstructorName)
+      },
 
-        instantiateClass("jl_CloneNotSupportedException", "init___"),
+      cond(arrayIndexOutOfBounds != Unchecked) {
+        instantiateClass(ArrayIndexOutOfBoundsExceptionClass,
+            StringArgConstructorName)
+      },
 
-        cond(asInstanceOfs != Unchecked) {
-          instantiateClass("jl_ClassCastException", "init___T")
-        },
+      cond(arrayStores != Unchecked) {
+        instantiateClass(ArrayStoreExceptionClass,
+            StringArgConstructorName)
+      },
 
-        cond(arrayIndexOutOfBounds != Unchecked) {
-          instantiateClass("jl_ArrayIndexOutOfBoundsException", "init___T")
-        },
+      cond(negativeArraySizes != Unchecked) {
+        instantiateClass(NegativeArraySizeExceptionClass,
+            NoArgConstructorName)
+      },
 
-        cond(asInstanceOfs == Fatal || arrayIndexOutOfBounds == Fatal) {
-          instantiateClass("sjsr_UndefinedBehaviorError", "init___jl_Throwable")
-        },
+      cond(nullPointers != Unchecked) {
+        instantiateClass(NullPointerExceptionClass, NoArgConstructorName)
+      },
 
-        cond(moduleInit == Fatal) {
-          instantiateClass("sjsr_UndefinedBehaviorError", "init___T")
-        },
+      cond(stringIndexOutOfBounds != Unchecked) {
+        instantiateClass(StringIndexOutOfBoundsExceptionClass,
+            IntArgConstructorName)
+      },
 
-        instantiateClass("jl_Class", "init___O"),
+      cond(isAnyFatal(asInstanceOfs, arrayIndexOutOfBounds, arrayStores,
+          negativeArraySizes, nullPointers, stringIndexOutOfBounds)) {
+        instantiateClass(UndefinedBehaviorErrorClass,
+            ThrowableArgConsructorName)
+      },
 
-        cond(!coreSpec.esFeatures.allowBigIntsForLongs) {
-          multiple(
-              instanceTests(LongImpl.RuntimeLongClass),
-              instantiateClass(LongImpl.RuntimeLongClass, LongImpl.AllConstructors.toList),
-              callMethods(LongImpl.RuntimeLongClass, LongImpl.AllMethods.toList),
-              callOnModule(LongImpl.RuntimeLongModuleClass, LongImpl.AllModuleMethods.toList)
-          )
-        }
+      cond(moduleInit == Fatal) {
+        instantiateClass(UndefinedBehaviorErrorClass,
+            StringArgConstructorName)
+      },
+
+      // See systemIdentityHashCode in CoreJSLib
+      callMethod(BoxedDoubleClass, hashCodeMethodName),
+      callMethod(BoxedStringClass, hashCodeMethodName),
+
+      cond(!config.coreSpec.esFeatures.allowBigIntsForLongs) {
+        callStaticMethods(LongImpl.RuntimeLongClass, LongImpl.OperatorMethods.toList)
+      },
+
+      cond(config.coreSpec.esFeatures.esVersion < ESVersion.ES2015) {
+        val cls = FloatingPointBitsPolyfillsClass
+        multiple(
+          callStaticMethod(cls, floatToBits),
+          callStaticMethod(cls, floatFromBits),
+          callStaticMethod(cls, doubleToBits),
+          callStaticMethod(cls, doubleFromBits)
+        )
+      }
     )
   }
-
 
 }

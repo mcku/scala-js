@@ -10,41 +10,87 @@
  * additional information regarding copyright ownership.
  */
 
+// format: off
+
 package org.scalajs.linker.backend.emitter
 
 import scala.language.implicitConversions
 
+import scala.collection.mutable
+
 import org.scalajs.ir.ScalaJSVersions
 import org.scalajs.ir.Position
-import org.scalajs.ir.Definitions._
-import org.scalajs.ir.Trees.{JSUnaryOp, JSBinaryOp}
-import org.scalajs.ir.Types.{ClassRef, ArrayTypeRef}
+import org.scalajs.ir.Names._
+import org.scalajs.ir.OriginalName.NoOriginalName
+import org.scalajs.ir.Trees.{ClosureFlags, JSUnaryOp, JSBinaryOp}
+import org.scalajs.ir.Types._
+import org.scalajs.ir.WellKnownNames._
 
-import org.scalajs.linker.{CheckedBehavior, ModuleKind}
+import org.scalajs.linker.interface.{CheckedBehavior, ESVersion, ModuleKind}
+import org.scalajs.linker.interface.unstable.RuntimeClassNameMapperImpl
 import org.scalajs.linker.backend.javascript.Trees._
+
+import EmitterNames._
+import PolyfillableBuiltin._
 
 private[emitter] object CoreJSLib {
 
-  def build(jsGen: JSGen): WithGlobals[Tree] =
-    new CoreJSLibBuilder(jsGen).build()
+  def build[E](sjsGen: SJSGen, postTransform: List[Tree] => E, moduleContext: ModuleContext,
+      globalKnowledge: GlobalKnowledge): WithGlobals[Lib[E]] = {
+    new CoreJSLibBuilder(sjsGen)(moduleContext, globalKnowledge).build(postTransform)
+  }
 
-  private class CoreJSLibBuilder(jsGen: JSGen) {
+  /** A fully built CoreJSLib
+   *
+   *  @param preObjectDefinitions The bulk of the CoreJSLib.
+   *      Definitions that do not depend on any other Scala.js emitted code
+   *      (notably Object and RuntimeLong). These must be available to all
+   *      Scala.js emitted code.
+   *
+   *  @param postObjectDefinitions Definitions coming after `j.l.Object`.
+   *      Definitions that need the `$c_O` class to be defined, but nothing
+   *      else. This notably includes the Array classes and everything that
+   *      depends on them, such as the `$TypeData` class.
+   */
+  final class Lib[E] private[CoreJSLib] (
+      val preObjectDefinitions: E,
+      val postObjectDefinitions: E)
+
+  private class CoreJSLibBuilder(sjsGen: SJSGen)(
+      implicit moduleContext: ModuleContext, globalKnowledge: GlobalKnowledge) {
+
+    import sjsGen._
     import jsGen._
+    import config._
+    import coreSpec._
+    import nameGen._
+    import varGen._
     import esFeatures._
     import semantics._
     import TreeDSL._
 
     implicit private val noPosition: Position = Position.NoPosition
 
-    private val buf = List.newBuilder[Tree]
+    private implicit val globalRefTracking: GlobalRefTracking =
+      topLevelGlobalRefTracking
+
     private var trackedGlobalRefs = Set.empty[String]
 
     private def globalRef(name: String): VarRef = {
+      trackGlobalRef(name)
+      varRef(name)
+    }
+
+    private def trackGlobalRef(name: String): Unit = {
       // We never access dangerous global refs from the core JS lib
       assert(!GlobalRefUtils.isDangerousGlobalRef(name))
-      if (trackAllGlobalRefs)
+      if (globalRefTracking.shouldTrack(name))
         trackedGlobalRefs += name
-      varRef(name)
+    }
+
+    private def extractWithGlobals[A](withGlobals: WithGlobals[A]): A = {
+      withGlobals.globalVarNames.foreach(trackGlobalRef(_))
+      withGlobals.value
     }
 
     // Unconditional global references
@@ -52,82 +98,89 @@ private[emitter] object CoreJSLib {
     private val ArrayRef = globalRef("Array")
     private val StringRef = globalRef("String")
     private val MathRef = globalRef("Math")
+    private val NumberRef = globalRef("Number")
+    private val DataViewRef = globalRef("DataView")
+    private val ArrayBufferRef = globalRef("ArrayBuffer")
+    private val Int8ArrayRef = globalRef("Int8Array")
+    private val Int32ArrayRef = globalRef("Int32Array")
     private val TypeErrorRef = globalRef("TypeError")
+    private def BigIntRef = globalRef("BigInt")
+    private val SymbolRef = globalRef("Symbol")
 
     // Conditional global references that we often use
-    private def BigIntRef = globalRef("BigInt")
+    private def ReflectRef = globalRef("Reflect")
 
-    private val classData = Ident("$classData")
+    private val classData = Ident(cpn.classData)
 
-    private val orderedPrimitiveClasses = {
-      List(VoidClass, BooleanClass, CharClass, ByteClass, ShortClass, IntClass,
-          LongClass, FloatClass, DoubleClass)
+    private val orderedPrimRefsWithoutVoid = {
+      List(BooleanRef, CharRef, ByteRef, ShortRef, IntRef, LongRef,
+          FloatRef, DoubleRef)
     }
 
-    def build(): WithGlobals[Tree] = {
-      defineLinkingInfo()
-      defineJSBuiltinsSnapshotsAndPolyfills()
-      declareCachedL0()
-      definePropertyName()
-      defineCharClass()
-      defineRuntimeFunctions()
-      defineDispatchFunctions()
-      defineArithmeticOps()
-      defineES2015LikeHelpers()
-      defineModuleHelpers()
-      defineIntrinsics()
-      defineIsHijackedBoxedClasses()
-      defineAsHijackedBoxedClasses()
+    private val orderedPrimRefs = VoidRef :: orderedPrimRefsWithoutVoid
+
+    private val specializedArrayTypeRefs: List[NonArrayTypeRef] =
+      ClassRef(ObjectClass) :: orderedPrimRefsWithoutVoid
+
+    def build[E](postTransform: List[Tree] => E): WithGlobals[Lib[E]] = {
+      val lib = new Lib(
+        postTransform(buildPreObjectDefinitions()),
+        postTransform(buildPostObjectDefinitions()))
+      WithGlobals(lib, trackedGlobalRefs)
+    }
+
+    private def buildPreObjectDefinitions(): List[Tree] = {
+      defineFileLevelThis() :::
+      defineJSBuiltinsSnapshotsAndPolyfills() :::
+      defineCharClass() :::
+      defineLongClass() :::
+      defineRuntimeFunctions() :::
+      defineObjectGetClassFunctions() :::
+      defineDispatchFunctions() :::
+      defineArithmeticOps() :::
+      defineES2015LikeHelpers() :::
+      defineModuleHelpers() :::
+      defineIntrinsics() :::
+      defineIsPrimitiveFunctions() :::
       defineBoxFunctions()
-      defineTypedArrayConversions()
-      defineTypeDataClass()
-      defineIsArrayOfPrimitiveFunctions()
-      defineAsArrayOfPrimitiveFunctions()
-      definePrimitiveTypeDatas()
-
-      WithGlobals(Block(buf.result()), trackedGlobalRefs)
     }
 
-    private def defineLinkingInfo(): Unit = {
-      // must be in sync with scala.scalajs.runtime.LinkingInfo
-
-      def objectFreeze(tree: Tree): Tree =
-        Apply(genIdentBracketSelect(ObjectRef, "freeze"), tree :: Nil)
-
-      def checkedBehaviorInt(behavior: CheckedBehavior): IntLiteral = {
-        int(behavior match {
-          case CheckedBehavior.Compliant => 0
-          case CheckedBehavior.Fatal     => 1
-          case CheckedBehavior.Unchecked => 2
-        })
-      }
-
-      val linkingInfo = objectFreeze(ObjectConstr(List(
-          str("semantics") -> objectFreeze(ObjectConstr(List(
-              str("asInstanceOfs") -> checkedBehaviorInt(asInstanceOfs),
-              str("arrayIndexOutOfBounds") -> checkedBehaviorInt(arrayIndexOutOfBounds),
-              str("moduleInit") -> checkedBehaviorInt(moduleInit),
-              str("strictFloats") -> bool(strictFloats),
-              str("productionMode") -> bool(productionMode)
-          ))),
-          str("assumingES6") -> bool(useECMAScript2015),
-          str("linkerVersion") -> str(ScalaJSVersions.current),
-          str("globalThis") -> This()
-      )))
-
-      buf += const(envField("linkingInfo"), linkingInfo)
+    private def buildPostObjectDefinitions(): List[Tree] = {
+      defineSpecializedArrayClasses() :::
+      defineTypeDataClass() :::
+      defineSpecializedIsArrayOfFunctions() :::
+      defineSpecializedAsArrayOfFunctions() :::
+      defineSpecializedTypeDatas() :::
+      defineConstantArrayMakers()
     }
 
-    private def defineJSBuiltinsSnapshotsAndPolyfills(): Unit = {
-      def genPolyfillFor(builtinName: String): Tree = builtinName match {
-        case "imul" =>
+    private def defineFileLevelThis(): List[Tree] = {
+      extractWithGlobals(globalVarDef(VarField.fileLevelThis, CoreVar, This()))
+    }
+
+    private def defineJSBuiltinsSnapshotsAndPolyfills(): List[Tree] = {
+      def genPolyfillFor(builtin: PolyfillableBuiltin): Tree = builtin match {
+        case ObjectIsBuiltin =>
+          val x = varRef("x")
+          val y = varRef("y")
+          genArrowFunction(paramList(x, y), Return {
+            If(x === y, {
+              // +0.0 must be different from -0.0
+              (x !== 0) || ((int(1) / x) === (int(1) / y))
+            }, {
+              // NaN must be equal to NaN
+              (x !== x) && (y !== y)
+            })
+          })
+
+        case ImulBuiltin =>
           val a = varRef("a")
           val b = varRef("b")
           val ah = varRef("ah")
           val al = varRef("al")
           val bh = varRef("bh")
           val bl = varRef("bl")
-          Function(arrow = false, paramList(a, b), Block(
+          genArrowFunction(paramList(a, b), Block(
               const(ah, a >>> 16),
               const(al, a & 0xffff),
               const(bh, b >>> 16),
@@ -135,389 +188,647 @@ private[emitter] object CoreJSLib {
               Return((al * bl) + (((ah * bl + al * bh) << 16) >>> 0) | 0)
           ))
 
-        case "fround" =>
-          val v = varRef("v")
-          if (!strictFloats) {
-            Function(arrow = false, paramList(v), Return(+v))
-          } else {
-            val Float32ArrayRef = globalRef("Float32Array")
-
-            val array = varRef("array")
-            val typedArrayPolyfill = Function(arrow = false, paramList(v), {
-              Block(
-                  const(array, New(Float32ArrayRef, 1 :: Nil)),
-                  BracketSelect(array, 0) := v,
-                  Return(BracketSelect(array, 0))
-              )
-            })
-
-            // scalastyle:off line.size.limit
-            /* Originally inspired by the Typed Array polyfills written by
-             * Joshua Bell:
-             * https://github.com/inexorabletash/polyfill/blob/a682f42c1092280bb01907c245979fb07219513d/typedarray.js#L150-L255
-             * Then simplified quite a lot because
-             * 1) we do not need to produce the actual bit string that serves
-             *    as storage of the floats, and
-             * 2) we are only interested in the float32 case.
-             */
-            // scalastyle:on line.size.limit
-            val isNegative = varRef("isNegative")
-            val av = varRef("av")
-            val absResult = varRef("absResult")
-            val e0 = varRef("e0")
-            val twoPowE0 = varRef("twoPowE0")
-            val n1 = varRef("n1")
-            val w1 = varRef("w1")
-            val d1 = varRef("d1")
-            val f0 = varRef("f0")
-            val n2 = varRef("n2")
-            val w2 = varRef("w2")
-            val d2 = varRef("d2")
-
-            def callMathFun(fun: String, args: Tree*): Tree =
-              Apply(genIdentBracketSelect(MathRef, fun), args.toList)
-
-            def roundAndThen(n: VarRef, w: VarRef, d: VarRef)(
-                rest: Tree => Tree): Tree = {
-              Block(
-                  const(w, callMathFun("floor", n)),
-                  const(d, n - w),
-                  rest {
-                    If(d < double(0.5), w,
-                        If(d > double(0.5), w + 1,
-                            If((w % 2) !== 0, w + 1, w)))
-                  }
-              )
-            }
-
-            val Inf = double(Double.PositiveInfinity)
-            val NegInf = double(Double.NegativeInfinity)
-            val subnormalThreshold = double(1.1754943508222875e-38)
-            val ln2 = double(0.6931471805599453)
-            val twoPowMantissaBits = int(8388608)
-            val FloatMinPosValue = double(Float.MinPositiveValue)
-
-            val noTypedArrayPolyfill = Function(arrow = false, paramList(v), {
-              Block(
-                  If((v !== v) || (v === 0) || (v === Inf) || (v === NegInf), {
-                    Return(v)
-                  }, Skip()),
-                  const(isNegative, v < 0),
-                  const(av, If(isNegative, -v, v)),
-                  genEmptyMutableLet(absResult.ident),
-                  If(av >= subnormalThreshold, {
-                    Block(
-                        const(e0, callMathFun("floor", callMathFun("log", av) / ln2)),
-                        If(e0 > 127, { // bias
-                          absResult := Inf
-                        }, {
-                          Block(
-                              const(twoPowE0, callMathFun("pow", 2, e0)),
-                              const(n1, twoPowMantissaBits * (av / twoPowE0)),
-                              roundAndThen(n1, w1, d1) { rounded =>
-                                const(f0, rounded)
-                              },
-                              If((f0 / twoPowMantissaBits) < 2, {
-                                absResult := twoPowE0 * (int(1) + ((f0-twoPowMantissaBits) / twoPowMantissaBits))
-                              }, {
-                                If(e0 > 126, {
-                                  absResult := Inf
-                                }, {
-                                  // 1.1920928955078125e-7 is (1 + ((1-twoPowMantissaBits) / twoPowMantissaBits))
-                                  absResult := (int(2) * twoPowE0) * double(1.1920928955078125e-7)
-                                })
-                              })
-                          )
-                        })
-                    )
-                  }, {
-                    Block(
-                        const(n2, av / FloatMinPosValue),
-                        roundAndThen(n2, w2, d2) { rounded =>
-                          absResult := FloatMinPosValue * rounded
-                        }
-                    )
-                  }),
-                  Return(If(isNegative, -absResult, absResult))
-              )
-            })
-
-            If(typeof(Float32ArrayRef) !== str("undefined"),
-                typedArrayPolyfill, noTypedArrayPolyfill)
-          }
-
-        case "clz32" =>
-          val i = varRef("i")
+        case Clz32Builtin =>
+          // See Hacker's Delight, Section 5-3
+          val x = varRef("x")
           val r = varRef("r")
-          Function(arrow = false, paramList(i), Block(
-              // See Hacker's Delight, Section 5-3
-              If(i === 0, Return(32), Skip()),
-              let(r, 1),
-              If((i & 0xffff0000) === 0, Block(i := i << 16, r := r + 16), Skip()),
-              If((i & 0xff000000) === 0, Block(i := i << 8, r := r + 8), Skip()),
-              If((i & 0xf0000000) === 0, Block(i := i << 4, r := r + 4), Skip()),
-              If((i & 0xc0000000) === 0, Block(i := i << 2, r := r + 2), Skip()),
-              Return(r + (i >> 31))
+          genArrowFunction(paramList(x), {
+            If(x === 0, {
+              Return(32)
+            }, {
+              Block(
+                let(r, 1),
+                If((x & 0xffff0000) === 0, Block(x := x << 16, r := r + 16), Skip()),
+                If((x & 0xff000000) === 0, Block(x := x << 8, r := r + 8), Skip()),
+                If((x & 0xf0000000) === 0, Block(x := x << 4, r := r + 4), Skip()),
+                If((x & 0xc0000000) === 0, Block(x := x << 2, r := r + 2), Skip()),
+                Return(r + (x >> 31))
+              )
+            })
+          })
+
+        case FroundBuiltin =>
+          val v = varRef("v")
+          val Float32ArrayRef = globalRef("Float32Array")
+
+          /* (function(array) {
+           *   return function(v) {
+           *     array[0] = v;
+           *     return array[0];
+           *   }
+           * })(new Float32Array(1))
+           *
+           * Allocating the Float32Array once and for all, and capturing it
+           * in an IIFE, is *much* faster than recreating it in every call of
+           * the polyfill (about an order of magnitude).
+           */
+          val array = varRef("array")
+          val typedArrayPolyfillInner = genArrowFunction(paramList(v), {
+            Block(
+                BracketSelect(array, 0) := v,
+                Return(BracketSelect(array, 0))
+            )
+          })
+          val typedArrayPolyfill = Apply(
+              genArrowFunction(paramList(array), Return(typedArrayPolyfillInner)),
+              New(Float32ArrayRef, 1 :: Nil) :: Nil)
+
+          /* Originally inspired by the Typed Array polyfills written by
+           * Joshua Bell:
+           * https://github.com/inexorabletash/polyfill/blob/a682f42c1092280bb01907c245979fb07219513d/typedarray.js#L150-L255
+           * Then simplified quite a lot because
+           * 1) we do not need to produce the actual bit string that serves
+           *    as storage of the floats, and
+           * 2) we are only interested in the float32 case.
+           *
+           * Eventually, the last bits of the above were replaced by an
+           * application of Veltkamp's splitting (see below). The inspiration
+           * for that use case came from core-js' implementation at
+           * https://github.com/zloirock/core-js/blob/a3f591658e063a6e2c2594ec3c80eff16340a98d/packages/core-js/internals/math-fround.js
+           * The code does not mention Veltkamp's splitting, but the PR
+           * discussion that led to it does, although with a question mark,
+           * and without any explanation of how/why it works:
+           * https://github.com/paulmillr/es6-shim/pull/140#issuecomment-91787165
+           * We tracked down the descriptions and proofs relative to
+           * Veltkamp's splitting and re-derived an implementation from there.
+           *
+           * The direct tests for this polyfill are the tests for `toFloat`
+           * in org.scalajs.testsuite.compiler.DoubleTest.
+           */
+          val v2 = varRef("v2") // holds v²
+          val p = varRef("p")
+
+          val Inf = double(Double.PositiveInfinity)
+          val overflowThreshold = 3.4028235677973366e38
+          val normalThreshold = 1.1754943508222875e-38
+
+          val noTypedArrayPolyfill = genArrowFunction(paramList(v), Block(
+            v := +v, // turns `null` into +0, making sure not to deoptimize what follows
+            const(v2, v * v), // by construction, v2 is always positive
+            If(v2 >= double(overflowThreshold * overflowThreshold), {
+              /* |v| >= overflowThreshold -> overflow with an infinity of the same sign as v.
+               * The comparison is also true when computing v*v overflows itself,
+               * or when v is an infinity to begin with.
+               */
+              Return(v * Inf)
+            }, If(v2 >= double(normalThreshold * normalThreshold), Block(
+              /* |v| >= normalThreshold
+               *
+               * Here, we know that both the input and output are expressed
+               * in a Double normal form, so standard floating point
+               * algorithms from papers can be used.
+               *
+               * We use Veltkamp's splitting, as described and studied in
+               *   Sylvie Boldo.
+               *   Pitfalls of a Full Floating-Point Proof: Example on the
+               *   Formal Proof of the Veltkamp/Dekker Algorithms
+               *   https://dx.doi.org/10.1007/11814771_6
+               * Section 3, with β = 2, t = 53, s = 53 - 24 = 29, x = |v|.
+               * 53 is the number of effective mantissa bits in a Double;
+               * 24 in a Float.
+               *
+               * ◦ is the round-to-nearest operation with a tie-breaking
+               * rule (in our case, break-to-even).
+               *
+               *   Let C = βˢ + 1 = 536870913
+               *   p = ◦(x × C)
+               *   q = ◦(x − p)
+               *   x₁ = ◦(p + q)
+               *
+               * Boldo proves that x₁ is the (t-s)-bit float closest to x,
+               * using the same tie-breaking rule as ◦. Since (t-s) = 24,
+               * this is the closest float32 (with 24 mantissa bits), and
+               * therefore the correct result of `fround`.
+               *
+               * Boldo also proves that if the computation of x × C does not
+               * cause overflow, then none of the following operations will
+               * cause overflow. We know that x = |v| is less than the
+               * overflowThreshold, and overflowThreshold × C does not
+               * overflow, so that computation can never cause an overflow.
+               *
+               * If the reader does not have access to Boldo's paper, they
+               * may refer instead to
+               *   Claude-Pierre Jeannerod, Jean-Michel Muller, Paul Zimmermann.
+               *   On various ways to split a floating-point number.
+               *   ARITH 2018 - 25th IEEE Symposium on Computer Arithmetic,
+               *   Jun 2018, Amherst (MA), United States.
+               *   pp.53-60, 10.1109/ARITH.2018.8464793. hal-01774587v2
+               * available at
+               *   https://hal.inria.fr/hal-01774587v2/document
+               * Section III, although that paper defers some theorems and
+               * proofs to Boldo's.
+               *
+               * One can verify that the above algorithm must also work for
+               * negative x = v. Indeed, p is therefore negative as well, and
+               * all the operations are subsequently symmetric.
+               */
+              const(p, v * 536870913),
+              Return(p + (v - p))
+            ), {
+              /* Here, the result is represented as a subnormal form in a
+               * float32 representation.
+               *
+               * We round `v` to the nearest multiple of the smallest
+               * positive Float value (i.e., `Float.MinPositiveValue`),
+               * breaking ties to an even multiple.
+               *
+               * We do this by leveraging the inherent loss of precision near
+               * the minimum positive *double* value: conceptually, we divide
+               * the value by
+               *   M = Float.MinPositiveValue / Double.MinPositiveValue
+               * which will drop the excess precision, applying exactly the
+               * rounding strategy that we want. Then we multiply the value
+               * back by M.
+               *
+               * For the division, we multiply by a = 1/M, which is exactly
+               * representable as a Double. Since M itself is not
+               * representable, we decompose M into b × c = M such that b and
+               * c are both representable positive powers of 2.
+               *
+               * ---
+               *
+               * As an additional "hack", the input values NaN, +0 and -0
+               * also fall in this code path. For them, this computation
+               * happens to be an identity, and is therefore correct as well.
+               */
+              val a = Double.MinPositiveValue / Float.MinPositiveValue.toDouble
+              val b = java.lang.Double.MIN_NORMAL / Double.MinPositiveValue
+              val c = (1.0 / b) / a
+              Return(((v * double(a)) * double(b)) * double(c))
+            }))
           ))
+
+          If(typeof(Float32ArrayRef) !== str("undefined"),
+              typedArrayPolyfill, noTypedArrayPolyfill)
+
+        case PrivateSymbolBuiltin =>
+          /* function privateJSFieldSymbol(description) {
+           *   function rand32() {
+           *     const s = ((Math.random() * 4294967296.0) >>> 0).toString(16);
+           *     return "00000000".substring(s.length) + s;
+           *   }
+           *   return description + rand32() + rand32() + rand32() + rand32();
+           * }
+           *
+           * In production mode, we remove the `description` parameter.
+           */
+          val description = varRef("description")
+          val rand32 = varRef("rand32")
+          val s = varRef("s")
+
+          val theParamList =
+            if (semantics.productionMode) Nil
+            else paramList(description)
+
+          genArrowFunction(theParamList, Block(
+              FunctionDef(rand32.ident, Nil, None, Block(
+                  genLet(s.ident, mutable = false, {
+                      val randomDouble =
+                        Apply(genIdentBracketSelect(MathRef, "random"), Nil)
+                      val randomUint =
+                        (randomDouble * double(4294967296.0)) >>> 0
+                      Apply(genIdentBracketSelect(randomUint, "toString"), 16 :: Nil)
+                  }),
+                  {
+                    val padding = Apply(
+                        genIdentBracketSelect(str("00000000"), "substring"),
+                        genIdentBracketSelect(s, "length") :: Nil)
+                    Return(padding + s)
+                  }
+              )),
+              {
+                val callRand32 = Apply(rand32, Nil)
+                val rand128 = callRand32 + callRand32 + callRand32 + callRand32
+                val result =
+                  if (semantics.productionMode) rand128
+                  else description + rand128
+                Return(result)
+              }
+          ))
+
+        case GetOwnPropertyDescriptorsBuiltin =>
+          /* getOwnPropertyDescriptors = (() => {
+           *   // Fetch or polyfill Reflect.ownKeys
+           *   var ownKeysFun;
+           *   if (typeof Reflect != "undefined" && Reflect.ownKeys) {
+           *     ownKeysFun = Reflect.ownKeys;
+           *   } else {
+           *     /* Fetch or polyfill Object.getOwnPropertySymbols.
+           *      * We assume that if that function does not exist, then
+           *      * symbols do not exist at all. Therefore, the result is
+           *      * always an empty array.
+           *      */
+           *     var getOwnPropertySymbols = Object.getOwnPropertySymbols || (o => []);
+           *
+           *     // Polyfill for Reflect.ownKeys
+           *     ownKeysFun = o => Object.getOwnPropertyNames(o).concat(getOwnPropertySymbols(o));
+           *   }
+           *
+           *   // Polyfill for Object.getOwnPropertyDescriptors
+           *   return (o => {
+           *     var ownKeys = ownKeysFun(o);
+           *     var descriptors = {};
+           *     var len = ownKeys.length | 0;
+           *     var i = 0;
+           *     while (i !== len) {
+           *       var key = ownKeys[i];
+           *       /* Almost equivalent to
+           *        *   descriptors[key] = Object.getOwnPropertyDescriptor(descriptors, key);
+           *        * except that `defineProperty` will bypass any existing setter for
+           *        * the property `key` on `descriptors` or in its prototype chain.
+           *        */
+           *       Object.defineProperty(descriptors, key, {
+           *         configurable: true,
+           *         enumerable: true,
+           *         writable: true,
+           *         value: Object.getOwnPropertyDescriptor(o, key)
+           *       });
+           *       i = (i + 1) | 0;
+           *     }
+           *     return descriptors;
+           *   });
+           * })();
+           */
+          val o = varRef("o")
+          val ownKeysFun = varRef("ownKeysFun")
+          val getOwnPropertySymbols = varRef("getOwnPropertySymbols")
+          val ownKeys = varRef("ownKeys")
+          val descriptors = varRef("descriptors")
+          val len = varRef("len")
+          val i = varRef("i")
+          val key = varRef("key")
+
+          val funGenerator = genArrowFunction(Nil, Block(
+            VarDef(ownKeysFun.ident, None),
+            If((typeof(ReflectRef) !== str("undefined")) && genIdentBracketSelect(ReflectRef, "ownKeys"), {
+              ownKeysFun := genIdentBracketSelect(ReflectRef, "ownKeys")
+            }, Block(
+              const(getOwnPropertySymbols,
+                  genIdentBracketSelect(ObjectRef, "getOwnPropertySymbols") ||
+                  genArrowFunction(paramList(o), Return(ArrayConstr(Nil)))),
+              ownKeysFun := genArrowFunction(paramList(o), Return {
+                Apply(
+                    genIdentBracketSelect(
+                        Apply(genIdentBracketSelect(ObjectRef, "getOwnPropertyNames"), o :: Nil),
+                        "concat"),
+                    Apply(getOwnPropertySymbols, o :: Nil) :: Nil)
+              })
+            )),
+            Return(genArrowFunction(paramList(o), Block(
+              const(ownKeys, Apply(ownKeysFun, o :: Nil)),
+              const(descriptors, ObjectConstr(Nil)),
+              const(len, ownKeys.length | 0),
+              let(i, 0),
+              While(i !== len, Block(
+                const(key, BracketSelect(ownKeys, i)),
+                Apply(genIdentBracketSelect(ObjectRef, "defineProperty"), List(
+                  descriptors,
+                  key,
+                  ObjectConstr(List(
+                    str("configurable") -> bool(true),
+                    str("enumerable") -> bool(true),
+                    str("writable") -> bool(true),
+                    str("value") -> {
+                      Apply(
+                          genIdentBracketSelect(ObjectRef, "getOwnPropertyDescriptor"),
+                          o :: key :: Nil)
+                    }
+                  ))
+                )),
+                i := (i + 1) | 0
+              )),
+              Return(descriptors)
+            )))
+          ))
+
+          Apply(funGenerator, Nil)
       }
 
-      buf ++= List("imul", "fround", "clz32").map { builtinName =>
-        val rhs0 = genIdentBracketSelect(MathRef, builtinName)
-        val rhs =
-          if (useECMAScript2015) rhs0
-          else rhs0 || genPolyfillFor(builtinName)
-        const(envField(builtinName), rhs)
+      PolyfillableBuiltin.All.withFilter(esVersion < _.availableInESVersion).flatMap { builtin =>
+        val polyfill = genPolyfillFor(builtin)
+        val rhs = builtin match {
+          case builtin: GlobalVarBuiltin =>
+            // (typeof GlobalVar !== "undefined") ? GlobalVar : polyfill
+            val globalVarRef = globalRef(builtin.globalVar)
+            If(UnaryOp(JSUnaryOp.typeof, globalVarRef) !== str("undefined"),
+                globalVarRef, polyfill)
+          case builtin: NamespacedBuiltin =>
+            // NamespaceGlobalVar.builtinName || polyfill
+            genIdentBracketSelect(globalRef(builtin.namespaceGlobalVar), builtin.builtinName) || polyfill
+        }
+        extractWithGlobals(globalVarDef(builtin.polyfillField, CoreVar, rhs))
       }
     }
 
-    private def declareCachedL0(): Unit = {
-      if (!allowBigIntsForLongs)
-        buf += genEmptyMutableLet(envFieldIdent("L0"))
-    }
-
-    private def definePropertyName(): Unit = {
-      /* Encodes a property name for runtime manipulation.
-       *
-       * Usage:
-       *   env.propertyName({someProp:0})
-       * Returns:
-       *   "someProp"
-       * Useful when the property is renamed by a global optimizer (like
-       * Closure) but we must still get hold of a string of that name for
-       * runtime reflection.
-       */
-      val obj = varRef("obj")
-      val prop = varRef("prop")
-      buf += envFunctionDef("propertyName", paramList(obj),
-          ForIn(genEmptyImmutableLet(prop.ident), obj, Return(prop))
-      )
-    }
-
-    private def defineCharClass(): Unit = {
+    private def defineCharClass(): List[Tree] = {
       val ctor = {
         val c = varRef("c")
-        MethodDef(static = false, Ident("constructor"), paramList(c), {
-          This() DOT "c" := c
+        MethodDef(static = false, Ident("constructor"), paramList(c), None, {
+          This() DOT cpn.c := c
         })
       }
 
       val toStr = {
-        MethodDef(static = false, Ident("toString"), Nil, {
+        MethodDef(static = false, Ident("toString"), Nil, None, {
           Return(Apply(genIdentBracketSelect(StringRef, "fromCharCode"),
-              (This() DOT "c") :: Nil))
+              (This() DOT cpn.c) :: Nil))
         })
       }
 
-      buf += genClassDef(envFieldIdent("Char"), None, List(ctor, toStr))
+      if (useClassesForRegularClasses) {
+        extractWithGlobals(globalClassDef(VarField.Char, CoreVar, None, ctor :: toStr :: Nil))
+      } else {
+        defineFunction(VarField.Char, ctor.args, ctor.body) :::
+        setPrototypeVar(globalVar(VarField.Char, CoreVar)) :::
+        assignES5ClassMembers(globalVar(VarField.Char, CoreVar), List(toStr))
+      }
     }
 
-    private def defineRuntimeFunctions(): Unit = {
-      if (asInstanceOfs != CheckedBehavior.Unchecked) {
-        // throwClassCastException
-        val instance = varRef("instance")
-        val classFullName = varRef("classFullName")
-        buf += envFunctionDef("throwClassCastException", paramList(instance, classFullName), {
-          Throw(maybeWrapInUBE(asInstanceOfs, {
-            genScalaClassNew("jl_ClassCastException", "init___T",
-                instance + str(" is not an instance of ") + classFullName)
-          }))
-        })
+    private def defineLongClass(): List[Tree] = {
+      condDefs(!allowBigIntsForLongs) {
+        val ctor = {
+          val lo = varRef("lo")
+          val hi = varRef("hi")
+          MethodDef(static = false, Ident("constructor"), paramList(lo, hi), None, Block(
+            This() DOT cpn.lo := lo,
+            This() DOT cpn.hi := hi
+          ))
+        }
 
-        // throwArrayCastException
-        val classArrayEncodedName = varRef("classArrayEncodedName")
-        val depth = varRef("depth")
-        buf += envFunctionDef("throwArrayCastException",
-            paramList(instance, classArrayEncodedName, depth), {
-          Block(
-              While(depth.prefix_--, {
-                classArrayEncodedName := (str("[") + classArrayEncodedName)
-              }),
-              genCallHelper("throwClassCastException", instance, classArrayEncodedName)
-          )
-        })
+        val toStr = {
+          MethodDef(static = false, Ident("toString"), Nil, None, {
+            Return(genLongApplyStatic(LongImpl.toString_, This() DOT cpn.lo, This() DOT cpn.hi))
+          })
+        }
+
+        if (useClassesForRegularClasses) {
+          extractWithGlobals(globalClassDef(VarField.Long, CoreVar, None, ctor :: toStr :: Nil))
+        } else {
+          defineFunction(VarField.Long, ctor.args, ctor.body) :::
+          setPrototypeVar(globalVar(VarField.Long, CoreVar)) :::
+          assignES5ClassMembers(globalVar(VarField.Long, CoreVar), List(toStr))
+        }
       }
+    }
 
-      if (arrayIndexOutOfBounds != CheckedBehavior.Unchecked) {
-        // throwArrayIndexOutOfBoundsException
-        val i = varRef("i")
-        val msg = varRef("msg")
-        buf += envFunctionDef("throwArrayIndexOutOfBoundsException", paramList(i), {
-          Throw(maybeWrapInUBE(arrayIndexOutOfBounds, {
-            genScalaClassNew("jl_ArrayIndexOutOfBoundsException", "init___T",
-                If(i === Null(), Null(), str("") + i))
-          }))
-        })
-      }
-
-      // noIsInstance
-      locally {
-        val instance = varRef("instance")
-        buf += envFunctionDef("noIsInstance", paramList(instance), {
-          Throw(New(TypeErrorRef,
-              str("Cannot call isInstance() on a Class representing a JS trait/object") :: Nil))
-        })
-      }
-
-      locally {
-        val arrayClassData = varRef("arrayClassData")
-        val nativeArray = varRef("nativeArray")
-        val lengths = varRef("lengths")
-        val lengthIndex = varRef("lengthIndex")
-
-        // makeNativeArrayWrapper
-        buf += envFunctionDef("makeNativeArrayWrapper", paramList(arrayClassData, nativeArray), {
-          Return(New(arrayClassData DOT "constr", nativeArray :: Nil))
-        })
-
-        // newArrayObject
-        buf += envFunctionDef("newArrayObject", paramList(arrayClassData, lengths), {
-          Return(genCallHelper("newArrayObjectInternal", arrayClassData, lengths, int(0)))
-        })
-
-        // newArrayObjectInternal
-        val result = varRef("result")
-        val subArrayClassData = varRef("subArrayClassData")
-        val subLengthIndex = varRef("subLengthIndex")
-        val underlying = varRef("underlying")
-        val i = varRef("i")
-        buf += envFunctionDef("newArrayObjectInternal",
-            paramList(arrayClassData, lengths, lengthIndex), {
-          Block(
-              const(result, New(arrayClassData DOT "constr",
-                  BracketSelect(lengths, lengthIndex) :: Nil)),
-              If(lengthIndex < ((lengths DOT "length") - 1), {
-                Block(
-                    const(subArrayClassData, arrayClassData DOT "componentData"),
-                    const(subLengthIndex, lengthIndex + 1),
-                    const(underlying, result DOT "u"),
-                    For(let(i, 0), i < (underlying DOT "length"), i.++, {
-                      BracketSelect(underlying, i) :=
-                        genCallHelper("newArrayObjectInternal", subArrayClassData, lengths, subLengthIndex)
-                    })
-                )
-              }, Skip()),
-              Return(result)
-          )
-        })
-      }
-
-      // objectGetClass
-      locally {
-        val instance = varRef("instance")
-        val v = varRef("v")
-        buf += envFunctionDef("objectGetClass", paramList(instance), {
-          Switch(typeof(instance), List(
-              str("string") -> {
-                Return(genClassOf(BoxedStringClass))
-              },
-              str("number") -> {
-                Block(
-                    const(v, instance | 0),
-                    If(v === instance, { // is the value integral?
-                      If(genCallHelper("isByte", v), {
-                        Return(genClassOf(BoxedByteClass))
-                      }, {
-                        If(genCallHelper("isShort", v), {
-                          Return(genClassOf(BoxedShortClass))
-                        }, {
-                          Return(genClassOf(BoxedIntegerClass))
-                        })
-                      })
-                    }, {
-                      if (strictFloats) {
-                        If(genCallHelper("isFloat", v), {
-                          Return(genClassOf(BoxedFloatClass))
-                        }, {
-                          Return(genClassOf(BoxedDoubleClass))
-                        })
-                      } else {
-                        Return(genClassOf(BoxedFloatClass))
-                      }
-                    })
-                )
-              },
-              str("boolean") -> {
-                Return(genClassOf(BoxedBooleanClass))
-              },
-              str("undefined") -> {
-                Return(genClassOf(BoxedUnitClass))
-              }
-          ), {
-            If(instance === Null(), {
-              Return(Apply(instance DOT "getClass__jl_Class", Nil))
-            }, {
-              If(genIsInstanceOfHijackedClass(instance, ClassRef(BoxedLongClass)), {
-                Return(genClassOf(BoxedLongClass))
+    private def defineRuntimeFunctions(): List[Tree] = (
+      condDefs(asInstanceOfs != CheckedBehavior.Unchecked || arrayStores != CheckedBehavior.Unchecked)(
+        /* Returns a safe string description of a value.
+         * This helper is never called for `value === null`. As implemented,
+         * it would return `"object"` if it were.
+         */
+        defineFunction1(VarField.valueDescription) { value =>
+          Return {
+            If(typeof(value) === str("number"), {
+              If((value === 0) && (int(1) / value < 0), {
+                str("number(-0)")
               }, {
-                If(genIsInstanceOfHijackedClass(instance, ClassRef(BoxedCharacterClass)), {
-                  Return(genClassOf(BoxedCharacterClass))
+                str("number(") + value + str(")")
+              })
+            }, {
+              val longOrBigIntTest =
+                if (useBigIntForLongs) typeof(value) === str("bigint")
+                else genIsInstanceOfHijackedClass(value, BoxedLongClass)
+              If(longOrBigIntTest, {
+                if (useBigIntForLongs)
+                  str("bigint(") + value + str(")")
+                else
+                  str("long")
+              }, {
+                If(genIsInstanceOfHijackedClass(value, BoxedCharacterClass), {
+                  str("char")
                 }, {
-                  If(genIsScalaJSObject(instance), {
-                    Return(Apply(instance DOT classData DOT "getClassOf", Nil))
+                  If(genIsScalaJSObject(value), {
+                    value DOT classData DOT cpn.name
                   }, {
-                    Return(Null())
+                    typeof(value)
                   })
                 })
               })
             })
-          })
-        })
-      }
-    }
+          }
+        }
+      ) :::
 
-    private def defineDispatchFunctions(): Unit = {
-      val instance = varRef("instance")
+      condDefs(asInstanceOfs != CheckedBehavior.Unchecked)(
+        defineFunction2(VarField.throwClassCastException) { (instance, classFullName) =>
+          Throw(maybeWrapInUBE(asInstanceOfs, {
+            genScalaClassNew(ClassCastExceptionClass, StringArgConstructorName,
+                genCallHelper(VarField.valueDescription, instance) + str(" cannot be cast to ") + classFullName)
+          }))
+        } :::
 
-      // toString__T
-      locally {
-        buf += envFunctionDef("dp_toString__T", paramList(instance), {
-          Return(If(instance === Undefined(),
-              str("undefined"),
-              Apply(instance DOT "toString", Nil)))
-        })
-      }
+        defineFunction3(VarField.throwArrayCastException) { (instance, classArrayEncodedName, depth) =>
+          Block(
+              While(depth.prefix_--, {
+                classArrayEncodedName := (str("[") + classArrayEncodedName)
+              }),
+              genCallHelper(VarField.throwClassCastException, instance, classArrayEncodedName)
+          )
+        }
+      ) :::
 
-      // getClass__jl_Class
-      locally {
-        buf += envFunctionDef("dp_getClass__jl_Class", paramList(instance), {
-          Return(genCallHelper("objectGetClass", instance))
-        })
-      }
+      condDefs(arrayIndexOutOfBounds != CheckedBehavior.Unchecked)(
+        defineFunction1(VarField.throwArrayIndexOutOfBoundsException) { i =>
+          Throw(maybeWrapInUBE(arrayIndexOutOfBounds, {
+            genScalaClassNew(ArrayIndexOutOfBoundsExceptionClass,
+                StringArgConstructorName,
+                If(i === Null(), Null(), str("") + i))
+          }))
+        }
+      ) :::
 
-      // clone__O
-      locally {
-        buf += envFunctionDef("dp_clone__O", paramList(instance), {
-          If(genIsScalaJSObjectOrNull(instance), {
-            Return(Apply(instance DOT "clone__O", Nil))
-          }, {
-            Throw(genScalaClassNew("jl_CloneNotSupportedException", "init___"))
-          })
-        })
-      }
+      condDefs(arrayStores != CheckedBehavior.Unchecked)(
+        defineFunction1(VarField.throwArrayStoreException) { v =>
+          Throw(maybeWrapInUBE(arrayStores, {
+            genScalaClassNew(ArrayStoreExceptionClass,
+                StringArgConstructorName,
+                If(v === Null(), Null(), genCallHelper(VarField.valueDescription, v)))
+          }))
+        }
+      ) :::
 
-      // notify__V and notifyAll__V (final and no-op in Object)
-      locally {
-        for (name <- List("notify__V", "notifyAll__V")) {
-          buf += envFunctionDef("dp_" + name, paramList(instance), {
-            If(instance === Null(), Apply(instance DOT name, Nil), Skip())
+      condDefs(negativeArraySizes != CheckedBehavior.Unchecked)(
+        defineFunction0(VarField.throwNegativeArraySizeException) {
+          Throw(maybeWrapInUBE(negativeArraySizes, {
+            genScalaClassNew(NegativeArraySizeExceptionClass,
+                NoArgConstructorName)
+          }))
+        }
+      ) :::
+
+      condDefs(moduleInit == CheckedBehavior.Fatal)(
+        defineFunction1(VarField.throwModuleInitError) { name =>
+          Throw(genScalaClassNew(UndefinedBehaviorErrorClass,
+              StringArgConstructorName, str("Initializer of ") + name +
+              str(" called before completion of its super constructor")))
+        }
+      ) :::
+
+      condDefs(nullPointers != CheckedBehavior.Unchecked)(
+        defineFunction0(VarField.throwNullPointerException) {
+          Throw(maybeWrapInUBE(nullPointers, {
+            genScalaClassNew(NullPointerExceptionClass, NoArgConstructorName)
+          }))
+        } :::
+
+        // "checkNotNull", but with a very short name
+        defineFunction1(VarField.n) { x =>
+          Block(
+            If(x === Null(), genCallHelper(VarField.throwNullPointerException)),
+            Return(x)
+          )
+        }
+      ) :::
+
+      defineFunction1(VarField.noIsInstance) { instance =>
+        Throw(New(TypeErrorRef,
+            str("Cannot call isInstance() on a Class representing a JS trait/object") :: Nil))
+      } :::
+
+      defineFunction1(VarField.objectClone) { instance =>
+        // return Object.create(Object.getPrototypeOf(instance), $getOwnPropertyDescriptors(instance));
+        val callGetOwnPropertyDescriptors = genCallPolyfillableBuiltin(
+            GetOwnPropertyDescriptorsBuiltin, instance)
+        Return(Apply(genIdentBracketSelect(ObjectRef, "create"), List(
+            Apply(genIdentBracketSelect(ObjectRef, "getPrototypeOf"), instance :: Nil),
+            callGetOwnPropertyDescriptors)))
+      } :::
+
+      defineFunction1(VarField.objectOrArrayClone) { instance =>
+        // return instance.$classData.isArrayClass ? instance.clone__O() : $objectClone(instance);
+        Return(If(instance DOT classData DOT cpn.isArrayClass,
+            genApply(instance, cloneMethodName, Nil),
+            genCallHelper(VarField.objectClone, instance)))
+      } :::
+
+      condDefs(arrayIndexOutOfBounds != CheckedBehavior.Unchecked && !useBigIntForLongs)(
+        // u is the underlying array; i is the unscaled index; return the scaled index
+        defineFunction2(VarField.aJCheckGet) { (u, i) =>
+          Block(
+            If((i >>> 0) >= (u.length >>> 1), {
+              genCallHelper(VarField.throwArrayIndexOutOfBoundsException, i)
+            }),
+            Return(i << 1)
+          )
+        }
+      )
+    )
+
+    private def defineObjectGetClassFunctions(): List[Tree] = {
+      // objectGetClass and objectClassName
+
+      def defineObjectGetClassBasedFun(name: VarField,
+          constantClassResult: ClassName => Tree,
+          scalaObjectResult: VarRef => Tree, jsObjectResult: Tree): List[Tree] = {
+        defineFunction1(name) { instance =>
+          Switch(typeof(instance), List(
+              str("string") -> {
+                Return(constantClassResult(BoxedStringClass))
+              },
+              str("number") -> {
+                Block(
+                    If(genCallHelper(VarField.isInt, instance), {
+                      If((instance << 24 >> 24) === instance, {
+                        Return(constantClassResult(BoxedByteClass))
+                      }, {
+                        If((instance << 16 >> 16) === instance, {
+                          Return(constantClassResult(BoxedShortClass))
+                        }, {
+                          Return(constantClassResult(BoxedIntegerClass))
+                        })
+                      })
+                    }, {
+                      If(genCallHelper(VarField.isFloat, instance), {
+                        Return(constantClassResult(BoxedFloatClass))
+                      }, {
+                        Return(constantClassResult(BoxedDoubleClass))
+                      })
+                    })
+                )
+              },
+              str("boolean") -> {
+                Return(constantClassResult(BoxedBooleanClass))
+              },
+              str("undefined") -> {
+                Return(constantClassResult(BoxedUnitClass))
+              }
+          ), {
+            If(genIsInstanceOfHijackedClass(instance, BoxedLongClass), {
+              Return(constantClassResult(BoxedLongClass))
+            }, {
+              If(genIsInstanceOfHijackedClass(instance, BoxedCharacterClass), {
+                Return(constantClassResult(BoxedCharacterClass))
+              }, {
+                If(genIsScalaJSObject(instance), {
+                  Return(scalaObjectResult(instance))
+                }, {
+                  Return(jsObjectResult)
+                })
+              })
+            })
           })
         }
       }
 
-      // finalize__V
-      locally {
-        buf += envFunctionDef("dp_finalize__V", paramList(instance), {
-          If(genIsScalaJSObjectOrNull(instance),
-              Apply(instance DOT "finalize__V", Nil),
-              Skip())
-        })
+
+      /* We use isClassClassInstantiated as an over-approximation of whether
+       * the program contains any `GetClass` node. If `j.l.Class` is not
+       * instantiated, then we know that there is no `GetClass` node, and it is
+       * safe to omit the definition of `objectGetClass`. However, it is
+       * possible that we generate `objectGetClass` even if it is not
+       * necessary, in the case that `j.l.Class` is otherwise instantiated
+       * (i.e., through a `ClassOf` node).
+       */
+      condDefs(globalKnowledge.isClassClassInstantiated)(
+        defineObjectGetClassBasedFun(VarField.objectGetClass,
+            className => genClassOf(className),
+            instance => Apply(instance DOT classData DOT cpn.getClassOf, Nil),
+            Null()
+        )
+      ) :::
+      defineObjectGetClassBasedFun(VarField.objectClassName,
+          { className =>
+            StringLiteral(RuntimeClassNameMapperImpl.map(
+                semantics.runtimeClassNameMapper, className.nameString))
+          },
+          instance => instance DOT classData DOT cpn.name,
+          {
+            if (nullPointers == CheckedBehavior.Unchecked)
+              genApply(Null(), getNameMethodName, Nil)
+            else
+              genCallHelper(VarField.throwNullPointerException)
+          }
+      )
+    }
+
+    private def defineDispatchFunctions(): List[Tree] = {
+      val instance = varRef("instance")
+
+      def defineDispatcher(methodName: MethodName, args: List[VarRef],
+          body: Tree): List[Tree] = {
+        val params = paramList((instance :: args): _*)
+        defineFunction(VarField.dp, methodName, params, body)
       }
 
-      def defineStandardDispatcher(methodName: String, args: List[VarRef],
-          implementationInObject: Option[Tree],
-          implementingHijackedClasses: List[String]): Unit = {
+      /* A standard dispatcher performs a type test on the instance and then
+       * calls the relevant implementation which is either of:
+       *
+       * - A normal method call if the instance is a normal scala class.
+       * - A method in the relevant hijacked class.
+       * - The implementation in java.lang.Object (if this is a JS object).
+       */
+      def defineStandardDispatcher(methodName: MethodName,
+          implementingClasses: Set[ClassName]): List[Tree] = {
 
-        def hijackedClassNameToTypeof(className: String): Option[String] = className match {
+        val args =
+          methodName.paramTypeRefs.indices.map(i => varRef("x" + i)).toList
+
+        val targetHijackedClasses =
+          subsetOfHijackedClassesOrderedForTypeTests(implementingClasses)
+        val implementedInObject = implementingClasses.contains(ObjectClass)
+
+        def hijackedClassNameToTypeof(className: ClassName): Option[String] = className match {
           case BoxedStringClass  => Some("string")
           case BoxedDoubleClass  => Some("number")
           case BoxedBooleanClass => Some("boolean")
@@ -525,34 +836,46 @@ private[emitter] object CoreJSLib {
           case _                 => None
         }
 
-        def genHijackedMethodApply(className: String): Tree = {
-          val fullName = className + "__" + methodName
-          Apply(envField("f", fullName), (instance :: args): List[VarRef])
+        def genHijackedMethodApply(className: ClassName): Tree = {
+          val instanceAsPrimitive = className match {
+            case BoxedCharacterClass =>
+              List(instance DOT cpn.c)
+            case BoxedLongClass if !useBigIntForLongs =>
+              List(instance DOT cpn.lo, instance DOT cpn.hi)
+            case _ =>
+              List(instance)
+          }
+          Apply(globalVar(VarField.f, (className, methodName)), instanceAsPrimitive ::: args)
         }
 
-        def genBodyNoSwitch(implementingHijackedClasses: List[String]): Tree = {
-          val normalCall = Apply(instance DOT methodName, args)
-          val defaultCall: Tree = Return(implementationInObject.getOrElse(normalCall))
+        def genBodyNoSwitch(hijackedClasses: List[ClassName]): Tree = {
+          val normalCall = Return(genApply(instance, methodName, args))
 
-          val allButNormal = implementingHijackedClasses.foldRight(defaultCall) { (className, next) =>
-            If(genIsInstanceOfHijackedClass(instance, ClassRef(className)),
-                Return(genHijackedMethodApply(className)),
-                next)
+          def hijackedDispatch(default: Tree) = {
+            hijackedClasses.foldRight(default) { (className, next) =>
+              If(genIsInstanceOfHijackedClass(instance, className),
+                  Return(genHijackedMethodApply(className)),
+                  next)
+            }
           }
 
-          if (implementationInObject.isDefined)
-            If(genIsScalaJSObjectOrNull(instance), Return(normalCall), allButNormal)
-          else
-            allButNormal
+          if (implementedInObject) {
+            val staticObjectCall: Tree = {
+              val fun = globalVar(VarField.c, ObjectClass).prototype DOT genMethodIdent(methodName)
+              Return(Apply(fun DOT "call", instance :: args))
+            }
+
+            If(genIsScalaJSObjectOrNull(instance),
+                normalCall,
+                hijackedDispatch(staticObjectCall))
+          } else {
+            hijackedDispatch(normalCall)
+          }
         }
 
-        def genBodyMaybeSwitch(): Tree = {
-          val maybeWithoutLong =
-            if (allowBigIntsForLongs) implementingHijackedClasses
-            else implementingHijackedClasses.filter(_ != BoxedLongClass)
-
+        defineDispatcher(methodName, args, {
           val (classesWithTypeof, otherClasses) =
-            maybeWithoutLong.partition(hijackedClassNameToTypeof(_).isDefined)
+            targetHijackedClasses.span(hijackedClassNameToTypeof(_).isDefined)
 
           if (classesWithTypeof.lengthCompare(1) > 0) {
             // First switch on the typeof
@@ -564,293 +887,516 @@ private[emitter] object CoreJSLib {
               genBodyNoSwitch(otherClasses)
             })
           } else {
-            genBodyNoSwitch(maybeWithoutLong)
+            genBodyNoSwitch(targetHijackedClasses)
           }
-        }
-
-        buf += envFunctionDef("dp_" + methodName, paramList((instance :: args): _*), {
-          genBodyMaybeSwitch()
         })
       }
 
-      val rhs = varRef("rhs")
+      val methodsInRepresentativeClasses =
+        globalKnowledge.methodsInRepresentativeClasses()
 
-      defineStandardDispatcher("equals__O__Z", varRef("rhs") :: Nil,
-          Some(instance === rhs),
-          List(BoxedDoubleClass, BoxedLongClass, BoxedCharacterClass))
-
-      defineStandardDispatcher("hashCode__I", Nil,
-          Some(genCallHelper("systemIdentityHashCode", instance)),
-          List(BoxedStringClass, BoxedDoubleClass, BoxedBooleanClass,
-              BoxedUnitClass, BoxedLongClass, BoxedCharacterClass))
-
-      defineStandardDispatcher("compareTo__O__I", varRef("rhs") :: Nil,
-          None,
-          List(BoxedStringClass, BoxedDoubleClass, BoxedBooleanClass,
-              BoxedLongClass, BoxedCharacterClass))
-
-      defineStandardDispatcher("length__I", Nil, None,
-          List(BoxedStringClass))
-
-      defineStandardDispatcher("charAt__I__C", varRef("index") :: Nil, None,
-          List(BoxedStringClass))
-
-      defineStandardDispatcher("subSequence__I__I__jl_CharSequence",
-          varRef("start") :: varRef("end") :: Nil, None,
-          List(BoxedStringClass))
-
-      for {
-        methodName <- List("byteValue__B", "shortValue__S", "intValue__I",
-            "longValue__J", "floatValue__F", "doubleValue__D")
-      } {
-        defineStandardDispatcher(methodName, Nil, None,
-            List(BoxedDoubleClass, BoxedLongClass))
+      methodsInRepresentativeClasses.flatMap { case (methodName, implementingClasses) =>
+        if (methodName == toStringMethodName) {
+          // toString()java.lang.String is special as per IR spec.
+          defineDispatcher(toStringMethodName, Nil, {
+            Return(If(instance === Undefined(),
+                str("undefined"),
+                Apply(instance DOT "toString", Nil)))
+          })
+        } else {
+          defineStandardDispatcher(methodName, implementingClasses)
+        }
       }
     }
 
-    private def defineArithmeticOps(): Unit = {
-      val x = varRef("x")
-      val y = varRef("y")
+    private def defineArithmeticOps(): List[Tree] = {
+      /* We test whether `ArithmeticException` is instantiated with the
+       * `<init>(jl.String)` constructor. That is an over-approximation of
+       * whether there is any int/long div/mod with a maybe-zero divisor.
+       * If that constructor is not used, emitting the functions would be
+       * invalid, since the generated code would refer to a top-level class
+       * and function that do not exist.
+       */
+      val shouldDefineIntLongDivModFunctions =
+        globalKnowledge.isArithmeticExceptionClassInstantiatedWithStringArg
 
-      val throwDivByZero =
-        Throw(genScalaClassNew("jl_ArithmeticException", "init___T", str("/ by zero")))
-
-      locally {
-        buf += envFunctionDef("intDiv", paramList(x, y), {
-          If(y === 0, throwDivByZero, {
-            Return((x / y) | 0)
-          })
-        })
-        buf += envFunctionDef("intMod", paramList(x, y), {
-          If(y === 0, throwDivByZero, {
-            Return((x % y) | 0)
-          })
-        })
+      def throwDivByZero: Tree = {
+        Throw(genScalaClassNew(ArithmeticExceptionClass,
+            StringArgConstructorName, str("/ by zero")))
       }
 
-      locally {
-        buf += envFunctionDef("doubleToInt", paramList(x), {
-          Return(If(x > 2147483647, 2147483647, If(x < -2147483648, -2147483648, x | 0)))
-        })
+      def wrapBigInt64(tree: Tree): Tree =
+        Apply(genIdentBracketSelect(BigIntRef, "asIntN"), 64 :: tree :: Nil)
+
+      /* Defines a core function of 1 argument `x` that uses the `fpBitsDataView`
+       * global var. When linking for ES 2015+, the provided body is always
+       * used, as `fpBitsDataView` is known to exist. When linking for 5.1,
+       * a polyfill from `org.scalajs.linker.runtime.FloatingPointBitsPolyfills`
+       * is used when `fpBitsDataView` is `null`.
+       *
+       * The `body` function receives `x` and `fpBitsDataView` as arguments,
+       * in that order.
+       */
+      def defineFloatingPointBitsFunctionOrPolyfill(name: VarField,
+          polyfillMethod: MethodName)(body: (VarRef, VarRef) => Tree): List[Tree] = {
+
+        val dataView = varRef("dataView")
+        val dataViewConst = const(dataView, globalVar(VarField.fpBitsDataView, CoreVar))
+
+        if (esVersion >= ESVersion.ES2015) {
+          defineFunction1(name) { x =>
+            Block(
+              dataViewConst,
+              body(x, dataView)
+            )
+          }
+        } else {
+          val x = varRef("x")
+
+          extractWithGlobals(globalVarDef(name, CoreVar, {
+            If(globalVar(VarField.fpBitsDataView, CoreVar) !== Null(), {
+              genArrowFunction(paramList(x), {
+                Block(
+                  dataViewConst,
+                  body(x, dataView)
+                )
+              })
+            }, {
+              genArrowFunction(paramList(x), {
+                val args =
+                  if (polyfillMethod.paramTypeRefs.head != LongRef || useBigIntForLongs) List(x)
+                  else List(x DOT cpn.lo, x DOT cpn.hi)
+                Return(Apply(globalVar(VarField.s, (FloatingPointBitsPolyfillsClass, polyfillMethod)), args))
+              })
+            })
+          }))
+        }
       }
 
-      if (allowBigIntsForLongs) {
-        def wrapBigInt64(tree: Tree): Tree =
-          Apply(genIdentBracketSelect(BigIntRef, "asIntN"), 64 :: tree :: Nil)
-
-        buf += envFunctionDef("longDiv", paramList(x, y), {
-          If(y === BigIntLiteral(0), throwDivByZero, {
-            Return(wrapBigInt64(x / y))
+      condDefs(shouldDefineIntLongDivModFunctions)(
+        defineFunction1(VarField.checkIntDivisor) { y =>
+          If(y === 0, throwDivByZero, {
+            Return(y)
           })
-        })
-        buf += envFunctionDef("longMod", paramList(x, y), {
-          If(y === BigIntLiteral(0), throwDivByZero, {
-            Return(wrapBigInt64(x % y))
-          })
-        })
+        }
+      ) :::
+      defineFunction1(VarField.doubleToInt) { x =>
+        Return(If(x > 2147483647, 2147483647, If(x < -2147483648, -2147483648, x | 0)))
+      } :::
+      defineFunction1(VarField.charToString) { x =>
+        Return(Apply(genIdentBracketSelect(StringRef, "fromCharCode"), x :: Nil))
+      } :::
+      condDefs(semantics.stringIndexOutOfBounds != CheckedBehavior.Unchecked)(
+        defineFunction2(VarField.charAt) { (s, i) =>
+          val r = varRef("r")
 
-        val lo = varRef("lo")
-        val rawHi = varRef("rawHi")
-        val hi = varRef("hi")
-        buf += envFunctionDef("doubleToLong", paramList(x), {
-          /* BigInt(x) refuses to work if x is not a "safe integer", i.e., a
-           * number with an integral x, whose absolute x is < 2^53. Therefore,
-           * we basically use the same algorithm as in RuntimeLong.fromDouble.
-           */
+          val throwStringIndexOutOfBoundsException = {
+            Throw(maybeWrapInUBE(semantics.stringIndexOutOfBounds,
+                genScalaClassNew(StringIndexOutOfBoundsExceptionClass, IntArgConstructorName, i)))
+          }
+
+          Block(
+            const(r, Apply(genIdentBracketSelect(s, "charCodeAt"), List(i))),
+            If(r !== r, throwStringIndexOutOfBoundsException, Return(r))
+          )
+        }
+      ) :::
+      condDefs(allowBigIntsForLongs && shouldDefineIntLongDivModFunctions)(
+        defineFunction1(VarField.checkLongDivisor) { y =>
+          If(y === bigInt(0), throwDivByZero, {
+            Return(y)
+          })
+        }
+      ) :::
+      condDefs(allowBigIntsForLongs)(
+        defineFunction1(VarField.longClz) { x =>
+          // (Math.clz32 o Number)(bigIntArg), i.e., Math.clz32(Number(bigIntArg))
+          def clz32_o_Number(bigIntArg: Tree): Tree = {
+            genCallPolyfillableBuiltin(PolyfillableBuiltin.Clz32Builtin,
+                Apply(NumberRef, List(bigIntArg)))
+          }
+
+          val hi = varRef("hi")
+
+          Block(
+            const(hi, x >> bigInt(32)),
+            Return {
+              If(hi !== bigInt(0L), {
+                clz32_o_Number(hi)
+              }, {
+                int(32) + clz32_o_Number(x)
+              })
+            }
+          )
+        } :::
+
+        defineFunction1(VarField.doubleToLong)(x => Return {
           If(x < double(-9223372036854775808.0), { // -2^63
-            Return(BigIntLiteral(-9223372036854775808L))
+            bigInt(-9223372036854775808L)
           }, {
             If (x >= double(9223372036854775808.0), { // 2^63
-              Return(BigIntLiteral(9223372036854775807L))
+              bigInt(9223372036854775807L)
             }, {
-              Block(
-                  const(lo, x | 0),
-                  const(rawHi, (x / double(4294967296.0)) | 0), // 2^32
-                  const(hi, If((x < 0) && (lo !== 0), (rawHi - 1) | 0, rawHi)),
-                  Return(
-                      Apply(BigIntRef, hi :: Nil) << BigIntLiteral(32) |
-                      Apply(BigIntRef, (lo >>> 0) :: Nil))
-              )
+              If (x !== x, { // NaN
+                bigInt(0L)
+              }, {
+                Apply(BigIntRef,
+                    Apply(genIdentBracketSelect(MathRef, "trunc"), x :: Nil) :: Nil)
+              })
             })
           })
-        })
+        }) :::
+
+        defineFunction1(VarField.longToFloat) { x =>
+          val abs = varRef("abs")
+          val y = varRef("y")
+          val absR = varRef("absR")
+
+          // See RuntimeLong.toFloat for the strategy
+          Block(
+            const(abs, If(x < bigInt(0L), -x, x)),
+            const(y, If(abs <= bigInt(1L << 53) || (abs & bigInt(0xffffL)) === bigInt(0L), {
+              abs
+            }, {
+              (abs & bigInt(~0xffffL)) | bigInt(0x8000L)
+            })),
+            const(absR, Apply(NumberRef, y :: Nil)),
+            Return(genCallPolyfillableBuiltin(FroundBuiltin, If(x < bigInt(0L), -absR, absR)))
+          )
+        }
+      ) :::
+      extractWithGlobals(globalVarDef(VarField.fpBitsDataView, CoreVar, {
+        val newDataView = New(DataViewRef, List(New(ArrayBufferRef, List(8))))
+        if (esVersion >= ESVersion.ES2015) {
+          newDataView
+        } else {
+          If(typeof(DataViewRef) !== str("undefined"), {
+            newDataView
+          }, {
+            Null()
+          })
+        }
+      })) :::
+      defineFloatingPointBitsFunctionOrPolyfill(VarField.floatToBits, floatToBits) { (x, fpBitsDataView) =>
+        Block(
+          Apply(genIdentBracketSelect(fpBitsDataView, "setFloat32"), List(0, x, bool(true))),
+          Return(Apply(genIdentBracketSelect(fpBitsDataView, "getInt32"), List(0, bool(true))))
+        )
+      } :::
+      defineFloatingPointBitsFunctionOrPolyfill(VarField.floatFromBits, floatFromBits) { (x, fpBitsDataView) =>
+        Block(
+          Apply(genIdentBracketSelect(fpBitsDataView, "setInt32"), List(0, x, bool(true))),
+          Return(Apply(genIdentBracketSelect(fpBitsDataView, "getFloat32"), List(0, bool(true))))
+        )
+      } :::
+      defineFloatingPointBitsFunctionOrPolyfill(VarField.doubleToBits, doubleToBits) { (x, fpBitsDataView) =>
+        if (allowBigIntsForLongs) {
+          Block(
+            Apply(genIdentBracketSelect(fpBitsDataView, "setFloat64"), List(0, x, bool(true))),
+            Return(Apply(genIdentBracketSelect(fpBitsDataView, "getBigInt64"), List(0, bool(true))))
+          )
+        } else {
+          Return(genLongApplyStatic(LongImpl.fromDoubleBits, x, fpBitsDataView))
+        }
+      } :::
+      defineFloatingPointBitsFunctionOrPolyfill(VarField.doubleFromBits, doubleFromBits) { (x, fpBitsDataView) =>
+        if (allowBigIntsForLongs) {
+          Block(
+            Apply(genIdentBracketSelect(fpBitsDataView, "setBigInt64"), List(0, x, bool(true))),
+            Return(Apply(genIdentBracketSelect(fpBitsDataView, "getFloat64"), List(0, bool(true))))
+          )
+        } else {
+          Return(genLongApplyStatic(LongImpl.bitsToDouble, x DOT cpn.lo, x DOT cpn.hi, fpBitsDataView))
+        }
       }
     }
 
-    private def defineES2015LikeHelpers(): Unit = {
-      // newJSObjectWithVarargs
-      locally {
-        val ctor = varRef("ctor")
-        val args = varRef("args")
-        val instance = varRef("instance")
-        val result = varRef("result")
-        buf += envFunctionDef("newJSObjectWithVarargs", paramList(ctor, args), {
+    private def defineES2015LikeHelpers(): List[Tree] = (
+      condDefs(esVersion < ESVersion.ES2015)(
+        defineFunction2(VarField.newJSObjectWithVarargs) { (ctor, args) =>
+          val instance = varRef("instance")
+          val result = varRef("result")
+
           // This basically emulates the ECMAScript specification for 'new'.
           Block(
-              const(instance, Apply(genIdentBracketSelect(ObjectRef, "create"), ctor.prototype :: Nil)),
-              const(result, Apply(genIdentBracketSelect(ctor, "apply"), instance :: args :: Nil)),
-              Switch(typeof(result),
-                  List("string", "number", "boolean", "undefined").map(str(_) -> Skip()) :+
-                  str("symbol") -> Return(instance),
-                  Return(If(result === Null(), instance, result)))
+            const(instance, Apply(genIdentBracketSelect(ObjectRef, "create"), ctor.prototype :: Nil)),
+            const(result, Apply(genIdentBracketSelect(ctor, "apply"), instance :: args :: Nil)),
+            Switch(typeof(result),
+                List("string", "number", "boolean", "undefined").map(str(_) -> Skip()) :+
+                str("symbol") -> Return(instance),
+                Return(If(result === Null(), instance, result)))
           )
-        })
-      }
+        }
+      ) :::
 
-      // resolveSuperRef
-      locally {
-        val superClass = varRef("superClass")
-        val propName = varRef("propName")
+      defineFunction2(VarField.resolveSuperRef) { (superClass, propName) =>
         val getPrototypeOf = varRef("getPrototypeOf")
         val getOwnPropertyDescriptor = varRef("getOwnPropertyDescriptor")
         val superProto = varRef("superProto")
         val desc = varRef("desc")
-        buf += envFunctionDef("resolveSuperRef", paramList(superClass, propName), {
-          Block(
-              const(getPrototypeOf, genIdentBracketSelect(ObjectRef, "getPrototyeOf")),
-              const(getOwnPropertyDescriptor, genIdentBracketSelect(ObjectRef, "getOwnPropertyDescriptor")),
-              let(superProto, superClass.prototype),
-              While(superProto !== Null(), {
-                Block(
-                    const(desc, Apply(getOwnPropertyDescriptor, superProto :: propName :: Nil)),
-                    If(desc !== Undefined(), Return(desc), Skip()),
-                    superProto := Apply(getPrototypeOf, superProto :: Nil)
-                )
-              })
-          )
-        })
-      }
 
-      // superGet
-      locally {
-        val superClass = varRef("superClass")
-        val self = varRef("self")
-        val propName = varRef("propName")
+        Block(
+          const(getPrototypeOf, genIdentBracketSelect(ObjectRef, "getPrototyeOf")),
+          const(getOwnPropertyDescriptor, genIdentBracketSelect(ObjectRef, "getOwnPropertyDescriptor")),
+          let(superProto, superClass.prototype),
+          While(superProto !== Null(), Block(
+            const(desc, Apply(getOwnPropertyDescriptor, superProto :: propName :: Nil)),
+            If(desc !== Undefined(), Return(desc)),
+            superProto := Apply(getPrototypeOf, superProto :: Nil)
+          ))
+        )
+      } :::
+
+      defineFunction3(VarField.superGet) { (superClass, self, propName) =>
         val desc = varRef("desc")
         val getter = varRef("getter")
-        buf += envFunctionDef("superGet", paramList(superClass, self, propName), {
-          Block(
-              const(desc, genCallHelper("resolveSuperRef", superClass, propName)),
-              If(desc !== Undefined(), {
-                Block(
-                    const(getter, genIdentBracketSelect(desc, "get")),
-                    Return(If(getter !== Undefined(),
-                        Apply(genIdentBracketSelect(getter, "call"), self :: Nil),
-                        genIdentBracketSelect(getter, "value")))
-                )
-              }, {
-                Skip()
-              })
-          )
-        })
-      }
 
-      // superSet
-      locally {
-        val superClass = varRef("superClass")
-        val self = varRef("self")
-        val propName = varRef("propName")
-        val value = varRef("value")
+        Block(
+          const(desc, genCallHelper(VarField.resolveSuperRef, superClass, propName)),
+          If(desc !== Undefined(), Block(
+            const(getter, genIdentBracketSelect(desc, "get")),
+            Return(If(getter !== Undefined(),
+                Apply(genIdentBracketSelect(getter, "call"), self :: Nil),
+                genIdentBracketSelect(getter, "value")))
+          ))
+        )
+      } :::
+
+      defineFunction4(VarField.superSet) { (superClass, self, propName, value) =>
         val desc = varRef("desc")
         val setter = varRef("setter")
-        buf += envFunctionDef("superSet", paramList(superClass, self, propName, value), {
-          Block(
-              const(desc, genCallHelper("resolveSuperRef", superClass, propName)),
-              If(desc !== Undefined(), {
-                Block(
-                    const(setter, genIdentBracketSelect(desc, "set")),
-                    If(setter !== Undefined(), {
-                      Block(
-                          Apply(genIdentBracketSelect(setter, "call"), self :: value :: Nil),
-                          Return(Undefined())
-                      )
-                    }, {
-                      Skip()
-                    })
-                )
-              }, {
-                Skip()
-              }),
-              Throw(New(TypeErrorRef,
-                  List(str("super has no setter '") + propName + str("'."))))
-          )
-        })
-      }
-    }
 
-    private def defineModuleHelpers(): Unit = {
-      // moduleDefault
-      if (moduleKind == ModuleKind.CommonJSModule) {
-        val m = varRef("m")
-        buf += envFunctionDef("moduleDefault", paramList(m), {
+        Block(
+          const(desc, genCallHelper(VarField.resolveSuperRef, superClass, propName)),
+          If(desc !== Undefined(), Block(
+            const(setter, genIdentBracketSelect(desc, "set")),
+            If(setter !== Undefined(), Block(
+              Apply(genIdentBracketSelect(setter, "call"), self :: value :: Nil),
+              Return(Undefined())
+            ))
+          )),
+          Throw(New(TypeErrorRef,
+              List(str("super has no setter '") + propName + str("'."))))
+        )
+      }
+    )
+
+    private def defineModuleHelpers(): List[Tree] = {
+      condDefs(moduleKind == ModuleKind.CommonJSModule)(
+        defineFunction1(VarField.moduleDefault) { m =>
           Return(If(
               m && (typeof(m) === str("object")) && (str("default") in m),
               BracketSelect(m, str("default")),
               m))
-        })
-      }
+        }
+      )
     }
 
-    private def defineIntrinsics(): Unit = {
-      // systemArraycopy
-      locally {
-        val src = varRef("src")
-        val srcPos = varRef("srcPos")
-        val dest = varRef("dest")
-        val destPos = varRef("destPos")
-        val length = varRef("length")
-        val srcu = varRef("srcu")
-        val destu = varRef("destu")
+    private def defineIntrinsics(): List[Tree] = (
+      condDefs(arrayIndexOutOfBounds != CheckedBehavior.Unchecked)(
+        defineFunction5(VarField.arraycopyCheckBounds) { (srcLen, srcPos, destLen, destPos, length) =>
+          If(((srcPos | destPos | length) < 0) || // i.e., any of the three is < 0
+              (srcPos > ((srcLen - length) | 0)) ||
+              (destPos > ((destLen - length) | 0)), {
+            genCallHelper(VarField.throwArrayIndexOutOfBoundsException, Null())
+          })
+        }
+      ) :::
+
+      defineFunction5(VarField.arraycopyGeneric) { (srcArray, srcPos, destArray, destPos, length) =>
         val i = varRef("i")
-        buf += envFunctionDef("systemArraycopy", paramList(src, srcPos, dest, destPos, length), {
-          Block(
-              const(srcu, src DOT "u"),
-              const(destu, dest DOT "u"),
-              if (arrayIndexOutOfBounds != CheckedBehavior.Unchecked) {
-                If((srcPos < 0) || (destPos < 0) || (length < 0) ||
-                    (srcPos > (((srcu DOT "length") - length) | 0)) ||
-                    (destPos > (((destu DOT "length") - length) | 0)), {
-                  genCallHelper("throwArrayIndexOutOfBoundsException", Null())
-                }, {
-                  Skip()
-                })
-              } else {
-                Skip()
+        Block(
+          if (arrayIndexOutOfBounds != CheckedBehavior.Unchecked) {
+            genCallHelper(VarField.arraycopyCheckBounds, srcArray.length,
+                srcPos, destArray.length, destPos, length)
+          } else {
+            Skip()
+          },
+          /* If srcArray eq destArray and destPos in [srcPos, srcPos + length],
+           * we need to copy from right to left.
+           * Since srcPos <= srcPos + length, we can do the range check with
+           *   destPos - srcPos unsigned_<= (srcPos + length) - srcPos
+           * which is
+           *   ((destPos - srcPos) >>> 0) <= (length >>> 0)
+           */
+          If((srcArray !== destArray) || (((destPos - srcPos) >>> 0) > (length >>> 0)), {
+            For(let(i, 0), i < length, i := ((i + 1) | 0), {
+              BracketSelect(destArray, (destPos + i) | 0) := BracketSelect(srcArray, (srcPos + i) | 0)
+            })
+          }, {
+            For(let(i, (length - 1) | 0), i >= 0, i := ((i - 1) | 0), {
+              BracketSelect(destArray, (destPos + i) | 0) := BracketSelect(srcArray, (srcPos + i) | 0)
+            })
+          })
+        )
+      } :::
+
+      condDefs(esVersion < ESVersion.ES2015)(
+        defineFunction5(VarField.systemArraycopy) { (src, srcPos, dest, destPos, length) =>
+          if (useBigIntForLongs) {
+            genCallHelper(VarField.arraycopyGeneric, src.u, srcPos, dest.u, destPos, length)
+          } else {
+            If((src DOT classData) === genClassDataOf(ArrayTypeRef(LongRef, 1)), {
+              /* We cannot use `<< 1` to multiply by 2 here. If we do, then
+               * large positive values will wrap around to negative values.
+               * We use a true `* 2`, which will exploit a 33rd bit within the
+               * double values that JavaScript gives us. From a performance
+               * point of view, it's not great. But this code is only used when
+               * targeting ES5.1, which is deprecated anyway. Also as long as
+               * it doesn't actually overflow, the JITs should deal with this
+               * reasonably well.
+               */
+              genCallHelper(VarField.arraycopyGeneric, src.u, srcPos * 2, dest.u, destPos * 2, length * 2)
+            }, {
+              genCallHelper(VarField.arraycopyGeneric, src.u, srcPos, dest.u, destPos, length)
+            })
+          }
+        }
+      ) :::
+      condDefs(esVersion >= ESVersion.ES2015 && nullPointers != CheckedBehavior.Unchecked)(
+        defineFunction5(VarField.systemArraycopy) { (src, srcPos, dest, destPos, length) =>
+          genSyntheticPropApply(src, SyntheticProperty.copyTo, srcPos, dest, destPos, length)
+        }
+      ) :::
+
+      condDefs(arrayStores != CheckedBehavior.Unchecked)(
+        defineFunction5(VarField.systemArraycopyRefs) { (src, srcPos, dest, destPos, length) =>
+          If(Apply(dest DOT classData DOT cpn.isAssignableFrom, List(src DOT classData)), {
+            /* Fast-path, no need for array store checks. This always applies
+             * for arrays of the same type, and a fortiori, when `src eq dest`.
+             */
+            genCallHelper(VarField.arraycopyGeneric, src.u, srcPos, dest.u, destPos, length)
+          }, {
+            /* Slow copy with "set" calls for every element. By construction,
+             * we have `src ne dest` in this case.
+             */
+            val srcArray = varRef("srcArray")
+            val i = varRef("i")
+            Block(
+              const(srcArray, src.u),
+              condTree(arrayIndexOutOfBounds != CheckedBehavior.Unchecked) {
+                genCallHelper(VarField.arraycopyCheckBounds, srcArray.length,
+                    srcPos, dest.u.length, destPos, length)
               },
-              If((srcu !== destu) || (destPos < srcPos) || (((srcPos + length) | 0) < destPos), {
-                For(let(i, 0), i < length, i := ((i + 1) | 0), {
-                  BracketSelect(destu, (destPos + i) | 0) := BracketSelect(srcu, (srcPos + i) | 0)
-                })
-              }, {
-                For(let(i, (length - 1) | 0), i >= 0, i := ((i - 1) | 0), {
-                  BracketSelect(destu, (destPos + i) | 0) := BracketSelect(srcu, (srcPos + i) | 0)
-                })
+              For(let(i, 0), i < length, i := ((i + 1) | 0), {
+                genSyntheticPropApply(dest, SyntheticProperty.set,
+                    (destPos + i) | 0, BracketSelect(srcArray, (srcPos + i) | 0))
               })
+            )
+          })
+        } :::
+
+        defineFunction5(VarField.systemArraycopyFull) { (src, srcPos, dest, destPos, length) =>
+          val ObjectArray = globalVar(VarField.ac, ObjectClass)
+          val srcData = varRef("srcData")
+
+          Block(
+            const(srcData, src && (src DOT classData)),
+            If(srcData === (dest && (dest DOT classData)), {
+              // Both values have the same "data" (could also be falsy values)
+              If(srcData && (srcData DOT cpn.isArrayClass), {
+                // Fast path: the values are array of the same type
+                if (esVersion >= ESVersion.ES2015 && nullPointers == CheckedBehavior.Unchecked)
+                  genSyntheticPropApply(src, SyntheticProperty.copyTo, srcPos, dest, destPos, length)
+                else
+                  genCallHelper(VarField.systemArraycopy, src, srcPos, dest, destPos, length)
+              }, {
+                genCallHelper(VarField.throwArrayStoreException, Null())
+              })
+            }, {
+              /* src and dest are of different types; the only situation that
+               * can still be valid is if they are two reference array types.
+               */
+              If((src instanceof ObjectArray) && (dest instanceof ObjectArray), {
+                genCallHelper(VarField.systemArraycopyRefs, src, srcPos, dest, destPos, length)
+              }, {
+                genCallHelper(VarField.throwArrayStoreException, Null())
+              })
+            })
           )
-        })
-      }
+        }
+      ) :::
 
       // systemIdentityHashCode
       locally {
         val WeakMapRef = globalRef("WeakMap")
 
-        val lastIDHash = envField("lastIDHash")
-        val idHashCodeMap = envField("idHashCodeMap")
-
-        buf += let(lastIDHash, 0)
-        buf += const(idHashCodeMap,
-            if (useECMAScript2015) New(WeakMapRef, Nil)
-            else If(typeof(WeakMapRef) !== str("undefined"), New(WeakMapRef, Nil), Null()))
+        val lastIDHash = fileLevelVar(VarField.lastIDHash)
+        val idHashCodeMap = fileLevelVar(VarField.idHashCodeMap)
 
         val obj = varRef("obj")
+        val biHash = varRef("biHash")
+        val description = varRef("description")
         val hash = varRef("hash")
 
         def functionSkeleton(defaultImpl: Tree): Function = {
-          Function(arrow = false, paramList(obj), {
-            Switch(typeof(obj),
-                List("string", "number", "bigint", "boolean").map(str(_) -> Skip()) :+
-                str("undefined") -> Return(genCallHelper("dp_hashCode__I", obj)),
-                defaultImpl)
+          def genHijackedMethodApply(className: ClassName, arg: Tree): Tree =
+            Apply(globalVar(VarField.f, (className, hashCodeMethodName)), arg :: Nil)
+
+          def genReturnHijackedMethodApply(className: ClassName): Tree =
+            Return(genHijackedMethodApply(className, obj))
+
+          def genReturnBigIntHashCode(): Tree = {
+            /* Xor together all the chunks of 32 bits. For negative numbers,
+             * take their bitwise not first (otherwise we would go into an
+             * infinite loop).
+             *
+             * This is compatible with the specified hash code of j.l.Long,
+             * which is desirable: it means that the hashCode() of bigints does
+             * not depend on whether we implement Longs as BigInts or not.
+             * (By spec, x.hashCode() delegates to systemIdentityHashCode(x)
+             * for bigints unless they fit in a Long and we implement Longs as
+             * bigints.)
+             *
+             * let biHash = 0;
+             * if (obj < 0n)
+             *   obj = ~obj;
+             * while (obj !== 0n) {
+             *   biHash ^= Number(BigInt.asIntN(32, obj));
+             *   obj >>= 32n;
+             * }
+             * return biHash;
+             */
+
+            def biLit(x: Int): Tree =
+              if (esFeatures.allowBigIntsForLongs) bigInt(x)
+              else Apply(BigIntRef, x :: Nil)
+
+            def asInt32(arg: Tree): Tree =
+              Apply(genIdentBracketSelect(BigIntRef, "asIntN"), 32 :: arg :: Nil)
+
+            Block(
+              let(biHash, 0),
+              If(obj < biLit(0), obj := ~obj),
+              While(obj !== biLit(0), Block(
+                biHash := biHash ^ Apply(NumberRef, asInt32(obj) :: Nil),
+                obj := (obj >> biLit(32))
+              )),
+              Return(biHash)
+            )
+          }
+
+          def genReturnSymbolHashCode(): Tree = {
+            /* Hash the `description` field of the symbol, which is either
+             * `undefined` or a string.
+             */
+
+            Block(
+              const(description, genIdentBracketSelect(obj, "description")),
+              Return(If(description === Undefined(), 0,
+                  genHijackedMethodApply(BoxedStringClass, description)))
+            )
+          }
+
+          genArrowFunction(paramList(obj), {
+            Switch(typeof(obj), List(
+              str("string") -> genReturnHijackedMethodApply(BoxedStringClass),
+              str("number") -> genReturnHijackedMethodApply(BoxedDoubleClass),
+              str("bigint") -> genReturnBigIntHashCode(),
+              str("boolean") -> Return(If(obj, 1231, 1237)),
+              str("undefined") -> Return(0),
+              str("symbol") -> genReturnSymbolHashCode()
+            ), defaultImpl)
           })
         }
 
@@ -902,182 +1448,330 @@ private[emitter] object CoreJSLib {
           }
         }
 
-        if (useECMAScript2015) {
-          val f = weakMapBasedFunction
-          buf += envFunctionDef("systemIdentityHashCode", f.args, f.body)
-        } else {
-          buf += const(envField("systemIdentityHashCode"),
-              If(idHashCodeMap !== Null(), weakMapBasedFunction, fieldBasedFunction))
+        List(
+          let(lastIDHash, 0),
+          const(idHashCodeMap,
+              if (esVersion >= ESVersion.ES2015) New(WeakMapRef, Nil)
+              else If(typeof(WeakMapRef) !== str("undefined"), New(WeakMapRef, Nil), Null()))
+        ) ::: (
+          if (esVersion >= ESVersion.ES2015) {
+            val f = weakMapBasedFunction
+            defineFunction(VarField.systemIdentityHashCode, f.args, f.body)
+          } else {
+            extractWithGlobals(globalVarDef(VarField.systemIdentityHashCode, CoreVar,
+                If(idHashCodeMap !== Null(), weakMapBasedFunction, fieldBasedFunction)))
+          }
+        )
+      }
+    )
+
+    private def defineIsPrimitiveFunctions(): List[Tree] = {
+      def defineIsIntLike(name: VarField, specificTest: VarRef => Tree): List[Tree] = {
+        defineFunction1(name) { v =>
+          Return((typeof(v) === str("number")) && specificTest(v) &&
+              ((int(1) / v) !== (int(1) / double(-0.0))))
         }
       }
-    }
 
-    private def defineIsHijackedBoxedClasses(): Unit = {
-      val v = varRef("v")
-
-      def defineIsIntLike(name: String, specificTest: Tree): Unit = {
-        buf += envFunctionDef(name, paramList(v), {
-          Return((typeof(v) === str("number")) && specificTest &&
-              ((int(1) / v) !== (int(1) / double(-0.0))))
-        })
-      }
-
-      defineIsIntLike("isByte", (v << 24 >> 24) === v)
-      defineIsIntLike("isShort", (v << 16 >> 16) === v)
-      defineIsIntLike("isInt", (v | 0) === v)
-
-      if (allowBigIntsForLongs) {
-        buf += envFunctionDef("isLong", paramList(v), {
+      defineIsIntLike(VarField.isByte, v => (v << 24 >> 24) === v) :::
+      defineIsIntLike(VarField.isShort, v => (v << 16 >> 16) === v) :::
+      defineIsIntLike(VarField.isInt, v => (v | 0) === v) :::
+      condDefs(allowBigIntsForLongs)(
+        defineFunction1(VarField.isLong) { v =>
           Return((typeof(v) === str("bigint")) &&
               (Apply(genIdentBracketSelect(BigIntRef, "asIntN"), int(64) :: v :: Nil) === v))
-        })
-      }
-
-      if (strictFloats) {
-        buf += envFunctionDef("isFloat", paramList(v), {
-          Return((typeof(v) === str("number")) &&
-              ((v !== v) || (genCallHelper("fround", v) === v)))
-        })
+        }
+      ) :::
+      defineFunction1(VarField.isFloat) { v =>
+        Return((typeof(v) === str("number")) &&
+            ((v !== v) || (genCallPolyfillableBuiltin(FroundBuiltin, v) === v)))
       }
     }
 
-    private def defineAsHijackedBoxedClasses(): Unit = {
-      if (asInstanceOfs != CheckedBehavior.Unchecked) {
-        val list = List(
-            "asUnit" -> BoxedUnitClass,
-            "asBoolean" -> BoxedBooleanClass,
-            "asChar" -> BoxedCharacterClass,
-            "asByte" -> BoxedByteClass,
-            "asShort" -> BoxedShortClass,
-            "asInt" -> BoxedIntegerClass
-        ) ++ (
-            if (allowBigIntsForLongs) List("asLong" -> BoxedLongClass)
-            else Nil
-        ) ++ List(
-            "asFloat" -> BoxedFloatClass,
-            "asDouble" -> BoxedDoubleClass
-        )
+    private def defineBoxFunctions(): List[Tree] = (
+      // Boxes for Chars
+      defineFunction1(VarField.bC) { c =>
+        Return(New(globalVar(VarField.Char, CoreVar), c :: Nil))
+      } :::
+      extractWithGlobals(globalVarDef(VarField.bC0, CoreVar, genCallHelper(VarField.bC, 0))) :::
 
-        for ((name, className) <- list) {
-          val fullName = decodeClassName(className)
-          val v = varRef("v")
-          buf += envFunctionDef(name, paramList(v), {
-            If(genIsInstanceOfHijackedClass(v, ClassRef(className)) || (v === Null()), {
-              Return(v)
-            }, {
-              genCallHelper("throwClassCastException", v, str(fullName))
-            })
+      // Boxes for Longs
+      condDefs(!useBigIntForLongs)(
+        defineFunction2(VarField.bL) { (lo, hi) =>
+          Return(New(globalVar(VarField.Long, CoreVar), lo :: hi :: Nil))
+        } :::
+        extractWithGlobals(globalVarDef(VarField.bL0, CoreVar, genCallHelper(VarField.bL, 0, 0)))
+      )
+    ) ::: (
+      if (asInstanceOfs != CheckedBehavior.Unchecked) {
+        // Unboxes for everything
+        def defineUnbox(name: VarField, boxedClassName: ClassName, resultExpr: VarRef => Tree): List[Tree] = {
+          val fullName = boxedClassName.nameString
+          defineFunction1(name)(v => Return {
+            If(genIsInstanceOfHijackedClass(v, boxedClassName) || (v === Null()),
+                resultExpr(v),
+                genCallHelper(VarField.throwClassCastException, v, str(fullName)))
           })
+        }
+
+        (
+          defineUnbox(VarField.uV, BoxedUnitClass, _ => Undefined()) :::
+          defineUnbox(VarField.uZ, BoxedBooleanClass, v => !(!v)) :::
+          defineUnbox(VarField.uC, BoxedCharacterClass, v => If(v === Null(), 0, v DOT cpn.c)) :::
+          defineUnbox(VarField.uB, BoxedByteClass, _ | 0) :::
+          defineUnbox(VarField.uS, BoxedShortClass, _ | 0) :::
+          defineUnbox(VarField.uI, BoxedIntegerClass, _ | 0) :::
+          defineUnbox(VarField.uJ, BoxedLongClass, v => If(v === Null(), genBoxedZeroOf(LongType), v)) :::
+
+          /* Since the type test ensures that v is either null or a float, we can
+           * use + instead of fround.
+           */
+          defineUnbox(VarField.uF, BoxedFloatClass, v => +v) :::
+
+          defineUnbox(VarField.uD, BoxedDoubleClass, v => +v) :::
+          defineUnbox(VarField.uT, BoxedStringClass, v => If(v === Null(), StringLiteral(""), v))
+        )
+      } else {
+        // Unboxes for Chars and Longs
+        (
+          defineFunction1(VarField.uC) { v =>
+            Return(If(v === Null(), 0, v DOT cpn.c))
+          } :::
+          defineFunction1(VarField.uJ) { v =>
+            Return(If(v === Null(), genBoxedZeroOf(LongType), v))
+          }
+        )
+      }
+    )
+
+    /** Define the array classes for primitive types and for `Object`.
+     *
+     *  Other array classes are created dynamically from their TypeData's
+     *  `initArray` initializer, and extend the array class for `Object`.
+     */
+    private def defineSpecializedArrayClasses(): List[Tree] = {
+      specializedArrayTypeRefs.flatMap { componentTypeRef =>
+        val ArrayClass = globalVar(VarField.ac, componentTypeRef)
+
+        val isArrayOfObject = componentTypeRef == ClassRef(ObjectClass)
+        val isTypedArray = usesUnderlyingTypedArray(componentTypeRef)
+
+        val ctor = {
+          val arg = varRef("arg")
+          MethodDef(static = false, Ident("constructor"), paramList(arg), None, {
+            Block(
+                if (useClassesForRegularClasses) Apply(Super(), Nil) else Skip(),
+                genArrayClassConstructorBody(arg, componentTypeRef)
+            )
+          })
+        }
+
+        def lengthOf(arrayVal: Tree): Tree =
+          if (componentTypeRef == LongRef && !useBigIntForLongs) (arrayVal.u.length >>> 1) | 0
+          else arrayVal.u.length
+
+        val getAndSet = if (arrayIndexOutOfBounds != CheckedBehavior.Unchecked) {
+          val i = varRef("i")
+          val v = varRef("v")
+          val w = varRef("w")
+
+          val boundsCheck = {
+            If((i >>> 0) >= (lengthOf(This()) >>> 0),
+                genCallHelper(VarField.throwArrayIndexOutOfBoundsException, i))
+          }
+
+          val getName = genSyntheticPropertyForDef(SyntheticProperty.get)
+          val setName = genSyntheticPropertyForDef(SyntheticProperty.set)
+
+          if (componentTypeRef == LongRef && !useBigIntForLongs) {
+            List(
+                MethodDef(static = false, setName, paramList(i, v, w), None, {
+                  Block(
+                      boundsCheck,
+                      i := (i << 1),
+                      BracketSelect(This().u, i) := v,
+                      BracketSelect(This().u, (i + 1) | 0) := w
+                  )
+                })
+            )
+          } else {
+            List(
+                MethodDef(static = false, getName, paramList(i), None, {
+                  Block(
+                      boundsCheck,
+                      Return(BracketSelect(This().u, i))
+                  )
+                }),
+                MethodDef(static = false, setName, paramList(i, v), None, {
+                  Block(
+                      boundsCheck,
+                      BracketSelect(This().u, i) := v
+                  )
+                })
+            )
+          }
+        } else if (isArrayOfObject && arrayStores != CheckedBehavior.Unchecked) {
+          /* We need to define a straightforward "set" method, without any
+           * check necessary, which will be overridden in subclasses.
+           */
+          val i = varRef("i")
+          val v = varRef("v")
+
+          val setName = genSyntheticPropertyForDef(SyntheticProperty.set)
+
+          List(
+            MethodDef(static = false, setName, paramList(i, v), None, {
+              BracketSelect(This().u, i) := v
+            })
+          )
+        } else {
+          Nil
+        }
+
+        val copyTo = if (esVersion >= ESVersion.ES2015) {
+          val srcPos = varRef("srcPos")
+          val dest = varRef("dest")
+          val destPos = varRef("destPos")
+          val length = varRef("length")
+
+          val copyToName = genSyntheticPropertyForDef(SyntheticProperty.copyTo)
+
+          def scale(sizeVal: Tree): Tree =
+            if (componentTypeRef == LongRef && !useBigIntForLongs) sizeVal << 1
+            else sizeVal
+
+          val methodDef = MethodDef(static = false, copyToName,
+              paramList(srcPos, dest, destPos, length), None, {
+            if (isTypedArray) {
+              Block(
+                  if (semantics.arrayIndexOutOfBounds != CheckedBehavior.Unchecked) {
+                    genCallHelper(VarField.arraycopyCheckBounds, lengthOf(This()),
+                        srcPos, lengthOf(dest), destPos, length)
+                  } else {
+                    Skip()
+                  },
+                  Apply(genIdentBracketSelect(dest.u, "set"),
+                      Apply(genIdentBracketSelect(This().u, "subarray"),
+                          scale(srcPos) :: scale((srcPos + length) | 0) :: Nil) ::
+                      scale(destPos) ::
+                      Nil)
+              )
+            } else {
+              genCallHelper(VarField.arraycopyGeneric, This().u, scale(srcPos),
+                  dest.u, scale(destPos), length)
+            }
+          })
+          methodDef :: Nil
+        } else {
+          Nil
+        }
+
+        val cloneMethodIdent = genMethodIdentForDef(cloneMethodName, NoOriginalName)
+        val clone = MethodDef(static = false, cloneMethodIdent, Nil, None, {
+          Return(New(ArrayClass,
+              Apply(genIdentBracketSelect(This().u, "slice"), Nil) :: Nil))
+        })
+
+        val members = getAndSet ::: copyTo ::: clone :: Nil
+
+        if (useClassesForRegularClasses) {
+          extractWithGlobals(globalClassDef(VarField.ac, componentTypeRef,
+              Some(globalVar(VarField.c, ObjectClass)), ctor :: members))
+        } else {
+          val clsDef = {
+            extractWithGlobals(globalFunctionDef(VarField.ac, componentTypeRef,
+                ctor.args, ctor.restParam, ctor.body)) :::
+            genAssignPrototype(ArrayClass, New(globalVar(VarField.h, ObjectClass), Nil)) ::
+            (prototypeFor(ArrayClass) DOT "constructor" := ArrayClass) ::
+            assignES5ClassMembers(ArrayClass, members)
+          }
+
+          componentTypeRef match {
+            case _: ClassRef =>
+              clsDef :::
+              defineFunction(VarField.ah, ObjectClass, Nil, Skip()) :::
+              (globalVar(VarField.ah, ObjectClass).prototype := prototypeFor(ArrayClass)) :: Nil
+            case _: PrimRef =>
+              clsDef
+          }
         }
       }
     }
 
-    private def defineBoxFunctions(): Unit = {
-      // Boxes for Chars
-      locally {
-        val c = varRef("c")
-        buf += envFunctionDef("bC", paramList(c), {
-          Return(New(envField("Char"), c :: Nil))
-        })
-        buf += const(envField("bC0"), genCallHelper("bC", 0))
-      }
+    private def genArrayClassConstructorBody(arg: VarRef,
+        componentTypeRef: NonArrayTypeRef): Tree = {
+      val i = varRef("i")
 
-      val v = varRef("v")
+      If(typeof(arg) === str("number"), {
+        val arraySizeCheck = condTree(negativeArraySizes != CheckedBehavior.Unchecked) {
+          If(arg < 0, genCallHelper(VarField.throwNegativeArraySizeException))
+        }
 
-      if (asInstanceOfs != CheckedBehavior.Unchecked) {
-        // Unboxes for everything
-        buf += envFunctionDef("uZ", paramList(v), {
-          Return(!(!(genCallHelper("asBoolean", v))))
-        })
-        buf += envFunctionDef("uC", paramList(v), {
-          Return(If(v === Null(), 0, genCallHelper("asChar", v) DOT "c"))
-        })
-        buf += envFunctionDef("uB", paramList(v), {
-          Return(genCallHelper("asByte", v) | 0)
-        })
-        buf += envFunctionDef("uS", paramList(v), {
-          Return(genCallHelper("asShort", v) | 0)
-        })
-        buf += envFunctionDef("uI", paramList(v), {
-          Return(genCallHelper("asInt", v) | 0)
-        })
-        buf += envFunctionDef("uJ", paramList(v), {
-          Return(If(v === Null(), genLongZero(),
-              genAsInstanceOf(v, ClassRef(BoxedLongClass))))
-        })
-        buf += envFunctionDef("uF", paramList(v), {
-          /* Since asFloat(v) ensures that v is either null or a float, we can
-           * use + instead of fround.
-           */
-          Return(+genCallHelper("asFloat", v))
-        })
-        buf += envFunctionDef("uD", paramList(v), {
-          Return(+genCallHelper("asDouble", v))
-        })
-      } else {
-        // Unboxes for Chars and Longs
-        buf += envFunctionDef("uC", paramList(v), {
-          Return(If(v === Null(), 0, v DOT "c"))
-        })
-        buf += envFunctionDef("uJ", paramList(v), {
-          Return(If(v === Null(), genLongZero(), v))
-        })
-      }
+        val scaleArg =
+          if (componentTypeRef == LongRef && !useBigIntForLongs) Assign(arg, arg << 1)
+          else Skip()
+
+        getArrayUnderlyingTypedArrayClassRef(componentTypeRef) match {
+          case Some(typeArrayClassWithGlobalRefs) =>
+            Block(
+                arraySizeCheck,
+                scaleArg,
+                This().u := New(extractWithGlobals(typeArrayClassWithGlobalRefs), arg :: Nil)
+            )
+          case None =>
+            val zeroElem =
+              if (componentTypeRef == LongRef && !useBigIntForLongs) int(0)
+              else genZeroOf(componentTypeRef)
+            Block(
+                arraySizeCheck,
+                scaleArg,
+                This().u := New(ArrayRef, arg :: Nil),
+                For(let(i, 0), i < arg, i.++, {
+                  BracketSelect(This().u, i) := zeroElem
+                })
+            )
+        }
+      }, {
+        // arg is a native array that we wrap
+        This().u := arg
+      })
     }
 
-    private def defineTypedArrayConversions(): Unit = {
-      val list = List(
-          (ByteClass, "byte", "Int8Array"),
-          (ShortClass, "short", "Int16Array"),
-          (CharClass, "char", "Uint16Array"),
-          (IntClass, "int", "Int32Array"),
-          (FloatClass, "float", "Float32Array"),
-          (DoubleClass, "double", "Float64Array")
-      )
-
-      val value = varRef("value")
-
-      for ((className, shortName, typedArrayName) <- list) {
-        val typedArrayClass = globalRef(typedArrayName)
-        val shortNameUpperCase = "" + shortName.head.toUpper + shortName.tail
-
-        buf += envFunctionDef(shortName + "Array2TypedArray", paramList(value), {
-          Return(New(typedArrayClass, (value DOT "u") :: Nil))
-        })
-        buf += envFunctionDef("typedArray2" + shortNameUpperCase + "Array", paramList(value), {
-          Return(New(genClassDataOf(ArrayTypeRef(className, 1)) DOT "constr",
-              New(typedArrayClass, value :: Nil) :: Nil))
-        })
-      }
-    }
-
-    private def defineTypeDataClass(): Unit = {
+    private def defineTypeDataClass(): List[Tree] = {
       def privateFieldSet(fieldName: String, value: Tree): Tree =
         This() DOT fieldName := value
 
-      def publicFieldSet(fieldName: String, value: Tree): Tree =
-        genIdentBracketSelect(This(), fieldName) := value
-
       val ctor = {
-        MethodDef(static = false, Ident("constructor"), Nil, {
+        MethodDef(static = false, Ident("constructor"), Nil, None, {
           Block(
-              privateFieldSet("constr", Undefined()),
-              privateFieldSet("parentData", Undefined()),
-              privateFieldSet("ancestors", Null()),
-              privateFieldSet("componentData", Null()),
-              privateFieldSet("arrayBase", Null()),
-              privateFieldSet("arrayDepth", int(0)),
-              privateFieldSet("zero", Null()),
-              privateFieldSet("arrayEncodedName", str("")),
-              privateFieldSet("_classOf", Undefined()),
-              privateFieldSet("_arrayOf", Undefined()),
-              privateFieldSet("isArrayOf", Undefined()),
-              publicFieldSet("name", str("")),
-              publicFieldSet("isPrimitive", bool(false)),
-              publicFieldSet("isInterface", bool(false)),
-              publicFieldSet("isArrayClass", bool(false)),
-              publicFieldSet("isJSClass", bool(false)),
-              publicFieldSet("isInstance", Undefined())
+              privateFieldSet(cpn.constr, Undefined()),
+              if (globalKnowledge.isParentDataAccessed)
+                privateFieldSet(cpn.parentData, Undefined())
+              else
+                Skip(),
+              privateFieldSet(cpn.ancestors, Null()),
+              privateFieldSet(cpn.componentData, Null()),
+              privateFieldSet(cpn.arrayBase, Null()),
+              privateFieldSet(cpn.arrayDepth, int(0)),
+              privateFieldSet(cpn.zero, Null()),
+              privateFieldSet(cpn.arrayEncodedName, str("")),
+              privateFieldSet(cpn._classOf, Undefined()),
+              privateFieldSet(cpn._arrayOf, Undefined()),
+
+              /* A lambda for the logic of the public `isAssignableFrom`,
+               * without its fast-path. See the comment on the definition of
+               * `isAssignableFrom` for the rationale of this decomposition.
+               */
+              privateFieldSet(cpn.isAssignableFromFun, Undefined()),
+
+              privateFieldSet(cpn.wrapArray, Undefined()),
+              privateFieldSet(cpn.isJSType, bool(false)),
+
+              privateFieldSet(cpn.name, str("")),
+              privateFieldSet(cpn.isPrimitive, bool(false)),
+              privateFieldSet(cpn.isInterface, bool(false)),
+              privateFieldSet(cpn.isArrayClass, bool(false)),
+              privateFieldSet(cpn.isInstance, Undefined())
           )
         })
       }
@@ -1086,61 +1780,175 @@ private[emitter] object CoreJSLib {
         val zero = varRef("zero")
         val arrayEncodedName = varRef("arrayEncodedName")
         val displayName = varRef("displayName")
-        val isArrayOf = varRef("isArrayOf")
-        val obj = varRef("obj")
+        val arrayClass = varRef("arrayClass")
+        val typedArrayClass = varRef("typedArrayClass")
+        val self = varRef("self")
+        val that = varRef("that")
         val depth = varRef("depth")
-        MethodDef(static = false, Ident("initPrim"),
-            paramList(zero, arrayEncodedName, displayName, isArrayOf), {
+        val obj = varRef("obj")
+        MethodDef(static = false, Ident(cpn.initPrim),
+            paramList(zero, arrayEncodedName, displayName, arrayClass, typedArrayClass), None, {
           Block(
-              privateFieldSet("ancestors", ObjectConstr(Nil)),
-              privateFieldSet("zero", zero),
-              privateFieldSet("arrayEncodedName", arrayEncodedName),
-              privateFieldSet("isArrayOf", isArrayOf),
-              publicFieldSet("name", displayName),
-              publicFieldSet("isPrimitive", bool(true)),
-              publicFieldSet("isInstance",
-                  Function(arrow = false, paramList(obj), Return(bool(false)))),
+              privateFieldSet(cpn.ancestors, ObjectConstr(Nil)),
+              privateFieldSet(cpn.zero, zero),
+              privateFieldSet(cpn.arrayEncodedName, arrayEncodedName),
+              const(self, This()), // capture `this` for use in arrow fun
+              privateFieldSet(cpn.isAssignableFromFun,
+                  genArrowFunction(paramList(that), Return(that === self))),
+              privateFieldSet(cpn.name, displayName),
+              privateFieldSet(cpn.isPrimitive, bool(true)),
+              privateFieldSet(cpn.isInstance,
+                  genArrowFunction(paramList(obj), Return(bool(false)))),
+              If(arrayClass !== Undefined(), { // it is undefined for void
+                privateFieldSet(cpn._arrayOf,
+                    Apply(New(globalVar(VarField.TypeData, CoreVar), Nil) DOT cpn.initSpecializedArray,
+                        List(This(), arrayClass, typedArrayClass, arrayEncodedName === str("J"))))
+              }),
               Return(This())
           )
         })
       }
 
       val initClass = {
-        val internalNameObj = varRef("internalNameObj")
-        val isInterface = varRef("isInterface")
+        /* This is either:
+         * - an int: 1 means isInterface; 2 means isJSType; 0 otherwise
+         * - a Scala class constructor: means 0 + assign `kindOrCtor.prototype.$classData = this;`
+         */
+        val kindOrCtor = varRef("kindOrCtor")
+
+        val hasParentData = globalKnowledge.isParentDataAccessed
+
         val fullName = varRef("fullName")
         val ancestors = varRef("ancestors")
-        val isJSType = varRef("isJSType")
         val parentData = varRef("parentData")
         val isInstance = varRef("isInstance")
-        val isArrayOf = varRef("isArrayOf")
         val internalName = varRef("internalName")
-        val obj = varRef("obj")
+        val that = varRef("that")
         val depth = varRef("depth")
-        MethodDef(static = false, Ident("initClass"),
-            paramList(internalNameObj, isInterface, fullName, ancestors,
-                isJSType, parentData, isInstance, isArrayOf), {
+        val obj = varRef("obj")
+        val params =
+          if (hasParentData) paramList(kindOrCtor, fullName, ancestors, parentData, isInstance)
+          else paramList(kindOrCtor, fullName, ancestors, isInstance)
+        MethodDef(static = false, Ident(cpn.initClass), params, None, {
           Block(
-              const(internalName, genCallHelper("propertyName", internalNameObj)),
-              privateFieldSet("parentData", parentData),
-              privateFieldSet("ancestors", ancestors),
-              privateFieldSet("arrayEncodedName", str("L") + fullName + str(";")),
-              privateFieldSet("isArrayOf", isArrayOf || {
-                Function(arrow = false, paramList(obj, depth), {
-                  Return(!(!(obj && (obj DOT classData) &&
-                      ((obj DOT classData DOT "arrayDepth") === depth) &&
-                      BracketSelect(obj DOT classData DOT "arrayBase" DOT "ancestors", internalName))))
+              /* Extract the internalName, which is the first property of ancestors.
+               * We use `getOwnPropertyNames()`, which since ES 2015 guarantees
+               * to return non-integer string keys in creation order.
+               */
+              const(internalName,
+                  BracketSelect(Apply(genIdentBracketSelect(ObjectRef, "getOwnPropertyNames"), List(ancestors)), 0)),
+              if (hasParentData)
+                privateFieldSet(cpn.parentData, parentData)
+              else
+                Skip(),
+              privateFieldSet(cpn.ancestors, ancestors),
+              privateFieldSet(cpn.arrayEncodedName, str("L") + fullName + str(";")),
+              privateFieldSet(cpn.isAssignableFromFun, {
+                genArrowFunction(paramList(that), {
+                  Return(!(!(BracketSelect(that DOT cpn.ancestors, internalName))))
                 })
               }),
-              publicFieldSet("name", fullName),
-              publicFieldSet("isInterface", isInterface),
-              publicFieldSet("isJSType", !(!isJSType)),
-              publicFieldSet("isInstance", isInstance || {
-                Function(arrow = false, paramList(obj), {
+              privateFieldSet(cpn.isJSType, kindOrCtor === 2),
+              privateFieldSet(cpn.name, fullName),
+              privateFieldSet(cpn.isInterface, kindOrCtor === 1),
+              privateFieldSet(cpn.isInstance, isInstance || {
+                genArrowFunction(paramList(obj), {
                   Return(!(!(obj && (obj DOT classData) &&
-                      BracketSelect(obj DOT classData DOT "ancestors", internalName))))
+                      BracketSelect(obj DOT classData DOT cpn.ancestors, internalName))))
                 })
               }),
+              If(typeof(kindOrCtor) !== str("number"), {
+                kindOrCtor.prototype DOT cpn.classData := This()
+              }),
+              Return(This())
+          )
+        })
+      }
+
+      def initArrayCommonBody(arrayClass: VarRef, componentData: VarRef,
+          arrayBase: VarRef, arrayDepth: Tree): Tree = {
+        val name = varRef("name")
+
+        Block(
+            const(name, str("[") + (componentData DOT cpn.arrayEncodedName)),
+            privateFieldSet(cpn.constr, arrayClass),
+            if (globalKnowledge.isParentDataAccessed)
+              privateFieldSet(cpn.parentData, genClassDataOf(ObjectClass))
+            else
+              Skip(),
+            privateFieldSet(cpn.ancestors, ObjectConstr(List(
+                genAncestorIdent(CloneableClass) -> 1,
+                genAncestorIdent(SerializableClass) -> 1
+            ))),
+            privateFieldSet(cpn.componentData, componentData),
+            privateFieldSet(cpn.arrayBase, arrayBase),
+            privateFieldSet(cpn.arrayDepth, arrayDepth),
+            privateFieldSet(cpn.arrayEncodedName, name),
+            privateFieldSet(cpn.name, name),
+            privateFieldSet(cpn.isArrayClass, bool(true))
+        )
+      }
+
+      val initSpecializedArray = {
+        val componentData = varRef("componentData")
+        val arrayClass = varRef("arrayClass")
+        val typedArrayClass = varRef("typedArrayClass")
+        val isLongArray = varRef("isLongArray")
+        val isAssignableFromFun = varRef("isAssignableFromFun")
+        val self = varRef("self")
+        val that = varRef("that")
+        val obj = varRef("obj")
+        val array = varRef("array")
+        MethodDef(static = false, Ident(cpn.initSpecializedArray),
+            paramList(componentData, arrayClass, typedArrayClass, isLongArray, isAssignableFromFun), None, {
+          Block(
+              arrayClass.prototype DOT classData := This(),
+              initArrayCommonBody(arrayClass, componentData, componentData, 1),
+              const(self, This()), // capture `this` for use in arrow fun
+              privateFieldSet(cpn.isAssignableFromFun, isAssignableFromFun || {
+                genArrowFunction(paramList(that), Return(self === that))
+              }),
+              privateFieldSet(cpn.wrapArray, {
+                val whenNotRuntimeLongArray = {
+                  If(typedArrayClass, {
+                    genArrowFunction(paramList(array), {
+                      Return(New(arrayClass, New(typedArrayClass, array :: Nil) :: Nil))
+                    })
+                  }, {
+                    genArrowFunction(paramList(array), {
+                      Return(New(arrayClass, array :: Nil))
+                    })
+                  })
+                }
+                if (useBigIntForLongs) {
+                  whenNotRuntimeLongArray
+                } else {
+                  If(isLongArray, {
+                    genArrowFunction(paramList(array), {
+                      val len = varRef("len")
+                      val result = varRef("result")
+                      val u = varRef("u")
+                      val i = varRef("i")
+                      val srcElem = varRef("srcElem")
+                      Block(
+                        const(len, array.length | 0),
+                        const(result, New(arrayClass, len :: Nil)),
+                        const(u, result.u),
+                        For(let(i, 0), i < len, i := (i + 1) | 0, Block(
+                          const(srcElem, BracketSelect(array, i)),
+                          BracketSelect(u, i << 1) := srcElem DOT cpn.lo,
+                          BracketSelect(u, ((i << 1) + 1) | 0) := srcElem DOT cpn.hi
+                        )),
+                        Return(result)
+                      )
+                    })
+                  }, {
+                    whenNotRuntimeLongArray
+                  })
+                }
+              }),
+              privateFieldSet(cpn.isInstance,
+                  genArrowFunction(paramList(obj), Return(obj instanceof arrayClass))),
               Return(This())
           )
         })
@@ -1148,287 +1956,770 @@ private[emitter] object CoreJSLib {
 
       val initArray = {
         val componentData = varRef("componentData")
-        val componentZero = varRef("componentZero")
         val ArrayClass = varRef("ArrayClass")
-        val encodedName = varRef("encodedName")
-        val componentBase = varRef("componentBase")
+        val arrayBase = varRef("arrayBase")
         val arrayDepth = varRef("arrayDepth")
+        val isAssignableFromFun = varRef("isAssignableFromFun")
+        val that = varRef("that")
+        val self = varRef("self")
         val obj = varRef("obj")
-        MethodDef(static = false, Ident("initArray"),
-            paramList(componentData), {
+        val array = varRef("array")
+        MethodDef(static = false, Ident(cpn.initArray),
+            paramList(componentData), None, {
           val ArrayClassDef = {
             val ctor = {
               val arg = varRef("arg")
               val i = varRef("i")
-              MethodDef(static = false, Ident("constructor"),
-                  paramList(arg), {
-                Block(
-                    Apply(Super(), Nil),
-                    If(typeof(arg) === str("number"), {
-                      // arg is the length of the array
-                      Block(
-                          privateFieldSet("u", New(ArrayRef, arg :: Nil)),
-                          For(let(i, 0), i < arg, i.++, {
-                            BracketSelect(This() DOT "u", i) := componentZero
-                          })
-                      )
-                    }, {
-                      // arg is a native array that we wrap
-                      privateFieldSet("u", arg)
-                    })
-                )
+              MethodDef(static = false, Ident("constructor"), paramList(arg), None, {
+                if (useClassesForRegularClasses)
+                  Apply(Super(), arg :: Nil)
+                else
+                  genArrayClassConstructorBody(arg, ClassRef(ObjectClass))
               })
             }
 
-            val getAndSet = if (arrayIndexOutOfBounds != CheckedBehavior.Unchecked) {
+            val set = if (arrayStores != CheckedBehavior.Unchecked) {
               val i = varRef("i")
               val v = varRef("v")
 
-              val boundsCheck = {
-                If((i < 0) || (i >= (This() DOT "u" DOT "length")),
-                    genCallHelper("throwArrayIndexOutOfBoundsException", i),
-                    Skip())
+              val setName = genSyntheticPropertyForDef(SyntheticProperty.set)
+
+              val boundsCheck = condTree(arrayIndexOutOfBounds != CheckedBehavior.Unchecked) {
+                If((i >>> 0) >= (This().u.length >>> 0),
+                    genCallHelper(VarField.throwArrayIndexOutOfBoundsException, i))
+              }
+
+              val storeCheck = {
+                If((v !== Null()) && !(componentData DOT cpn.isJSType) &&
+                    !Apply(componentData DOT cpn.isInstance, v :: Nil),
+                    genCallHelper(VarField.throwArrayStoreException, v))
               }
 
               List(
-                  MethodDef(static = false, Ident("get"), paramList(i), {
-                    Block(
-                        boundsCheck,
-                        Return(BracketSelect(This() DOT "u", i))
-                    )
-                  }),
-                  MethodDef(static = false, Ident("set"), paramList(i, v), {
-                    Block(
-                        boundsCheck,
-                        BracketSelect(This() DOT "u", i) := v
-                    )
-                  })
+                MethodDef(static = false, setName, paramList(i, v), None, {
+                  Block(
+                      boundsCheck,
+                      storeCheck,
+                      BracketSelect(This().u, i) := v
+                  )
+                })
               )
             } else {
               Nil
             }
 
-            val clone = MethodDef(static = false, Ident("clone__O"), Nil, {
-              Return(New(ArrayClass, {
-                If((This() DOT "u") instanceof ArrayRef, {
-                  Apply(genIdentBracketSelect(This() DOT "u", "slice"), 0 :: Nil)
-                }, {
-                  New(This() DOT "u" DOT "constructor", (This() DOT "u") :: Nil)
-                })
-              } :: Nil))
+            val copyTo = if (esVersion >= ESVersion.ES2015) {
+              val srcPos = varRef("srcPos")
+              val dest = varRef("dest")
+              val destPos = varRef("destPos")
+              val length = varRef("length")
+
+              val copyToName = genSyntheticPropertyForDef(SyntheticProperty.copyTo)
+
+              val methodDef = MethodDef(static = false, copyToName,
+                  paramList(srcPos, dest, destPos, length), None, {
+                genCallHelper(VarField.arraycopyGeneric, This().u, srcPos,
+                    dest.u, destPos, length)
+              })
+              methodDef :: Nil
+            } else {
+              Nil
+            }
+
+            val cloneMethodIdent = genMethodIdentForDef(cloneMethodName, NoOriginalName)
+            val clone = MethodDef(static = false, cloneMethodIdent, Nil, None, {
+              Return(New(ArrayClass,
+                  Apply(genIdentBracketSelect(This().u, "slice"), Nil) :: Nil))
             })
 
-            genClassDef(ArrayClass.ident,
-                Some((encodeClassVar(ObjectClass), envField("h", ObjectClass))),
-                ctor :: getAndSet ::: clone :: Nil)
+            val members = set ::: copyTo ::: clone :: Nil
+
+            if (useClassesForRegularClasses) {
+              Block(
+                  ClassDef(Some(ArrayClass.ident), Some(globalVar(VarField.ac, ObjectClass)),
+                      ctor :: members),
+                  ArrayClass.prototype DOT cpn.classData := This()
+              )
+            } else {
+              Block(
+                FunctionDef(ArrayClass.ident, ctor.args, ctor.restParam, ctor.body) ::
+                genAssignPrototype(ArrayClass, New(globalVar(VarField.ah, ObjectClass), Nil), localDecl = true) ::
+                (prototypeFor(ArrayClass) DOT "constructor" := ArrayClass) ::
+                assignES5ClassMembers(ArrayClass, members) :::
+                (prototypeFor(ArrayClass) DOT cpn.classData := This()) ::
+                Nil
+              )
+            }
           }
 
           Block(
-              const(componentZero, if (allowBigIntsForLongs) {
-                (componentData DOT "zero")
-              } else {
-                If((componentData DOT "zero") === str("longZero"),
-                    genLongZero(), componentData DOT "zero")
-              }),
               ArrayClassDef,
-              ArrayClass.prototype DOT classData := This(),
-              const(encodedName, str("[") + (componentData DOT "arrayEncodedName")),
-              const(componentBase, (componentData DOT "arrayBase") || componentData),
-              const(arrayDepth, (componentData DOT "arrayDepth") + 1),
-              privateFieldSet("constr", ArrayClass),
-              privateFieldSet("parentData", genClassDataOf(ObjectClass)),
-              privateFieldSet("ancestors", ObjectConstr(List(
-                  Ident(ObjectClass) -> 1,
-                  Ident("jl_Cloneable") -> 1,
-                  Ident("Ljava_io_Serializable") -> 1
-              ))),
-              privateFieldSet("componentData", componentData),
-              privateFieldSet("arrayBase", componentBase),
-              privateFieldSet("arrayDepth", arrayDepth),
-              privateFieldSet("arrayEncodedName", encodedName),
-              publicFieldSet("name", encodedName),
-              publicFieldSet("isArrayClass", bool(true)),
-              publicFieldSet("isInstance", Function(arrow = false, paramList(obj), {
-                Return(Apply(componentBase DOT "isArrayOf", obj :: arrayDepth :: Nil))
+              const(arrayBase, (componentData DOT cpn.arrayBase) || componentData),
+              const(arrayDepth, (componentData DOT cpn.arrayDepth) + 1),
+              initArrayCommonBody(ArrayClass, componentData, arrayBase, arrayDepth),
+              const(isAssignableFromFun, {
+                genArrowFunction(paramList(that), {
+                  val thatDepth = varRef("thatDepth")
+                  Block(
+                      const(thatDepth, that DOT cpn.arrayDepth),
+                      Return(If(thatDepth === arrayDepth, {
+                        Apply(arrayBase DOT cpn.isAssignableFromFun, (that DOT cpn.arrayBase) :: Nil)
+                      }, {
+                        (thatDepth > arrayDepth) && (arrayBase === genClassDataOf(ObjectClass))
+                      }))
+                  )
+                })
+              }),
+              privateFieldSet(cpn.isAssignableFromFun, isAssignableFromFun),
+              privateFieldSet(cpn.wrapArray, genArrowFunction(paramList(array), {
+                Return(New(ArrayClass, array :: Nil))
+              })),
+              const(self, This()), // don't rely on the lambda being called with `this` as receiver
+              privateFieldSet(cpn.isInstance, genArrowFunction(paramList(obj), {
+                val data = varRef("data")
+                Block(
+                    const(data, obj && (obj DOT classData)),
+                    Return(!(!data) && {
+                      (data === self) || // fast path
+                      Apply(isAssignableFromFun, data :: Nil)
+                    })
+                )
               })),
               Return(This())
           )
         })
       }
 
-      val getClassOf = {
-        MethodDef(static = false, Ident("getClassOf"), Nil, {
-          Block(
-              If(!(This() DOT "_classOf"),
-                  This() DOT "_classOf" := New(encodeClassVar(ClassClass), This() :: Nil),
-                  Skip()),
-              Return(This() DOT "_classOf")
-          )
-        })
-      }
-
       val getArrayOf = {
-        MethodDef(static = false, Ident("getArrayOf"), Nil, {
+        MethodDef(static = false, Ident(cpn.getArrayOf), Nil, None, {
           Block(
-              If(!(This() DOT "_arrayOf"),
-                  This() DOT "_arrayOf" :=
-                    Apply(New(envField("TypeData"), Nil) DOT "initArray", This() :: Nil),
+              If(!(This() DOT cpn._arrayOf),
+                  This() DOT cpn._arrayOf :=
+                    Apply(New(globalVar(VarField.TypeData, CoreVar), Nil) DOT cpn.initArray, This() :: Nil),
                   Skip()),
-              Return(This() DOT "_arrayOf")
+              Return(This() DOT cpn._arrayOf)
           )
         })
       }
 
-      val isAssignableFrom = {
-        val that = varRef("that")
-        val thatFakeInstance = varRef("thatFakeInstance")
-        MethodDef(static = false, StringLiteral("isAssignableFrom"),
-            paramList(that), {
-          If(genIdentBracketSelect(This(), "isPrimitive") ||
-              genIdentBracketSelect(that, "isPrimitive"), {
-            Return(This() === that)
-          }, {
-            Block(
-                genEmptyMutableLet(thatFakeInstance.ident),
-                If(that === genClassDataOf(BoxedStringClass), {
-                  thatFakeInstance := str("")
-                }, {
-                  If(that === genClassDataOf(BoxedBooleanClass), {
-                    thatFakeInstance := bool(false)
-                  }, {
-                    If({
-                      List(BoxedByteClass, BoxedShortClass, BoxedIntegerClass,
-                          BoxedFloatClass, BoxedDoubleClass).map { cls =>
-                        that === genClassDataOf(cls)
-                      }.reduceLeft(_ || _)
-                    }, {
-                      thatFakeInstance := int(0)
-                    }, {
-                      If(that === genClassOf(BoxedLongClass), {
-                        thatFakeInstance := genLongZero()
-                      }, {
-                        If(that === genClassOf(BoxedUnitClass), {
-                          thatFakeInstance := Undefined()
-                        }, {
-                          thatFakeInstance := ObjectConstr(List(classData -> that))
-                        })
-                      })
-                    })
-                  })
-                }),
-                Return(Apply(genIdentBracketSelect(This(), "isInstance"),
-                    thatFakeInstance :: Nil))
-            )
-          })
-        })
-      }
-
-      val getSuperclass = {
-        MethodDef(static = false, StringLiteral("getSuperclass"), Nil, {
-          Return(If(This() DOT "parentData",
-              Apply(This() DOT "parentData" DOT "getClassOf", Nil),
-              Null()))
-        })
-      }
-
-      val getComponentType = {
-        MethodDef(static = false, StringLiteral("getComponentType"), Nil, {
-          Return(If(This() DOT "componentData",
-              Apply(This() DOT "componentData" DOT "getClassOf", Nil),
-              Null()))
-        })
-      }
-
-      val newArrayOfThisClass = {
-        val lengths = varRef("lengths")
-        val arrayClassData = varRef("arrayClassData")
-        val i = varRef("i")
-        MethodDef(static = false, StringLiteral("newArrayOfThisClass"),
-            paramList(lengths), {
+      def getClassOf = {
+        MethodDef(static = false, Ident(cpn.getClassOf), Nil, None, {
+          /* We call the NoArgConstructorName with an argument, because it is
+           * added at the emitter level for java.lang.Class, without being in
+           * the IR.
+           */
           Block(
-              let(arrayClassData, This()),
-              For(let(i, 0), i < (lengths DOT "length"), i.++, {
-                arrayClassData := Apply(arrayClassData DOT "getArrayOf", Nil)
-              }),
-              Return(genCallHelper("newArrayObject", arrayClassData, lengths))
+              If(!(This() DOT cpn._classOf),
+                  This() DOT cpn._classOf := genScalaClassNew(ClassClass, NoArgConstructorName, This()),
+                  Skip()),
+              Return(This() DOT cpn._classOf)
           )
         })
       }
 
-      buf += genClassDef(envFieldIdent("TypeData"), None, List(
-          ctor,
+      def isAssignableFrom = {
+        /* This is the method called by `Class_isAssignableFrom`. It
+         * first performs a fast-path with `this === that`, and otherwise calls
+         * the internal `isAssignableFromFun` function.
+         * The reason for this decomposition (as opposed to performing the
+         * fast-path in each `isAssignableFromFun`) is to keep the fast-path
+         * monomorphic: on the happy path, the VM performs a monomorphic
+         * dispatch to this method, which performs the fast-path and returns.
+         * We only need a polymorphic dispatch in the slow path.
+         */
+        val that = varRef("that")
+        MethodDef(static = false, Ident(cpn.isAssignableFrom),
+            paramList(that), None, {
+          Return(
+              (This() === that) || // fast path
+              Apply(This() DOT cpn.isAssignableFromFun, that :: Nil))
+        })
+      }
+
+      def cast = {
+        assert(asInstanceOfs != CheckedBehavior.Unchecked)
+        val obj = varRef("obj")
+        MethodDef(static = false, Ident(cpn.cast), paramList(obj), None, {
+          Block(
+            If((obj !== Null()) && !(This() DOT cpn.isJSType) &&
+                !Apply(This() DOT cpn.isInstance, obj :: Nil),
+              genCallHelper(VarField.throwClassCastException, obj, This() DOT cpn.name),
+              Skip()),
+            Return(obj)
+          )
+        })
+      }
+
+      def getSuperclass = {
+        MethodDef(static = false, Ident(cpn.getSuperclass), Nil, None, {
+          Return(If(This() DOT cpn.parentData,
+              Apply(This() DOT cpn.parentData DOT cpn.getClassOf, Nil),
+              Null()))
+        })
+      }
+
+      def getComponentType = {
+        MethodDef(static = false, Ident(cpn.getComponentType), Nil, None, {
+          Return(If(This() DOT cpn.componentData,
+              Apply(This() DOT cpn.componentData DOT cpn.getClassOf, Nil),
+              Null()))
+        })
+      }
+
+      def newArray = {
+        val length = varRef("length")
+        MethodDef(static = false, Ident(cpn.newArray),
+            paramList(length), None, {
+          Block(
+            If(This() === globalVar(VarField.d, VoidRef), {
+              Throw(genScalaClassNew(IllegalArgumentExceptionClass, NoArgConstructorName))
+            }, Skip()),
+            Return(New(Apply(This() DOT cpn.getArrayOf, Nil) DOT cpn.constr, length :: Nil))
+          )
+        })
+      }
+
+      def allClassReflectionMethods: List[MethodDef] = {
+        val b = List.newBuilder[MethodDef]
+        b += getClassOf
+        b += isAssignableFrom
+        if (asInstanceOfs != CheckedBehavior.Unchecked)
+          b += cast
+        b += getSuperclass
+        b += getComponentType
+        if (globalKnowledge.isIllegalArgumentExceptionClassInstantiatedWithNoArg) // over-approximation
+          b += newArray
+        b.result()
+      }
+
+      val members = List(
           initPrim,
           initClass,
+          initSpecializedArray,
           initArray,
-          getClassOf,
-          getArrayOf,
-          isAssignableFrom,
-          getSuperclass,
-          getComponentType,
-          newArrayOfThisClass
-      ))
-    }
+          getArrayOf
+      ) ::: (
+          if (globalKnowledge.isClassClassInstantiated) {
+            allClassReflectionMethods
+          } else if (arrayStores != CheckedBehavior.Unchecked) {
+            List(
+              isAssignableFrom
+            )
+          } else {
+            Nil
+          }
+      )
 
-    private def defineIsArrayOfPrimitiveFunctions(): Unit = {
-      for (className <- orderedPrimitiveClasses) {
-        val obj = varRef("obj")
-        val depth = varRef("depth")
-        buf += FunctionDef(envFieldIdent("isArrayOf", className), paramList(obj, depth), {
-          Return(!(!(obj && (obj DOT classData) &&
-              ((obj DOT classData DOT "arrayDepth") === depth) &&
-              ((obj DOT classData DOT "arrayBase") === genClassDataOf(className)))))
-        })
+      if (useClassesForRegularClasses) {
+        extractWithGlobals(globalClassDef(VarField.TypeData, CoreVar, None, ctor :: members))
+      } else {
+        defineFunction(VarField.TypeData, ctor.args, ctor.body) :::
+        setPrototypeVar(globalVar(VarField.TypeData, CoreVar)) :::
+        assignES5ClassMembers(globalVar(VarField.TypeData, CoreVar), members)
       }
     }
 
-    private def defineAsArrayOfPrimitiveFunctions(): Unit = {
-      if (asInstanceOfs != CheckedBehavior.Unchecked) {
-        for (className <- orderedPrimitiveClasses) {
+    private def defineSpecializedIsArrayOfFunctions(): List[Tree] = {
+      // isArrayOf_O
+      val obj = varRef("obj")
+      val depth = varRef("depth")
+      val data = varRef("data")
+      val arrayDepth = varRef("arrayDepth")
+
+      val forObj = defineFunction(VarField.isArrayOf, ObjectClass, paramList(obj, depth), {
+        Block(
+            const(data, obj && (obj DOT cpn.classData)),
+            If(!data, {
+              Return(BooleanLiteral(false))
+            }, {
+              Block(
+                  const(arrayDepth, data DOT cpn.arrayDepth),
+                  Return(If(arrayDepth === depth, {
+                    !(data DOT cpn.arrayBase DOT cpn.isPrimitive)
+                  }, {
+                    arrayDepth > depth
+                  }))
+              )
+            })
+        )
+      })
+
+      val forPrims = orderedPrimRefsWithoutVoid.flatMap { primRef =>
+        val obj = varRef("obj")
+        val depth = varRef("depth")
+        defineFunction(VarField.isArrayOf, primRef, paramList(obj, depth), {
+          Return(!(!(obj && (obj DOT classData) &&
+              ((obj DOT classData DOT cpn.arrayDepth) === depth) &&
+              ((obj DOT classData DOT cpn.arrayBase) === genClassDataOf(primRef)))))
+        })
+      }
+
+      forObj ::: forPrims
+    }
+
+    private def defineSpecializedAsArrayOfFunctions(): List[Tree] = {
+      condDefs(asInstanceOfs != CheckedBehavior.Unchecked)(
+        specializedArrayTypeRefs.flatMap { typeRef =>
+          val encodedName = typeRef match {
+            case typeRef: PrimRef => typeRef.charCode.toString()
+            case _                => "L" + ObjectClass.nameString + ";"
+          }
+
           val obj = varRef("obj")
           val depth = varRef("depth")
-          buf += FunctionDef(envFieldIdent("asArrayOf", className), paramList(obj, depth), {
-            If(genCallHelper("isArrayOf_" + className, obj, depth) || (obj === Null()), {
+          defineFunction(VarField.asArrayOf, typeRef, paramList(obj, depth), {
+            If(Apply(globalVar(VarField.isArrayOf, typeRef), obj :: depth :: Nil) || (obj === Null()), {
               Return(obj)
             }, {
-              genCallHelper("throwArrayCastException", obj, str(className), depth)
+              genCallHelper(VarField.throwArrayCastException, obj, str(encodedName), depth)
             })
           })
         }
+      )
+    }
+
+    private def defineSpecializedTypeDatas(): List[Tree] = {
+      /* d_O must be first to correctly populate the parentData of array
+       * classes. Unlike all other type datas, we assign the first of d_O
+       * directly in the generated code, rather than through an `initXyz`
+       * method. That's because its initialization code does not follow the
+       * pattern of other type datas, and therefore the appropriate `initXyz`
+       * would be called only from here anyway.
+       */
+      val obj = locally {
+        val fullName = RuntimeClassNameMapperImpl.map(
+            semantics.runtimeClassNameMapper, ObjectClass.nameString)
+
+        val that = varRef("that")
+        val obj = varRef("obj")
+
+        val typeDataVar = globalVar(VarField.d, ObjectClass)
+
+        def privateFieldSet(fieldName: String, value: Tree): Tree =
+          typeDataVar DOT fieldName := value
+
+        extractWithGlobals(
+            globalVarDef(VarField.d, ObjectClass, New(globalVar(VarField.TypeData, CoreVar), Nil))) :::
+        List(
+          privateFieldSet(cpn.ancestors, ObjectConstr(Nil)),
+          privateFieldSet(cpn.arrayEncodedName, str("L" + fullName + ";")),
+          privateFieldSet(cpn.isAssignableFromFun, {
+            genArrowFunction(paramList(that), {
+              Return(!(that DOT cpn.isPrimitive))
+            })
+          }),
+          privateFieldSet(cpn.name, str(fullName)),
+          privateFieldSet(cpn.isInstance,
+              genArrowFunction(paramList(obj), Return(obj !== Null()))),
+          privateFieldSet(cpn._arrayOf, {
+            Apply(New(globalVar(VarField.TypeData, CoreVar), Nil) DOT cpn.initSpecializedArray, List(
+              typeDataVar,
+              globalVar(VarField.ac, ObjectClass),
+              Undefined(), // typedArray
+              bool(false), // isLongArray
+              genArrowFunction(paramList(that), {
+                val thatDepth = varRef("thatDepth")
+                Block(
+                    const(thatDepth, that DOT cpn.arrayDepth),
+                    Return(If(thatDepth === 1, {
+                      !(that DOT cpn.arrayBase DOT cpn.isPrimitive)
+                    }, {
+                      (thatDepth > 1)
+                    }))
+                )
+              })
+            ))
+          }),
+          globalVar(VarField.c, ObjectClass).prototype DOT cpn.classData := typeDataVar
+        )
+      }
+
+      val prims = orderedPrimRefs.flatMap { primRef =>
+        /* Zero value, for use by the intrinsified code of
+         * `scala.collection.mutable.ArrayBuilder.genericArrayBuilderResult`.
+         * This code is Scala-specific, and "unboxes" `null` as the zero of
+         * primitive types. For `void`, it is even more special, as it produces
+         * a boxed Unit value, which is `undefined` (although `VoidRef`/`VoidType`
+         * doesn't have a zero value per se).
+         */
+        val zero = primRef match {
+          case VoidRef                          => Undefined()
+          case LongRef if !allowBigIntsForLongs => genBoxedZeroOf(LongType)
+          case _                                => genZeroOf(primRef)
+        }
+
+        val typedArrayClass = getArrayUnderlyingTypedArrayClassRef(primRef) match {
+          case Some(typedArrayClassWithGlobals) =>
+            extractWithGlobals(typedArrayClassWithGlobals)
+          case None =>
+            Undefined()
+        }
+
+        extractWithGlobals(globalVarDef(VarField.d, primRef, {
+          Apply(New(globalVar(VarField.TypeData, CoreVar), Nil) DOT cpn.initPrim,
+              List(zero, str(primRef.charCode.toString()),
+                  str(primRef.displayName),
+                  if (primRef == VoidRef) Undefined()
+                  else genArrayConstrOf(ArrayTypeRef(primRef, 1)),
+                  typedArrayClass))
+        }))
+      }
+
+      obj ::: prims
+    }
+
+    /** Defines the functions for creating constant primitive arrays.
+     *
+     *  See [[ConstantArrays]] for details about the encodings.
+     */
+    private def defineConstantArrayMakers(): List[Tree] = {
+      // scalastyle:off return
+      if (esVersion < ESVersion.ES2015)
+        return Nil
+      // scalastyle:on return
+
+      def charCodeAt(s: Tree, i: Tree): Tree =
+        Apply(genIdentBracketSelect(s, "charCodeAt"), i :: Nil)
+
+      def bufferOf(view: Tree): Tree =
+        genIdentBracketSelect(view, "buffer")
+
+      val len = varRef("len")
+      val encoded = varRef("encoded")
+      val prevMask = varRef("prevMask")
+      val buf = varRef("buf")
+      val view = varRef("view")
+      val inLen = varRef("inLen")
+      val regularChunksEnd = varRef("regularChunksEnd")
+      val i = varRef("i")
+      val j = varRef("j")
+      val chunk = varRef("chunk")
+      val trailing = varRef("trailing")
+      val prev = varRef("prev")
+      val c = varRef("c")
+      val first = varRef("first")
+      val v = varRef("v")
+
+      val typedArraysAreBigEndianDef: List[Tree] = extractWithGlobals {
+        globalVarDef(VarField.typedArraysAreBigEndian, CoreVar, {
+          val int32ArrayWith1 = New(Int32ArrayRef, List(ArrayConstr(List(1))))
+          BracketSelect(New(Int8ArrayRef, List(bufferOf(int32ArrayWith1))), 0) === 0
+        })
+      }
+
+      // Functions for the raw encoding (see ConstantArrays for the algorithm)
+
+      val constTypedArrayRawByte: List[Tree] = defineFunction(
+          VarField.constTypedArrayRaw, ByteRef, paramList(len, encoded), {
+        Block(
+          const(buf, New(ArrayBufferRef, List(len))),
+          const(view, New(DataViewRef, List(buf))),
+          const(regularChunksEnd, (encoded.length - 4) | 0), // the last chunk is special
+          let(i, 0),
+          let(j, 0),
+          let(chunk, 0),
+          While(bool(true), Block(
+            // Read the 4 uncorrected groups of a chunk in the 4 bytes of `chunk`
+            Assign(
+              chunk,
+              charCodeAt(encoded, i) |
+              (charCodeAt(encoded, (i + 1) | 0) << 8) |
+              (charCodeAt(encoded, (i + 2) | 0) << 16) |
+              (charCodeAt(encoded, (i + 3) | 0) << 24)
+            ),
+
+            // Decode the 4 bytes in parallel, as explained above
+            chunk := (((chunk - 0x30303030) | 0) - ((chunk & 0x60606060) >>> 3)) | 0,
+
+            // Compress the 4x6 bits to 24 packed bits, leaving the most-significant byte 0
+            chunk := ((chunk & 0x3f003f00) >>> 2) | (chunk & 0x003f003f),
+            chunk := ((chunk & 0x0fff0000) >>> 4) | (chunk & 0x00000fff),
+
+            If(i === regularChunksEnd, Break()),
+
+            // Write the chunk. One 0 byte overwrites a byte from the next chunk, but we don't care
+            Apply(genIdentBracketSelect(view, "setUint32"), List(j, chunk, bool(true))),
+
+            // Go to next chunk
+            i := (i + 4) | 0,
+            j := (j + 3) | 0
+          )),
+
+          // Write trailing bytes one by one
+          const(trailing, (len - j) | 0), // 1, 2 or 3
+          Apply(genIdentBracketSelect(view, "setUint8"), List(j, chunk)),
+          If(trailing !== 1, Block(
+            Apply(genIdentBracketSelect(view, "setUint8"), List((j + 1) | 0, chunk >>> 8)),
+            If(trailing === 3, {
+              Apply(genIdentBracketSelect(view, "setUint8"), List((j + 2) | 0, chunk >>> 16))
+            })
+          )),
+
+          Return(buf)
+        )
+      })
+
+      def makeConstTypedArrayRawBody(logElemByteSize: Int,
+          getMethodName: String, putMethodName: String): Tree = {
+        val elemByteSize = 1 << logElemByteSize
+
+        Block(
+          const(buf, Apply(globalVar(VarField.constTypedArrayRaw, ByteRef), List(len << logElemByteSize, encoded))),
+          If(globalVar(VarField.typedArraysAreBigEndian, CoreVar), Block(
+            // Reverse the bytes of every chunk of elemByteSize
+            const(view, New(DataViewRef, List(buf))),
+            let(i, 0),
+            While(i !== len, Block(
+              Apply(
+                genIdentBracketSelect(view, putMethodName),
+                List(i, Apply(genIdentBracketSelect(view, getMethodName), List(i, bool(true))), bool(false))
+              ),
+              i := (i + elemByteSize) | 0
+            ))
+          )),
+          Return(buf)
+        )
+      }
+
+      val constTypedArrayRawShort: List[Tree] = defineFunction(
+          VarField.constTypedArrayRaw, ShortRef, paramList(len, encoded), {
+        makeConstTypedArrayRawBody(logElemByteSize = 1, "getInt16", "putInt16")
+      })
+
+      val constTypedArrayRawInt: List[Tree] = defineFunction(
+          VarField.constTypedArrayRaw, IntRef, paramList(len, encoded), {
+        makeConstTypedArrayRawBody(logElemByteSize = 2, "getInt32", "putInt32")
+      })
+
+      val constTypedArrayRawLong: List[Tree] = defineFunction(
+          VarField.constTypedArrayRaw, LongRef, paramList(len, encoded), {
+        if (useBigIntForLongs) {
+          makeConstTypedArrayRawBody(logElemByteSize = 3, "getBigInt64", "putBigInt64")
+        } else {
+          // Create an array of Int's twice as long
+          Return(Apply(globalVar(VarField.constTypedArrayRaw, IntRef), List(len << 1, encoded)))
+        }
+      })
+
+      // Functions for the varlen encodings
+
+      val LowRangeStart = 0x30
+      val LowRangeEnd = 0x4f
+      val HighRangeStart = 0x5d
+      val HighRangeEnd = 0x7c // unused, only present here for regularity
+
+      val constTypedArrayUFunctions: List[List[Tree]] = for {
+        primRef <- List(IntRef)
+      } yield {
+        defineFunction(VarField.constTypedArrayU, primRef, paramList(len, encoded, prevMask), {
+          Block(
+            const(buf, New(extractWithGlobals(typedArrayRef(primRef).get), List(len))),
+            const(inLen, encoded.length | 0),
+            let(prev, 0),
+            let(i, 0),
+            let(j, 0),
+            let(v, 0),
+            While(i !== inLen, Block(
+              const(c, charCodeAt(encoded, i)),
+              If(c < (LowRangeEnd + 1), Block(
+                v := ((v | (c - LowRangeStart)) << 5)
+              ), Block(
+                v := (v | (c - HighRangeStart)),
+                prev := ((prev & prevMask) + v) | 0,
+                BracketSelect(buf, j) := prev,
+                j := ((j + 1) | 0),
+                v := 0
+              )),
+              i := ((i + 1) | 0)
+            )),
+            Return(buf)
+          )
+        })
+      }
+
+      val constTypedArraySFunctions: List[List[Tree]] = for {
+        primRef <- List(IntRef)
+      } yield {
+        defineFunction(VarField.constTypedArrayS, primRef, paramList(len, encoded, prevMask), {
+          Block(
+            const(buf, New(extractWithGlobals(typedArrayRef(primRef).get), List(len))),
+            const(inLen, encoded.length | 0),
+            let(prev, 0),
+            let(i, 0),
+            let(j, 0),
+            let(v, 0),
+            let(first, bool(true)),
+            While(i !== inLen, Block(
+              const(c, charCodeAt(encoded, i)),
+              If(c < (LowRangeEnd + 1), Block(
+                If(first, Block(
+                  v := (((c - LowRangeStart) << 27) >> 22),
+                  first := bool(false)
+                ), {
+                  v := ((v | (c - LowRangeStart)) << 5)
+                })
+              ), Block(
+                If(first, {
+                  v := (((c - HighRangeStart) << 27) >> 27)
+                }, Block(
+                  v := v | (c - HighRangeStart),
+                  first := bool(true)
+                )),
+                prev := ((prev & prevMask) + v) | 0,
+                BracketSelect(buf, j) := prev,
+                j := ((j + 1) | 0)
+              )),
+              i := ((i + 1) | 0)
+            )),
+            Return(buf)
+          )
+        })
+      }
+
+      // Now the entry points
+
+      val primRefsWithIntPrimRef = List(
+        ByteRef -> ByteRef,
+        ShortRef -> ShortRef,
+        CharRef -> ShortRef,
+        IntRef -> IntRef,
+        LongRef -> LongRef
+      )
+
+      val constArrayRawFunctions: List[List[Tree]] = for {
+        (primRef, intPrimRef) <- primRefsWithIntPrimRef
+      } yield {
+        defineFunction(VarField.constArrRaw, primRef, paramList(len, encoded), {
+          val buffer = Apply(globalVar(VarField.constTypedArrayRaw, intPrimRef), List(len, encoded))
+          val typedArray = New(extractWithGlobals(typedArrayRef(primRef).get), List(buffer))
+          Return(New(globalVar(VarField.ac, primRef), List(typedArray)))
+        })
+      }
+
+      val variableLengthHelperFields = List(
+        // (constTypedArrayVarField, constArrayVarField, prevMask)
+        (VarField.constTypedArrayU, VarField.constArrUVals, 0),
+        (VarField.constTypedArrayU, VarField.constArrUDiffs, -1),
+        (VarField.constTypedArrayS, VarField.constArrSVals, 0),
+        (VarField.constTypedArrayS, VarField.constArrSDiffs, -1)
+      )
+
+      val constIntArrayVarLenFunctions: List[List[Tree]] = for {
+        (constTypedArrayVarField, constArrayVarField, prevMask) <- variableLengthHelperFields
+      } yield {
+        defineFunction(constArrayVarField, IntRef, paramList(len, encoded), {
+          val typedArray =
+            Apply(globalVar(constTypedArrayVarField, IntRef), List(len, encoded, int(prevMask)))
+          Return(New(globalVar(VarField.ac, IntRef), List(typedArray)))
+        })
+      }
+
+      val constLongArrayVarLenFunctions: List[List[Tree]] = for {
+        (constTypedArrayVarField, constArrayVarField, prevMask) <- variableLengthHelperFields
+      } yield {
+        defineFunction(constArrayVarField, LongRef, paramList(len, encoded), {
+          val typedArray =
+            Apply(globalVar(constTypedArrayVarField, IntRef), List(len << 1, encoded, int(prevMask)))
+          if (useBigIntForLongs) {
+            Block(
+              const(buf, typedArray),
+              If(globalVar(VarField.typedArraysAreBigEndian, CoreVar), Block(
+                // Swap all pairs of ints, since we always store them in (lo, hi) order
+                len := (len << 1),
+                let(i, 0),
+                While(i !== len, Block(
+                  const(v, BracketSelect(buf, i)),
+                  BracketSelect(buf, i) := BracketSelect(buf, (i + 1) | 0),
+                  BracketSelect(buf, (i + 1) | 0) := v,
+                  i := (i + 2) | 0
+                ))
+              )),
+              // Reinterpret the Int32Array as a BigInt64Array
+              Return(New(globalVar(VarField.ac, LongRef),
+                  List(New(extractWithGlobals(typedArrayRef(LongRef).get), List(bufferOf(buf))))))
+            )
+          } else {
+            Return(New(globalVar(VarField.ac, LongRef), List(typedArray)))
+          }
+        })
+      }
+
+      val allFunctions: List[List[Tree]] = (
+        typedArraysAreBigEndianDef ::
+        constTypedArrayRawByte ::
+        constTypedArrayRawShort ::
+        constTypedArrayRawInt ::
+        constTypedArrayRawLong ::
+        constTypedArrayUFunctions :::
+        constTypedArraySFunctions :::
+        constArrayRawFunctions :::
+        constIntArrayVarLenFunctions :::
+        constLongArrayVarLenFunctions
+      )
+
+      allFunctions.flatten
+    }
+
+    private def assignES5ClassMembers(classRef: Tree, members: List[MethodDef]): List[Tree] = {
+      for {
+        MethodDef(static, name, args, restParam, body) <- members
+      } yield {
+        val target = if (static) classRef else prototypeFor(classRef)
+        genPropSelect(target, name) := Function(ClosureFlags.function, args, restParam, body)
       }
     }
 
-    private def definePrimitiveTypeDatas(): Unit = {
-      for {
-        (className, zero, displayName) <- List(
-            (VoidClass, Undefined(), "void"),
-            (BooleanClass, bool(false), "boolean"),
-            (CharClass, int(0), "char"),
-            (ByteClass, int(0), "byte"),
-            (ShortClass, int(0), "short"),
-            (IntClass, int(0), "int"),
-            (LongClass, if (allowBigIntsForLongs) genLongZero() else str("longZero"), "long"),
-            (FloatClass, double(0), "float"),
-            (DoubleClass, double(0), "double")
-        )
-      } {
-        buf += const(envField("d", className), {
-          Apply(New(envField("TypeData"), Nil) DOT "initPrim",
-              List(zero, str(className), str(displayName), envField("isArrayOf", className)))
-        })
-      }
+    private def defineFunction(name: VarField, args: List[ParamDef], body: Tree): List[Tree] =
+      extractWithGlobals(globalFunctionDef(name, CoreVar, args, None, body))
+
+    private def defineFunction[T: Scope](field: VarField, scope: T, args: List[ParamDef], body: Tree): List[Tree] =
+      extractWithGlobals(globalFunctionDef(field, scope, args, None, body))
+
+    private val argRefs = List.tabulate(5)(i => varRef("arg" + i))
+
+    private def defineFunction0(name: VarField)(body: Tree): List[Tree] =
+      defineFunction(name, Nil, body)
+
+    private def defineFunction1(name: VarField)(body: VarRef => Tree): List[Tree] = {
+      val a :: _ = argRefs: @unchecked
+      defineFunction(name, paramList(a), body(a))
+    }
+
+    private def defineFunction2(name: VarField)(body: (VarRef, VarRef) => Tree): List[Tree] = {
+      val a :: b :: _ = argRefs: @unchecked
+      defineFunction(name, paramList(a, b), body(a, b))
+    }
+
+    private def defineFunction3(name: VarField)(body: (VarRef, VarRef, VarRef) => Tree): List[Tree] = {
+      val a :: b :: c :: _ = argRefs: @unchecked
+      defineFunction(name, paramList(a, b, c), body(a, b, c))
+    }
+
+    private def defineFunction4(name: VarField)(body: (VarRef, VarRef, VarRef, VarRef) => Tree): List[Tree] = {
+      val a :: b :: c :: d :: _ = argRefs: @unchecked
+      defineFunction(name, paramList(a, b, c, d), body(a, b, c, d))
+    }
+
+    private def defineFunction5(name: VarField)(body: (VarRef, VarRef, VarRef, VarRef, VarRef) => Tree): List[Tree] = {
+      val a :: b :: c :: d :: e :: _ = argRefs: @unchecked
+      defineFunction(name, paramList(a, b, c, d, e), body(a, b, c, d, e))
+    }
+
+    private def genArrowFunction(args: List[ParamDef], body: Tree): Function =
+      jsGen.genArrowFunction(args, None, body)
+
+    private def genCallPolyfillableBuiltin(builtin: PolyfillableBuiltin,
+        args: Tree*): Tree = {
+      extractWithGlobals(sjsGen.genCallPolyfillableBuiltin(builtin, args: _*))
     }
 
     private def maybeWrapInUBE(behavior: CheckedBehavior, exception: Tree): Tree = {
-      if (behavior == CheckedBehavior.Fatal)
-        genScalaClassNew("sjsr_UndefinedBehaviorError", "init___jl_Throwable", exception)
-      else
+      if (behavior == CheckedBehavior.Fatal) {
+        genScalaClassNew(UndefinedBehaviorErrorClass,
+            ThrowableArgConsructorName, exception)
+      } else {
         exception
-    }
-
-    private def genScalaClassNew(className: String, ctorName: String,
-        args: Tree*): Tree = {
-      Apply(envField("ct", className + "__" + ctorName),
-          New(encodeClassVar(className), Nil) :: args.toList)
+      }
     }
 
     private def genIsScalaJSObject(obj: VarRef): Tree =
@@ -1437,70 +2728,13 @@ private[emitter] object CoreJSLib {
     private def genIsScalaJSObjectOrNull(obj: VarRef): Tree =
       genIsScalaJSObject(obj) || (obj === Null())
 
-    private def envFunctionDef(name: String, args: List[ParamDef],
-        body: Tree): FunctionDef = {
-      FunctionDef(envFieldIdent(name), args, body)
-    }
+    private def condTree(cond: Boolean)(tree: => Tree): Tree =
+      if (cond) tree
+      else Skip()
 
-    private def genClassDef(className: Ident, parent: Option[(Tree, Tree)],
-        members: List[Tree]): Tree = {
-      if (useECMAScript2015) {
-        ClassDef(Some(className), parent.map(_._1), members)
-      } else {
-        val classRef = VarRef(className)
-
-        val ctor = members.collectFirst {
-          case m @ MethodDef(false, Ident("constructor", _), _, _) => m
-        }.getOrElse {
-          MethodDef(false, Ident("constructor"), Nil, Skip())
-        }
-
-        val patchedCtorBody = {
-          def patchSuper(stat: Tree): Tree = stat match {
-            case Apply(Super(), args) =>
-              /* All the super constructor calls we have in the core JS lib are
-               * actually no-op, so we just omit them.
-               */
-              assert(args.isEmpty)
-              Skip()
-            case _ =>
-              stat
-          }
-
-          ctor.body match {
-            case Block(stats) => Block(stats.map(patchSuper(_)))
-            case stat         => patchSuper(stat)
-          }
-        }
-
-        val ctorFun = FunctionDef(className, ctor.args, patchedCtorBody)
-
-        val prototype = classRef.prototype
-
-        val inheritProto = parent.fold[Tree] {
-          Skip()
-        } { parent =>
-          val inheritableCtor = parent._2
-          Block(
-              prototype := New(inheritableCtor, Nil),
-              (prototype DOT "constructor") := classRef
-          )
-        }
-
-        val setMembers = for (member <- members) yield {
-          (member: @unchecked) match {
-            case MethodDef(false, Ident("constructor", _), _, _) =>
-              Skip()
-
-            case MethodDef(static, name, args, body) =>
-              val target = if (static) classRef else prototype
-              genPropSelect(target, name) := Function(arrow = false, args, body)
-          }
-        }
-
-        Block(ctorFun :: inheritProto :: setMembers)
-      }
-    }
+    private def condDefs(cond: Boolean)(trees: => List[Tree]): List[Tree] =
+      if (cond) trees
+      else Nil
 
     private def varRef(name: String): VarRef = VarRef(Ident(name))
 
@@ -1511,7 +2745,7 @@ private[emitter] object CoreJSLib {
       genLet(ref.ident, mutable = true, rhs)
 
     private def paramList(refs: VarRef*): List[ParamDef] =
-      refs.toList.map(ref => ParamDef(ref.ident, rest = false))
+      refs.toList.map(ref => ParamDef(ref.ident))
 
     private def str(s: String): StringLiteral = StringLiteral(s)
 
@@ -1523,5 +2757,12 @@ private[emitter] object CoreJSLib {
     private implicit def int(i: Int): IntLiteral = IntLiteral(i)
 
     private def double(d: Double): DoubleLiteral = DoubleLiteral(d)
+
+    private def bigInt(i: Long): BigIntLiteral = BigIntLiteral(i)
+
+    // cannot extend AnyVal because this is not a static class
+    private implicit class CustomTreeOps(private val self: Tree) {
+      def u: Tree = genSyntheticPropSelect(self, SyntheticProperty.u)
+    }
   }
 }

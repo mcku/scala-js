@@ -96,13 +96,15 @@ private[nio] final class TypedArrayDoubleBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Double], offset: Int, length: Int): Unit =
+      dst: Array[Double], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Double], offset: Int, length: Int): Unit =
+      src: Array[Double], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }
 
 private[nio] object TypedArrayDoubleBuffer {
@@ -128,6 +130,6 @@ private[nio] object TypedArrayDoubleBuffer {
   def fromTypedArrayByteBuffer(byteBuffer: TypedArrayByteBuffer): DoubleBuffer =
     GenTypedArrayBuffer.generic_fromTypedArrayByteBuffer(byteBuffer)
 
-  def wrap(array: Float64Array): DoubleBuffer =
+  def wrapFloat64Array(array: Float64Array): DoubleBuffer =
     new TypedArrayDoubleBuffer(array, 0, array.length, false)
 }

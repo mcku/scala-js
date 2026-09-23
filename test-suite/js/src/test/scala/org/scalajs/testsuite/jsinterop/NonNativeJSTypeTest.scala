@@ -12,6 +12,8 @@
 
 package org.scalajs.testsuite.jsinterop
 
+import scala.collection.mutable
+
 import scala.scalajs.js
 import scala.scalajs.js.annotation._
 
@@ -27,7 +29,7 @@ class NonNativeJSTypeTest {
   import org.scalajs.testsuite.jsinterop.{NonNativeJSTypeTestSeparateRun => SepRun}
   import NonNativeJSTypeTest._
 
-  @Test def minimal_definition(): Unit = {
+  @Test def minimalDefinition(): Unit = {
     val obj = new Minimal
     assertEquals("object", js.typeOf(obj))
     assertEquals(List[String](), js.Object.keys(obj).toList)
@@ -39,7 +41,7 @@ class NonNativeJSTypeTest {
     assertFalse((obj: Any).isInstanceOf[js.Error])
   }
 
-  @Test def minimal_static_object_with_lazy_initialization(): Unit = {
+  @Test def minimalStaticObjectWithLazyInitialization(): Unit = {
     assertEquals(0, staticNonNativeObjectInitCount)
     val obj = StaticNonNativeObject
     assertEquals(1, staticNonNativeObjectInitCount)
@@ -56,7 +58,7 @@ class NonNativeJSTypeTest {
     assertFalse((obj: Any).isInstanceOf[js.Error])
   }
 
-  @Test def simple_method(): Unit = {
+  @Test def simpleMethod(): Unit = {
     val obj = new SimpleMethod
     assertEquals(8, obj.foo(5))
     assertEquals("hello42", obj.bar("hello", 42))
@@ -66,7 +68,7 @@ class NonNativeJSTypeTest {
     assertEquals("hello42", dyn.bar("hello", 42))
   }
 
-  @Test def static_object_with_simple_method(): Unit = {
+  @Test def staticObjectWithSimpleMethod(): Unit = {
     val obj = StaticObjectSimpleMethod
     assertEquals(8, obj.foo(5))
     assertEquals("hello42", obj.bar("hello", 42))
@@ -76,7 +78,7 @@ class NonNativeJSTypeTest {
     assertEquals("hello42", dyn.bar("hello", 42))
   }
 
-  @Test def simple_field(): Unit = {
+  @Test def simpleField(): Unit = {
     val obj = new SimpleField
     assertEquals(List("x", "y"), js.Object.keys(obj).toList)
     assertEquals(5, obj.x)
@@ -98,7 +100,7 @@ class NonNativeJSTypeTest {
     assertEquals(94, dyn.sum())
   }
 
-  @Test def static_object_with_simple_field(): Unit = {
+  @Test def staticObjectWithSimpleField(): Unit = {
     val obj = StaticObjectSimpleField
     assertEquals(List("x", "y"), js.Object.keys(obj).toList)
     assertEquals(5, obj.x)
@@ -120,7 +122,7 @@ class NonNativeJSTypeTest {
     assertEquals(94, dyn.sum())
   }
 
-  @Test def simple_accessors(): Unit = {
+  @Test def simpleAccessors(): Unit = {
     val obj = new SimpleAccessors
     assertEquals(List("x"), js.Object.keys(obj).toList)
     assertEquals(1, obj.x)
@@ -143,7 +145,7 @@ class NonNativeJSTypeTest {
     assertEquals(10, dyn.readPlus1)
   }
 
-  @Test def simple_constructor(): Unit = {
+  @Test def simpleConstructor(): Unit = {
     val obj = new SimpleConstructor(5, 10)
     assertEquals(List("x", "y"), js.Object.keys(obj).toList)
     assertEquals(5, obj.x)
@@ -165,7 +167,7 @@ class NonNativeJSTypeTest {
     assertEquals(94, dyn.sum())
   }
 
-  @Test def simple_constructor_with_automatic_fields(): Unit = {
+  @Test def simpleConstructorWithAutomaticFields(): Unit = {
     val obj = new SimpleConstructorAutoFields(5, 10)
     assertEquals(List("x", "y"), js.Object.keys(obj).toList)
     assertEquals(5, obj.x)
@@ -187,7 +189,7 @@ class NonNativeJSTypeTest {
     assertEquals(94, dyn.sum())
   }
 
-  @Test def simple_constructor_with_param_accessors(): Unit = {
+  @Test def simpleConstructorWithParamAccessors(): Unit = {
     val obj = new SimpleConstructorParamAccessors(5, 10)
     assertNotEquals(Array("x", "y"), js.Object.keys(obj).toArray)
     assertEquals(15, obj.sum())
@@ -196,7 +198,33 @@ class NonNativeJSTypeTest {
     assertEquals(15, dyn.sum())
   }
 
-  @Test def default_values_for_fields(): Unit = {
+  @Test def constructorWithParamNameClashes_Issue3933(): Unit = {
+    val obj = new ConstructorWithParamNameClashes(1, 2, 3, 4, 5, 6)
+    assertEquals(List(1, 2, 3, 4, 5, 6), obj.allArgs)
+  }
+
+  @Test def methodNamedConstructor(): Unit = {
+    val obj1 = new MethodNamedConstructor(5)
+    assertEquals(5, obj1.x)
+    assertEquals(7, obj1.constructor(2))
+    assertNotSame(
+        js.constructorOf[MethodNamedConstructor], obj1.asInstanceOf[js.Dynamic].constructor)
+
+    val obj2 = new SubclassOfMethodNamedConstructor(11, 15)
+    assertEquals(11, obj2.x)
+    assertEquals(15, obj2.z)
+    assertEquals(13, obj2.constructor(2))
+    assertEquals("foo 15", obj2.constructor("foo "))
+
+    // Undesirable behavior, but the same as what would happen if we did it in JavaScript
+    val obj3 = new SubclassOfMethodNamedConstructorNoRedefine(42)
+    assertSame(js.constructorOf[SubclassOfMethodNamedConstructorNoRedefine],
+        obj3.asInstanceOf[js.Dynamic].constructor)
+    if (Platform.useECMAScript2015Semantics)
+      assertThrows(classOf[Exception], obj3.constructor(1))
+  }
+
+  @Test def defaultValuesForFields(): Unit = {
     val obj = new DefaultFieldValues
     assertEquals(0, obj.int)
     assertEquals(false, obj.bool)
@@ -204,14 +232,13 @@ class NonNativeJSTypeTest {
     assertNull(obj.string)
     assertJSUndefined(obj.unit)
 
-    /* Value class fields are initialized to null, instead of a boxed
-     * representation of the zero of their underlying types, as for a
-     * Scala class.
+    /* There is an additional test for value class fields in
+     * NonNativeJSTypeTestScala2.scala, which asserts that they are (wrongly)
+     * instantiated to `null`.
      */
-    assertNull(obj.asInstanceOf[js.Dynamic].valueClass)
   }
 
-  @Test def lazy_vals(): Unit = {
+  @Test def lazyVals(): Unit = {
     val obj1 = new LazyValFields()
     assertEquals(0, obj1.initCount)
     assertEquals(42, obj1.field)
@@ -246,7 +273,7 @@ class NonNativeJSTypeTest {
     assertEquals(1, obj3.initCount)
   }
 
-  @Test def override_lazy_vals(): Unit = {
+  @Test def overrideLazyVals(): Unit = {
     val obj1 = new OverrideLazyValFields()
     assertEquals(0, obj1.initCount)
     assertEquals(53, obj1.field)
@@ -274,11 +301,10 @@ class NonNativeJSTypeTest {
     assertEquals(1, obj2.initCount)
   }
 
-  @Test def nullingOutLazyValField_issue3422(): Unit = {
+  @Test def nullingOutLazyValField_Issue3422(): Unit =
     assertEquals("foo", new NullingOutLazyValFieldBug3422("foo").str)
-  }
 
-  @Test def simple_inherited_from_a_native_class(): Unit = {
+  @Test def simpleInheritedFromNativeClass(): Unit = {
     val obj = new SimpleInheritedFromNative(3, 5)
     assertEquals(3, obj.x)
     assertEquals(5, obj.y)
@@ -287,17 +313,29 @@ class NonNativeJSTypeTest {
     assertTrue(obj.isInstanceOf[NativeParentClass])
   }
 
-  @Test def lambda_inside_a_method_issue_2220(): Unit = {
+  @Test def doubleUnderscoreInMemberNames_Issue3784(): Unit = {
+    class DoubleUnderscoreInMemberNames extends js.Object {
+      val x__y: String = "xy"
+      def foo__bar(x: Int): Int = x + 1
+      def ba__bar: String = "babar"
+    }
+
+    val obj = new DoubleUnderscoreInMemberNames
+    assertEquals("xy", obj.x__y)
+    assertEquals(6, obj.foo__bar(5))
+    assertEquals("babar", obj.ba__bar)
+  }
+
+  @Test def lambdaInsideMethod_Issue2220(): Unit = {
     class LambdaInsideMethod extends js.Object {
-      def foo(): Int = {
+      def foo(): Int =
         List(1, 2, 3).map(_ * 2).sum
-      }
     }
 
     assertEquals(12, new LambdaInsideMethod().foo())
   }
 
-  @Test def nested_inside_a_Scala_class(): Unit = {
+  @Test def nestedInsideScalaClass(): Unit = {
     class OuterScalaClass(val x: Int) {
       class InnerJSClass(val y: Int) extends js.Object {
         def sum(z: Int): Int = x + y + z
@@ -310,7 +348,7 @@ class NonNativeJSTypeTest {
     assertEquals(20, obj.sum(11))
   }
 
-  @Test def nested_inside_a_Scala_js_defined_JS_class(): Unit = {
+  @Test def nestedInsideScalaJSDefinedJSClass(): Unit = {
     class OuterJSClass(val x: Int) extends js.Object {
       class InnerJSClass(val y: Int) extends js.Object {
         def sum(z: Int): Int = x + y + z
@@ -323,7 +361,7 @@ class NonNativeJSTypeTest {
     assertEquals(20, obj.sum(11))
   }
 
-  @Test def Scala_class_nested_inside_a_Scala_js_defined_JS_class(): Unit = {
+  @Test def scalaClassNestedInsideScalaJSDefinedJSClass(): Unit = {
     class OuterJSClass(val x: Int) extends js.Object {
       class InnerScalaClass(val y: Int) {
         def sum(z: Int): Int = x + y + z
@@ -336,7 +374,7 @@ class NonNativeJSTypeTest {
     assertEquals(20, obj.sum(11))
   }
 
-  @Test def Scala_object_nested_inside_a_Scala_js_defined_JS_class(): Unit = {
+  @Test def scalaObjectNestedInsideScalaJSDefinedJSClass(): Unit = {
     class Foo extends js.Object {
       var innerInitCount: Int = _
 
@@ -363,7 +401,7 @@ class NonNativeJSTypeTest {
   }
 
   // #2772
-  @Test def Scala_object_nested_inside_a_Scala_js_defined_JS_class_JSName(): Unit = {
+  @Test def scalaObjectNestedInsideScalaJSDefinedJSClassJSName(): Unit = {
     class Foo extends js.Object {
       var innerInitCount: Int = _
 
@@ -390,7 +428,7 @@ class NonNativeJSTypeTest {
     assertFalse((inner2: AnyRef) eq inner1)
   }
 
-  @Test def anonymous_class_with_captures(): Unit = {
+  @Test def anonymousClassWithCaptures(): Unit = {
     val x = (() => 5)()
     val obj = new js.Object {
       val y = 10
@@ -402,7 +440,7 @@ class NonNativeJSTypeTest {
     assertEquals(26, dyn.sum(11))
   }
 
-  @Test def anonymous_class_has_no_own_prototype(): Unit = {
+  @Test def anonymousClassHasNoOwnPrototype(): Unit = {
     val obj = new js.Object {
       val x = 1
     }
@@ -412,7 +450,7 @@ class NonNativeJSTypeTest {
         js.constructorOf[js.Object].prototype)
   }
 
-  @Test def local_class_has_own_prototype(): Unit = {
+  @Test def localClassHasOwnPrototype(): Unit = {
     class Local extends js.Object {
       val x = 1
     }
@@ -427,7 +465,7 @@ class NonNativeJSTypeTest {
     assertSame(prototype, js.constructorOf[Local].prototype)
   }
 
-  @Test def anonymous_class_non_trivial_supertype(): Unit = {
+  @Test def anonymousClassNonTrivialSupertype(): Unit = {
     val obj = new SimpleConstructor(1, 2) {
       val z = sum()
     }
@@ -435,7 +473,7 @@ class NonNativeJSTypeTest {
     assertEquals(3, obj.asInstanceOf[js.Dynamic].z)
   }
 
-  @Test def anonymous_class_using_own_method_in_ctor(): Unit = {
+  @Test def anonymousClassUsingOwnMethodInCtor(): Unit = {
     val obj = new js.Object {
       val y = inc(0)
       def inc(x: Int) = x + 1
@@ -444,17 +482,21 @@ class NonNativeJSTypeTest {
     assertEquals(1, obj.asInstanceOf[js.Dynamic].y)
   }
 
-  @Test def anonymous_class_uninitialized_fields(): Unit = {
+  @Test def anonymousClassUninitializedFields(): Unit = {
     val obj = new js.Object {
       var x: String = _
       var y: Int = _
+      private var z: Double = _ // #5347
+
+      def getZ(): Double = z
     }
 
     assertNull(obj.asInstanceOf[js.Dynamic].x)
     assertEquals(0, obj.asInstanceOf[js.Dynamic].y)
+    assertEquals(0.0, obj.asInstanceOf[js.Dynamic].getZ())
   }
 
-  @Test def anonymous_class_field_init_order(): Unit = {
+  @Test def anonymousClassFieldInitOrder(): Unit = {
     val obj = new js.Object {
       val x = getY
       val y = "Hello World"
@@ -466,7 +508,7 @@ class NonNativeJSTypeTest {
     assertEquals("Hello World", obj.y)
   }
 
-  @Test def anonymous_class_dependent_fields(): Unit = {
+  @Test def anonymousClassDependentFields(): Unit = {
     val obj = new js.Object {
       val x = 1
       val y = x + 1
@@ -475,7 +517,7 @@ class NonNativeJSTypeTest {
     assertEquals(2, obj.asInstanceOf[js.Dynamic].y)
   }
 
-  @Test def anonymous_class_use_this_in_ctor(): Unit = {
+  @Test def anonymousClassUseThisInCtor(): Unit = {
     var obj0: js.Object = null
     val obj1 = new js.Object {
       obj0 = this
@@ -484,7 +526,7 @@ class NonNativeJSTypeTest {
     assertSame(obj0, obj1)
   }
 
-  @Test def nested_anonymous_classes(): Unit = {
+  @Test def nestedAnonymousClasses(): Unit = {
     val outer = new js.Object {
       private var _x = 1
       def x = _x
@@ -500,7 +542,7 @@ class NonNativeJSTypeTest {
     assertEquals(2, outer.x)
   }
 
-  @Test def nested_anonymous_classes_and_lambdas(): Unit = {
+  @Test def nestedAnonymousClassesAndLambdas(): Unit = {
     def call(f: Int => js.Any) = f(1)
 
     // Also check that f's capture is properly transformed.
@@ -511,7 +553,35 @@ class NonNativeJSTypeTest {
     assertEquals(1, call(x => x))
   }
 
-  @Test def local_object_is_lazy(): Unit = {
+  @Test def anonymousClassesPrivateFieldsAreNotVisible_Issue2748(): Unit = {
+    trait TheOuter extends js.Object {
+      val id: String
+      val paint: js.UndefOr[TheInner] = js.undefined
+    }
+
+    trait TheInner extends js.Object {
+      val options: js.UndefOr[String] = js.undefined
+    }
+
+    def someValue = "some-value"
+
+    val pcFn = someValue
+
+    val r0 = new TheOuter {
+      override val id: String = "some-" + pcFn
+      override val paint: js.UndefOr[TheInner] = {
+        new TheInner {
+          override val options: js.UndefOr[String] = "{" + pcFn + "}"
+        }
+      }
+    }
+
+    assertEquals(
+        """{"id":"some-some-value","paint":{"options":"{some-value}"}}""",
+        js.JSON.stringify(r0))
+  }
+
+  @Test def localObjectIsLazy(): Unit = {
     var initCount: Int = 0
 
     object Obj extends js.Object {
@@ -527,7 +597,7 @@ class NonNativeJSTypeTest {
     assertEquals(1, initCount)
   }
 
-  @Test def local_object_with_captures(): Unit = {
+  @Test def localObjectWithCaptures(): Unit = {
     val x = (() => 5)()
 
     object Obj extends js.Object {
@@ -543,7 +613,7 @@ class NonNativeJSTypeTest {
     assertEquals(26, dyn.sum(11))
   }
 
-  @Test def object_in_Scala_js_defined_JS_class(): Unit = {
+  @Test def objectInScalaJSDefinedJSClass(): Unit = {
     class Foo extends js.Object {
       var innerInitCount: Int = _
 
@@ -569,31 +639,31 @@ class NonNativeJSTypeTest {
     assertNotSame(inner1, inner2)
   }
 
-  @Test def local_defs_must_not_be_exposed(): Unit = {
-    class LocalDefsMustNotBeExposed extends js.Object {
+  @Test def localDefsAreNotExposed(): Unit = {
+    class LocalDefsAreNotExposed extends js.Object {
       def foo(): String = {
         def bar(): String = "hello"
         bar()
       }
     }
 
-    val obj = new LocalDefsMustNotBeExposed
+    val obj = new LocalDefsAreNotExposed
     assertFalse(js.Object.properties(obj).exists(_.contains("bar")))
   }
 
-  @Test def local_objects_must_not_be_exposed(): Unit = {
-    class LocalObjectsMustNotBeExposed extends js.Object {
+  @Test def localObjectsAreNotExposed(): Unit = {
+    class LocalObjectsAreNotExposed extends js.Object {
       def foo(): String = {
         object Bar
         Bar.toString()
       }
     }
 
-    val obj = new LocalObjectsMustNotBeExposed
+    val obj = new LocalObjectsAreNotExposed
     assertFalse(js.Object.properties(obj).exists(_.contains("Bar")))
   }
 
-  @Test def local_defs_with_captures_issue_1975(): Unit = {
+  @Test def localDefsWithCaptures_Issue1975(): Unit = {
     class LocalDefsWithCaptures extends js.Object {
       def foo(suffix: String): String = {
         def bar(): String = "hello " + suffix
@@ -605,12 +675,12 @@ class NonNativeJSTypeTest {
     assertEquals("hello world", obj.foo("world"))
   }
 
-  @Test def methods_with_explicit_name(): Unit = {
+  @Test def methodsWithExplicitName(): Unit = {
     class MethodsWithExplicitName extends js.Object {
       @JSName("theAnswer")
       def bar(): Int = 42
       @JSName("doubleTheParam")
-      def double(x: Int): Int = x*2
+      def double(x: Int): Int = x * 2
     }
 
     val foo = new MethodsWithExplicitName
@@ -624,7 +694,7 @@ class NonNativeJSTypeTest {
     assertEquals(6, dyn.doubleTheParam(3))
   }
 
-  @Test def methods_with_constant_folded_name(): Unit = {
+  @Test def methodsWithConstantFoldedName(): Unit = {
     class MethodsWithConstantFoldedName extends js.Object {
       @JSName(JSNameHolder.MethodName)
       def bar(): Int = 42
@@ -638,7 +708,7 @@ class NonNativeJSTypeTest {
     assertEquals(42, dyn.myMethod())
   }
 
-  @Test def protected_methods(): Unit = {
+  @Test def protectedMethods(): Unit = {
     class ProtectedMethods extends js.Object {
       protected def bar(): Int = 42
 
@@ -655,7 +725,7 @@ class NonNativeJSTypeTest {
     assertEquals(100, dyn.foo())
   }
 
-  @Test def readonly_properties(): Unit = {
+  @Test def readonlyProperties(): Unit = {
     // Named classes
     class Foo extends js.Object {
       def bar: Int = 1
@@ -666,6 +736,9 @@ class NonNativeJSTypeTest {
       x.bar = 2
     })
 
+    // Read the property to trick GCC into not discarding the writes.
+    assertEquals(1, x.bar)
+
     // Anonymous classes
     val y = new js.Object {
       def bar: Int = 1
@@ -674,9 +747,12 @@ class NonNativeJSTypeTest {
     assertThrows(classOf[js.JavaScriptException], {
       y.bar = 2
     })
+
+    // Read the property to trick GCC into not discarding the writes.
+    assertEquals(1, y.bar)
   }
 
-  @Test def properties_are_not_enumerable(): Unit = {
+  @Test def propertiesAreNotEnumerable(): Unit = {
     // Named classes
     class Foo extends js.Object {
       def myProp: Int = 1
@@ -693,7 +769,7 @@ class NonNativeJSTypeTest {
     assertFalse(js.Object.properties(y).contains("myProp"))
   }
 
-  @Test def properties_are_configurable(): Unit = {
+  @Test def propertiesAreConfigurable(): Unit = {
     // Named classes
     class Foo extends js.Object {
       def myProp: Int = 1
@@ -718,7 +794,7 @@ class NonNativeJSTypeTest {
     assertFalse(y.hasOwnProperty("myProp"))
   }
 
-  @Test def properties_with_explicit_name(): Unit = {
+  @Test def propertiesWithExplicitName(): Unit = {
     class PropertiesWithExplicitName extends js.Object {
       private[this] var myY: String = "hello"
       @JSName("answer")
@@ -726,7 +802,7 @@ class NonNativeJSTypeTest {
       @JSName("x")
       var xScala: Int = 3
       @JSName("doubleX")
-      def doubleXScala: Int = xScala*2
+      def doubleXScala: Int = xScala * 2
       @JSName("y")
       def yGetter: String = myY + " get"
       @JSName("y")
@@ -758,7 +834,7 @@ class NonNativeJSTypeTest {
     assertEquals("world set get", dyn.y)
   }
 
-  @Test def protected_properties(): Unit = {
+  @Test def protectedProperties(): Unit = {
     class ProtectedProperties extends js.Object {
       protected val x: Int = 42
       protected[testsuite] val y: Int = 43
@@ -772,10 +848,10 @@ class NonNativeJSTypeTest {
     assertEquals(43, dyn.y)
   }
 
-  @Test def simple_overloaded_methods(): Unit = {
+  @Test def simpleOverloadedMethods(): Unit = {
     class SimpleOverloadedMethods extends js.Object {
       def foo(): Int = 42
-      def foo(x: Int): Int = x*2
+      def foo(x: Int): Int = x * 2
     }
 
     val foo = new SimpleOverloadedMethods
@@ -788,7 +864,7 @@ class NonNativeJSTypeTest {
     assertEquals(6, dyn.foo(3))
   }
 
-  @Test def simple_overloaded_methods_anon_js_class_issue_3054(): Unit = {
+  @Test def simpleOverloadedMethodsAnonJSClass_Issue3054(): Unit = {
     trait SimpleOverloadedMethodsAnonJSClass extends js.Object {
       def foo(): Int
       def foo(x: Int): Int
@@ -807,12 +883,12 @@ class NonNativeJSTypeTest {
     assertEquals(6, dyn.foo(3))
   }
 
-  @Test def renamed_overloaded_methods(): Unit = {
+  @Test def renamedOverloadedMethods(): Unit = {
     class RenamedOverloadedMethods extends js.Object {
       @JSName("foobar")
       def foo(): Int = 42
       @JSName("foobar")
-      def bar(x: Int): Int = x*2
+      def bar(x: Int): Int = x * 2
     }
 
     val foo = new RenamedOverloadedMethods
@@ -825,7 +901,7 @@ class NonNativeJSTypeTest {
     assertEquals(6, dyn.foobar(3))
   }
 
-  @Test def overloaded_methods_with_varargs(): Unit = {
+  @Test def overloadedMethodsWithVarargs(): Unit = {
     class OverloadedMethodsWithVarargs extends js.Object {
       def foo(x: Int): Int = x * 2
       def foo(strs: String*): Int = strs.foldLeft(0)(_ + _.length)
@@ -845,7 +921,7 @@ class NonNativeJSTypeTest {
     assertEquals(8, dyn.foo("bar", "babar"))
   }
 
-  @Test def overloaded_methods_with_varargs_anon_js_class_issue_3054(): Unit = {
+  @Test def overloadedMethodsWithVarargsAnonJSClass_Issue3054(): Unit = {
     trait OverloadedMethodsWithVarargsAnonJSClass extends js.Object {
       def foo(x: Int): Int
       def foo(strs: String*): Int
@@ -868,17 +944,17 @@ class NonNativeJSTypeTest {
     assertEquals(8, dyn.foo("bar", "babar"))
   }
 
-  @Test def overloaded_constructors_num_parameters_resolution(): Unit = {
+  @Test def overloadedConstructorsNumParametersResolution(): Unit = {
     assertEquals(1, new OverloadedConstructorParamNumber(1).foo)
     assertEquals(3, new OverloadedConstructorParamNumber(1, 2).foo)
   }
 
-  @Test def overloaded_constructors_parameter_type_resolution(): Unit = {
+  @Test def overloadedConstructorsParameterTypeResolution(): Unit = {
     assertEquals(1, new OverloadedConstructorParamType(1).foo)
     assertEquals(3, new OverloadedConstructorParamType("abc").foo)
   }
 
-  @Test def overloaded_constructors_with_captured_parameters(): Unit = {
+  @Test def overloadedConstructorsWithCapturedParameters(): Unit = {
     class OverloadedConstructorWithOuterContextOnly(val x: Int) extends js.Object {
       def this(y: String) = this(y.length)
     }
@@ -895,12 +971,11 @@ class NonNativeJSTypeTest {
     assertEquals(5, new OverloadedConstructorWithValCapture("abc").x)
   }
 
-  @Test def overloaded_constructors_with_super_class(): Unit = {
+  @Test def overloadedConstructorsWithSuperClass(): Unit = {
     class OverloadedConstructorSup(val x: Int) extends js.Object {
       def this(y: String) = this(y.length)
     }
-    class OverloadedConstructorSub(x: Int)
-        extends OverloadedConstructorSup(3 * x) {
+    class OverloadedConstructorSub(x: Int) extends OverloadedConstructorSup(3 * x) {
       def this(y: String) = this(2 * y.length)
     }
     assertEquals(1, new OverloadedConstructorSup(1).x)
@@ -910,9 +985,8 @@ class NonNativeJSTypeTest {
     assertEquals(12, new OverloadedConstructorSub("ab").x)
   }
 
-  @Test def overloaded_constructors_with_repeated_parameters(): Unit = {
-    class OverloadedConstructorWithRepeatedParameters(xs: Int*)
-        extends js.Object {
+  @Test def overloadedConstructorsWithRepeatedParameters(): Unit = {
+    class OverloadedConstructorWithRepeatedParameters(xs: Int*) extends js.Object {
       def this(y: String, ys: String*) = this(y.length +: ys.map(_.length): _*)
       def sum: Int = xs.sum
     }
@@ -927,7 +1001,7 @@ class NonNativeJSTypeTest {
     assertEquals(3, new OverloadedConstructorWithRepeatedParameters("a", "b", "c").sum)
   }
 
-  @Test def overloaded_constructors_complex_resolution(): Unit = {
+  @Test def overloadedConstructorsComplexResolution(): Unit = {
     val bazPrim = new OverloadedConstructorComplex(1, 2)
     assertEquals(1, bazPrim.foo)
     assertEquals(2, bazPrim.bar)
@@ -973,7 +1047,26 @@ class NonNativeJSTypeTest {
     assertEquals(7, baz10.bar)
   }
 
-  @Test def polytype_nullary_method_issue_2445(): Unit = {
+  @Test def secondaryConstructorUseDefaultParam(): Unit = {
+    val a = new SecondaryConstructorUseDefaultParam(1)
+    assertEquals(a.y, "1y")
+
+    val b = new SecondaryConstructorUseDefaultParam()()
+    assertEquals(b.y, "xy")
+  }
+
+  @Test def constructorsWithPatternMatch_Issue4581(): Unit = {
+    val a = new PrimaryConstructorWithPatternMatch_Issue4581(5 :: Nil)
+    assertEquals(5, a.head)
+
+    val b = new SecondaryConstructorWithPatternMatch_Issue4581()
+    assertEquals(0, b.head)
+
+    val c = new SecondaryConstructorWithPatternMatch_Issue4581(6 :: Nil)
+    assertEquals(6, c.head)
+  }
+
+  @Test def polytypeNullaryMethod_Issue2445(): Unit = {
     class PolyTypeNullaryMethod extends js.Object {
       def emptyArray[T]: js.Array[T] = js.Array()
     }
@@ -989,17 +1082,23 @@ class NonNativeJSTypeTest {
     assertEquals(0, b.length)
   }
 
-  @Test def default_parameters(): Unit = {
+  @Test def defaultParameters(): Unit = {
     class DefaultParameters extends js.Object {
+      var sideEffectCounter: Int = 0
+
       def bar(x: Int, y: Int = 1): Int = x + y
       def dependent(x: Int)(y: Int = x + 1): Int = x + y
+      def unitParam(x: Unit, y: Unit = { sideEffectCounter += 1; () }): Int = sideEffectCounter
 
       def foobar(x: Int): Int = bar(x)
     }
 
     object DefaultParametersMod extends js.Object {
+      var sideEffectCounter: Int = 0
+
       def bar(x: Int, y: Int = 1): Int = x + y
       def dependent(x: Int)(y: Int = x + 1): Int = x + y
+      def unitParam(x: Unit, y: Unit = { sideEffectCounter += 1; () }): Int = sideEffectCounter
 
       def foobar(x: Int): Int = bar(x)
     }
@@ -1011,11 +1110,25 @@ class NonNativeJSTypeTest {
     assertEquals(9, foo.dependent(4)(5))
     assertEquals(17, foo.dependent(8)())
 
+    // #4684 Default params with Unit type
+    assertEquals(0, foo.sideEffectCounter)
+    assertEquals(1, foo.unitParam(()))
+    assertEquals(1, foo.sideEffectCounter)
+    assertEquals(2, foo.unitParam((), ())) // an actual undefined param counts as not provided
+    assertEquals(2, foo.sideEffectCounter)
+
     assertEquals(9, DefaultParametersMod.bar(4, 5))
     assertEquals(5, DefaultParametersMod.bar(4))
     assertEquals(4, DefaultParametersMod.foobar(3))
     assertEquals(9, DefaultParametersMod.dependent(4)(5))
     assertEquals(17, DefaultParametersMod.dependent(8)())
+
+    // #4684 Default params with Unit type
+    assertEquals(0, DefaultParametersMod.sideEffectCounter)
+    assertEquals(1, DefaultParametersMod.unitParam(()))
+    assertEquals(1, DefaultParametersMod.sideEffectCounter)
+    assertEquals(2, DefaultParametersMod.unitParam((), ())) // an actual undefined param counts as not provided
+    assertEquals(2, DefaultParametersMod.sideEffectCounter)
 
     def testDyn(dyn: js.Dynamic): Unit = {
       assertEquals(9, dyn.bar(4, 5))
@@ -1028,7 +1141,7 @@ class NonNativeJSTypeTest {
     testDyn(DefaultParametersMod.asInstanceOf[js.Dynamic])
   }
 
-  @Test def override_default_parameters(): Unit = {
+  @Test def overrideDefaultParameters(): Unit = {
     class OverrideDefaultParametersParent extends js.Object {
       def bar(x: Int, y: Int = 1): Int = x + y
       def dependent(x: Int)(y: Int = x + 1): Int = x + y
@@ -1036,8 +1149,7 @@ class NonNativeJSTypeTest {
       def foobar(x: Int): Int = bar(x)
     }
 
-    class OverrideDefaultParametersChild
-        extends OverrideDefaultParametersParent {
+    class OverrideDefaultParametersChild extends OverrideDefaultParametersParent {
       override def bar(x: Int, y: Int = 10): Int = super.bar(x, y)
       override def dependent(x: Int)(y: Int = x * 2): Int = x + y
     }
@@ -1064,7 +1176,7 @@ class NonNativeJSTypeTest {
     assertEquals(24, dyn.dependent(8))
   }
 
-  @Test def override_method_with_default_parameters_without_new_default(): Unit = {
+  @Test def overrideMethodWithDefaultParametersWithoutNewDefault(): Unit = {
     class OverrideDefaultParametersWithoutDefaultParent extends js.Object {
       def bar(x: Int, y: Int = 1): Int = x + y
       def dependent(x: Int)(y: Int = x + 1): Int = x + y
@@ -1100,67 +1212,67 @@ class NonNativeJSTypeTest {
     assertEquals(-1, dyn.dependent(8))
   }
 
-  @Test def `constructors_with_default_parameters_(NonNative/-)`(): Unit = {
+  @Test def constructorsWithDefaultParametersNonNativeNone(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamJSNonNativeNone().foo)
     assertEquals(1, new ConstructorDefaultParamJSNonNativeNone(1).foo)
     assertEquals(5, new ConstructorDefaultParamJSNonNativeNone(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(NonNative/NonNative)`(): Unit = {
+  @Test def constructorsWithDefaultParametersNonNativeNonNative(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamJSNonNativeJSNonNative().foo)
     assertEquals(1, new ConstructorDefaultParamJSNonNativeJSNonNative(1).foo)
     assertEquals(5, new ConstructorDefaultParamJSNonNativeJSNonNative(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(NonNative/Scala)`(): Unit = {
+  @Test def constructorsWithDefaultParametersNonNativeScala(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamJSNonNativeScala().foo)
     assertEquals(1, new ConstructorDefaultParamJSNonNativeScala(1).foo)
     assertEquals(5, new ConstructorDefaultParamJSNonNativeScala(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(Scala/NonNative)`(): Unit = {
+  @Test def constructorsWithDefaultParametersScalaNonNative(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamScalaJSNonNative().foo)
     assertEquals(1, new ConstructorDefaultParamScalaJSNonNative(1).foo)
     assertEquals(5, new ConstructorDefaultParamScalaJSNonNative(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(Native/-)`(): Unit = {
+  @Test def constructorsWithDefaultParametersNativeNone(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamJSNativeNone().foo)
     assertEquals(1, new ConstructorDefaultParamJSNativeNone(1).foo)
     assertEquals(5, new ConstructorDefaultParamJSNativeNone(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(Native/Scala)`(): Unit = {
+  @Test def constructorsWithDefaultParametersNativeScala(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamJSNativeScala().foo)
     assertEquals(1, new ConstructorDefaultParamJSNativeScala(1).foo)
     assertEquals(5, new ConstructorDefaultParamJSNativeScala(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(Native/NonNative)`(): Unit = {
+  @Test def constructorsWithDefaultParametersNativeNonNative(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamJSNativeJSNonNative().foo)
     assertEquals(1, new ConstructorDefaultParamJSNativeJSNonNative(1).foo)
     assertEquals(5, new ConstructorDefaultParamJSNativeJSNonNative(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(Native/Native)`(): Unit = {
+  @Test def constructorsWithDefaultParametersNativeNative(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamJSNativeJSNative().foo)
     assertEquals(1, new ConstructorDefaultParamJSNativeJSNative(1).foo)
     assertEquals(5, new ConstructorDefaultParamJSNativeJSNative(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(Scala/Scala)`(): Unit = {
+  @Test def constructorsWithDefaultParametersScalaScala(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamScalaScala().foo)
     assertEquals(1, new ConstructorDefaultParamScalaScala(1).foo)
     assertEquals(5, new ConstructorDefaultParamScalaScala(5).foo)
   }
 
-  @Test def `constructors_with_default_parameters_(Scala/-)`(): Unit = {
+  @Test def constructorsWithDefaultParametersScalaNone(): Unit = {
     assertEquals(-1, new ConstructorDefaultParamScalaNone().foo)
     assertEquals(1, new ConstructorDefaultParamScalaNone(1).foo)
     assertEquals(5, new ConstructorDefaultParamScalaNone(5).foo)
   }
 
-  @Test def constructors_with_default_parameters_in_multi_param_lists(): Unit = {
+  @Test def constructorsWithDefaultParametersInMultiParamLists(): Unit = {
     val foo1 = new ConstructorDefaultParamMultiParamList(5)("foobar")
     assertEquals(5, foo1.default)
     assertEquals("foobar", foo1.title)
@@ -1172,7 +1284,7 @@ class NonNativeJSTypeTest {
     assertEquals("desc", foo2.description)
   }
 
-  @Test def constructors_with_default_parameters_in_multi_param_lists_and_overloading(): Unit = {
+  @Test def constructorsWithDefaultParametersInMultiParamListsAndOverloading(): Unit = {
     val foo1 = new ConstructorDefaultParamMultiParamListWithOverloading(5)(
         "foobar")
     assertEquals(5, foo1.default)
@@ -1196,7 +1308,26 @@ class NonNativeJSTypeTest {
     assertEquals(js.undefined, foo4.description)
   }
 
-  @Test def `call_super_constructor_with_:__*`(): Unit = {
+  @Test def callSuperConstructorWithDefaultParams_Issue4929(): Unit = {
+    import ConstructorSuperCallWithDefaultParams._
+
+    sideEffects.clear()
+
+    val child = new Child(4, "hello", 23)
+    assertEquals(4, child.foo)
+    assertEquals(23, child.bar)
+
+    assertEquals(
+      List(
+        "4",
+        "Parent constructor; param1, 27, param1-27",
+        "Child constructor; 4, hello, 23"
+      ),
+      sideEffects.toList
+    )
+  }
+
+  @Test def callSuperConstructorWithColonAsterisk(): Unit = {
     class CallSuperCtorWithSpread(x: Int, y: Int, z: Int)
         extends NativeParentClassWithVarargs(x, Seq(y, z): _*)
 
@@ -1220,7 +1351,7 @@ class NonNativeJSTypeTest {
     assertJSArrayEquals(js.Array(8, 23), args)
   }
 
-  @Test def override_native_method(): Unit = {
+  @Test def overrideNativeMethod(): Unit = {
     class OverrideNativeMethod extends NativeParentClass(3) {
       override def foo(s: String): String = s + s + x
     }
@@ -1238,7 +1369,7 @@ class NonNativeJSTypeTest {
     assertEquals("hellohello3", dyn.foo("hello"))
   }
 
-  @Test def override_non_native_method(): Unit = {
+  @Test def overrideNonNativeMethod(): Unit = {
     class OverrideNonNativeMethod extends NonNativeParentClass(3) {
       override def foo(s: String): String = s + s + x
     }
@@ -1256,7 +1387,7 @@ class NonNativeJSTypeTest {
     assertEquals("hellohello3", dyn.foo("hello"))
   }
 
-  @Test def override_non_native_method_with_separate_compilation(): Unit = {
+  @Test def overrideNonNativeMethodWithSeparateCompilation(): Unit = {
     val foo = new SepRun.SimpleChildClass
     assertEquals(6, foo.foo(3))
 
@@ -1267,7 +1398,7 @@ class NonNativeJSTypeTest {
     assertEquals(6, foo.foo(3))
   }
 
-  @Test def override_native_method_and_call_super(): Unit = {
+  @Test def overrideNativeMethodAndCallSuper(): Unit = {
     class OverrideNativeMethodSuperCall extends NativeParentClass(3) {
       override def foo(s: String): String = super.foo("bar") + s
     }
@@ -1285,7 +1416,7 @@ class NonNativeJSTypeTest {
     assertEquals("bar3hello", dyn.foo("hello"))
   }
 
-  @Test def override_non_native_method_and_call_super(): Unit = {
+  @Test def overrideNonNativeMethodAndCallSuper(): Unit = {
     class OverrideNonNativeMethodSuperCall extends NonNativeParentClass(3) {
       override def foo(s: String): String = super.foo("bar") + s
     }
@@ -1303,7 +1434,31 @@ class NonNativeJSTypeTest {
     assertEquals("bar3hello", dyn.foo("hello"))
   }
 
-  @Test def super_method_call_in_anon_JS_class_issue_3055(): Unit = {
+  @Test def overloadSuperMethod_Issue4452(): Unit = {
+    class Base extends js.Object {
+      def f(x: Int, y: Int*): String = "Base " + y.length
+      def g(x: Int, y: String): Unit = ()
+    }
+
+    class Sub extends Base {
+      def f(x: String, y: Int*): String = "Sub " + y.length
+      def g(x: Int): Unit = ()
+    }
+
+    val base = new Base
+    val sub = new Sub
+
+    assertEquals("Base 3", base.f(0, 1, 2, 3))
+    assertEquals("Base 3", sub.f(0, 1, 2, 3))
+    assertEquals("Sub 3", sub.f("0", 1, 2, 3))
+
+    // Just check they don't throw.
+    base.g(1, "0")
+    sub.g(1, "0")
+    sub.g(1)
+  }
+
+  @Test def superMethodCallInAnonJSClass_Issue3055(): Unit = {
     class Foo extends js.Object {
       def bar(msg: String): String = "super: " + msg
     }
@@ -1315,7 +1470,7 @@ class NonNativeJSTypeTest {
     assertEquals("super: foo: foobar", foo.bar("foobar"))
   }
 
-  @Test def override_native_val(): Unit = {
+  @Test def overrideNativeVal(): Unit = {
     class OverrideNativeVal extends NativeParentClass(3) {
       override val x: Int = 42
     }
@@ -1336,7 +1491,7 @@ class NonNativeJSTypeTest {
     assertEquals("hello42", dyn.foo("hello"))
   }
 
-  @Test def override_non_native_val(): Unit = {
+  @Test def overrideNonNativeVal(): Unit = {
     class OverrideNonNativeVal extends NonNativeParentClass(3) {
       override val x: Int = 42
     }
@@ -1357,7 +1512,7 @@ class NonNativeJSTypeTest {
     assertEquals("hello42", dyn.foo("hello"))
   }
 
-  @Test def override_native_getter(): Unit = {
+  @Test def overrideNativeGetter(): Unit = {
     class OverrideNativeGetter extends NativeParentClass(3) {
       override def bar: Int = x * 3
     }
@@ -1375,7 +1530,7 @@ class NonNativeJSTypeTest {
     assertEquals(9, dyn.bar)
   }
 
-  @Test def override_non_native_getter(): Unit = {
+  @Test def overrideNonNativeGetter(): Unit = {
     class OverrideNonNativeGetter extends NonNativeParentClass(3) {
       override def bar: Int = x * 3
     }
@@ -1393,7 +1548,7 @@ class NonNativeJSTypeTest {
     assertEquals(9, dyn.bar)
   }
 
-  @Test def override_native_getter_with_val(): Unit = {
+  @Test def overrideNativeGetterWithVal(): Unit = {
     class OverrideNativeGetterWithVal extends NativeParentClass(3) {
       override val bar: Int = 1
     }
@@ -1411,7 +1566,7 @@ class NonNativeJSTypeTest {
     assertEquals(1, dyn.bar)
   }
 
-  @Test def override_non_native_getter_with_val(): Unit = {
+  @Test def overrideNonNativeGetterWithVal(): Unit = {
     class OverrideNonNativeGetterWithVal extends NonNativeParentClass(3) {
       override val bar: Int = 1
     }
@@ -1429,7 +1584,7 @@ class NonNativeJSTypeTest {
     assertEquals(1, dyn.bar)
   }
 
-  @Test def override_getter_with_super(): Unit = {
+  @Test def overrideGetterWithSuper(): Unit = {
     class OverrideGetterSuperParent extends js.Object {
       def bar: Int = 43
     }
@@ -1447,7 +1602,7 @@ class NonNativeJSTypeTest {
     assertEquals(129, dyn.bar)
   }
 
-  @Test def override_setter_with_super(): Unit = {
+  @Test def overrideSetterWithSuper(): Unit = {
     class OverrideSetterSuperParent extends js.Object {
       var x: Int = 43
       def bar_=(v: Int): Unit = x = v
@@ -1469,7 +1624,7 @@ class NonNativeJSTypeTest {
     assertEquals(18, dyn.x)
   }
 
-  @Test def super_property_get_set_in_anon_JS_class_issue_3055(): Unit = {
+  @Test def superPropertyGetSetInAnonJSClass_Issue3055(): Unit = {
     class Foo extends js.Object {
       var x: Int = 1
       var lastSetValue: Int = 0
@@ -1493,7 +1648,7 @@ class NonNativeJSTypeTest {
     assertEquals(18, foo.bar)
   }
 
-  @Test def add_overload_in_subclass(): Unit = {
+  @Test def addOverloadInSubclass(): Unit = {
     class AddOverloadInSubclassParent extends js.Object {
       def bar(): Int = 53
     }
@@ -1510,7 +1665,7 @@ class NonNativeJSTypeTest {
     assertEquals(7, dyn.bar(5))
   }
 
-  @Test def add_setter_in_subclass(): Unit = {
+  @Test def addSetterInSubclass(): Unit = {
     class AddSetterInSubclassParent extends js.Object {
       var x: Int = 43
       def bar: Int = x
@@ -1530,7 +1685,7 @@ class NonNativeJSTypeTest {
     assertEquals(6, dyn.bar)
   }
 
-  @Test def add_getter_in_subclass(): Unit = {
+  @Test def addGetterInSubclass(): Unit = {
     class AddGetterInSubclassParent extends js.Object {
       var x: Int = 43
       def bar_=(v: Int): Unit = x = v
@@ -1550,7 +1705,7 @@ class NonNativeJSTypeTest {
     assertEquals(6, dyn.bar)
   }
 
-  @Test def overload_native_method(): Unit = {
+  @Test def overloadNativeMethod(): Unit = {
     class OverloadNativeMethod extends NativeParentClass(3) {
       def foo(s: String, y: Int): String = foo(s) + " " + y
     }
@@ -1567,7 +1722,7 @@ class NonNativeJSTypeTest {
     assertEquals("hello3 4", dyn.foo("hello", 4))
   }
 
-  @Test def overload_non_native_method(): Unit = {
+  @Test def overloadNonNativeMethod(): Unit = {
     class OverloadNonNativeMethod extends NonNativeParentClass(3) {
       def foo(s: String, y: Int): String = foo(s) + " " + y
     }
@@ -1584,7 +1739,7 @@ class NonNativeJSTypeTest {
     assertEquals("hello3 4", dyn.foo("hello", 4))
   }
 
-  @Test def overload_with_default_parameter(): Unit = {
+  @Test def overloadWithDefaultParameter(): Unit = {
     class OverloadDefaultParameter extends js.Object {
       def foo(x: Int): Int = x
       def foo(x: String = ""): String = x
@@ -1596,7 +1751,7 @@ class NonNativeJSTypeTest {
     assertEquals("hello", foo.foo("hello"))
   }
 
-  @Test def implement_a_simple_trait(): Unit = {
+  @Test def implementSimpleTrait(): Unit = {
     class ImplementSimpleTrait extends js.Object with SimpleTrait {
       def foo(x: Int): Int = x + 1
     }
@@ -1608,7 +1763,7 @@ class NonNativeJSTypeTest {
     assertEquals(6, fooTrait.foo(5))
   }
 
-  @Test def implement_a_simple_trait_under_separate_compilation(): Unit = {
+  @Test def implementSimpleTraitUnderSeparateCompilation(): Unit = {
     class ImplementSimpleTraitSepRun extends js.Object with SepRun.SimpleTrait {
       def foo(x: Int): Int = x + 1
     }
@@ -1620,7 +1775,7 @@ class NonNativeJSTypeTest {
     assertEquals(6, fooTrait.foo(5))
   }
 
-  @Test def implement_a_trait_with_a_val(): Unit = {
+  @Test def implementTraitWithVal(): Unit = {
     trait TraitWithVal extends js.Object {
       val x: Int
     }
@@ -1636,7 +1791,7 @@ class NonNativeJSTypeTest {
     assertEquals(3, fooTrait.x)
   }
 
-  @Test def implement_a_trait_with_a_var(): Unit = {
+  @Test def implementTraitWithVar(): Unit = {
     trait TraitWithVar extends js.Object {
       var x: Int
     }
@@ -1657,13 +1812,12 @@ class NonNativeJSTypeTest {
     assertEquals(19, foo.x)
   }
 
-  @Test def implement_a_trait_extending_a_native_JS_class(): Unit = {
+  @Test def implementTraitExtendingNativeJSClass(): Unit = {
     trait TraitExtendsJSClass extends NativeParentClass {
       def foobar(x: Int): Int
     }
 
-    class ImplExtendsJSClassAndTrait
-        extends NativeParentClass(5) with TraitExtendsJSClass {
+    class ImplExtendsJSClassAndTrait extends NativeParentClass(5) with TraitExtendsJSClass {
       def foobar(x: Int): Int = x * 3
     }
 
@@ -1671,9 +1825,8 @@ class NonNativeJSTypeTest {
     assertEquals(18, foo.foobar(6))
   }
 
-  @Test def implement_abstract_members_coming_from_a_native_JS_class(): Unit = {
-    class ImplDeferredMembersFromJSParent
-        extends NativeParentClassWithDeferred {
+  @Test def implementAbstractMembersComingFromNativeJSClass(): Unit = {
+    class ImplDeferredMembersFromJSParent extends NativeParentClassWithDeferred {
       val x: Int = 43
 
       def bar(y: Int): Int = y * 2
@@ -1697,7 +1850,7 @@ class NonNativeJSTypeTest {
     assertEquals(FooResult, dyn.foo(12))
   }
 
-  @Test def override_a_method_with_default_values_from_a_native_JS_class(): Unit = {
+  @Test def overrideMethodWithDefaultValuesFromNativeJSClass(): Unit = {
     class OverrideDefault extends NativeParentClass(7) {
       override def methodWithDefault(x: Int = 9): Int = x * 2
     }
@@ -1712,7 +1865,7 @@ class NonNativeJSTypeTest {
   }
 
   // #2603
-  @Test def default_values_in_non_exposed_methods(): Unit = {
+  @Test def defaultValuesInNonExposedMethods(): Unit = {
     class DefaultParameterss(val default: Int) extends js.Object {
       /* We don't use a constant default value to make sure it actually comes
        * from the default parameter accessors.
@@ -1729,6 +1882,36 @@ class NonNativeJSTypeTest {
     val x = new DefaultParameterss(5)
     assertEquals(5, x.callPrivate())
     assertEquals(5, x.callNested())
+  }
+
+  // #3939
+  @Test def javaLangObjectMethodNames(): Unit = {
+    class JavaLangObjectMethods extends js.Object {
+      @JSName("clone")
+      def myClone(): String = "myClone"
+
+      @JSName("equals")
+      def myEquals(): String = "myEquals"
+
+      @JSName("finalize")
+      def myFinalize(): String = "myFinalize"
+
+      @JSName("hashCode")
+      def myHashCode(): String = "myHashCode"
+
+      @JSName("notify")
+      def myNotify(): String = "myNotify"
+
+      @JSName("notifyAll")
+      def myNotifyAll(): String = "myNotifyAll"
+
+      @JSName("wait")
+      def myWait(): String = "myWait"
+    }
+
+    val x = (new JavaLangObjectMethods).asInstanceOf[js.Dynamic]
+
+    assertEquals("myClone", x.applyDynamic("clone")())
   }
 }
 
@@ -1769,7 +1952,8 @@ object NonNativeJSTypeTest {
   @JSGlobal("NonNativeJSTypeTestNativeParentClassWithVarargs")
   @js.native
   class NativeParentClassWithVarargs(
-      _x: Int, _args: Int*) extends js.Object {
+      _x: Int, _args: Int*)
+      extends js.Object {
     val x: Int = js.native
     val args: js.Array[Int] = js.native
   }
@@ -1843,16 +2027,19 @@ object NonNativeJSTypeTest {
   @js.native
   @JSGlobal("ConstructorDefaultParam")
   class ConstructorDefaultParamJSNativeScala(val foo: Int = -1) extends js.Object
+
   object ConstructorDefaultParamJSNativeScala
 
   @js.native
   @JSGlobal("ConstructorDefaultParam")
   class ConstructorDefaultParamJSNativeJSNonNative(val foo: Int = -1) extends js.Object
+
   object ConstructorDefaultParamJSNativeJSNonNative extends js.Object
 
   @js.native
   @JSGlobal("ConstructorDefaultParam")
   class ConstructorDefaultParamJSNativeJSNative(val foo: Int = -1) extends js.Object
+
   @js.native
   @JSGlobal("ConstructorDefaultParam")
   object ConstructorDefaultParamJSNativeJSNative extends js.Object
@@ -1874,6 +2061,21 @@ object NonNativeJSTypeTest {
     def this(c: Char) = this(c.toInt)("char", "a char")
 
     def this(x: Int, y: Int) = this(x)(y.toString, js.undefined)
+  }
+
+  object ConstructorSuperCallWithDefaultParams {
+    val sideEffects = mutable.ListBuffer.empty[String]
+
+    class Parent(parentParam1: Any = "param1", parentParam2: Any = "param2")(
+        dependentParam: String = s"$parentParam1-$parentParam2")
+        extends js.Object {
+      sideEffects += s"Parent constructor; $parentParam1, $parentParam2, $dependentParam"
+    }
+
+    class Child(val foo: Int, parentParam2: Any, val bar: Int)
+        extends Parent(parentParam2 = { sideEffects += foo.toString(); foo + bar })() {
+      sideEffects += s"Child constructor; $foo, $parentParam2, $bar"
+    }
   }
 
   class OverloadedConstructorParamNumber(val foo: Int) extends js.Object {
@@ -1904,6 +2106,33 @@ object NonNativeJSTypeTest {
       this((a + b).length, (x + y).length)
   }
 
+  class SecondaryConstructorUseDefaultParam(x: String = "x")(val y: String = x + "y")
+      extends js.Object {
+    def this(x: Int) = this(x.toString())()
+  }
+
+  class PrimaryConstructorWithPatternMatch_Issue4581(xs: List[Int]) extends js.Object {
+    var head: Int = 0
+
+    xs match {
+      case x :: xr => head = x
+      case _       => fail(xs.toString())
+    }
+  }
+
+  class SecondaryConstructorWithPatternMatch_Issue4581 extends js.Object {
+    var head: Int = 0
+
+    def this(xs: List[Int]) = {
+      this()
+
+      xs match {
+        case x :: xr => head = x
+        case _       => fail(xs.toString())
+      }
+    }
+  }
+
   class SimpleConstructorAutoFields(val x: Int, var y: Int) extends js.Object {
     def sum(): Int = x + y
   }
@@ -1912,13 +2141,28 @@ object NonNativeJSTypeTest {
     def sum(): Int = x + y
   }
 
+  class ConstructorWithParamNameClashes(arg: Int, arg$1: Int, arg$2: Int,
+      prep: Int, prep$1: Int, prep$2: Int)
+      extends js.Object {
+    val allArgs = List(arg, arg$1, arg$2, prep, prep$1, prep$2)
+  }
+
+  class MethodNamedConstructor(val x: Int) extends js.Object {
+    def constructor(y: Int): Int = x + y
+  }
+
+  class SubclassOfMethodNamedConstructor(x: Int, val z: Int) extends MethodNamedConstructor(x) {
+    def constructor(y: String): String = y + z
+  }
+
+  class SubclassOfMethodNamedConstructorNoRedefine(x: Int) extends MethodNamedConstructor(x)
+
   class DefaultFieldValues extends js.Object {
     var int: Int = _
     var bool: Boolean = _
     var char: Char = _
     var string: String = _
     var unit: Unit = _
-    var valueClass: SomeValueClass = _
   }
 
   trait LazyValFieldsSuperTrait extends js.Object {
@@ -1947,12 +2191,15 @@ object NonNativeJSTypeTest {
   }
 
   class SimpleInheritedFromNative(
-      x: Int, val y: Int) extends NativeParentClass(x)
-
-  class SomeValueClass(val i: Int) extends AnyVal
+      x: Int, val y: Int)
+      extends NativeParentClass(x)
 
   object JSNameHolder {
     final val MethodName = "myMethod"
   }
 
+  // #3998
+  trait SelfTypeTest1 extends js.Object { self => }
+  trait SelfTypeTest2 extends js.Object { self: js.Date => }
+  trait SelfTypeTest3 extends js.Object { this: js.Date => }
 }

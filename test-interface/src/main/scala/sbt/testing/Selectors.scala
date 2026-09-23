@@ -62,12 +62,12 @@ final class TestSelector(_testName: String) extends Selector with Serializable {
   def testName(): String = _testName
 
   override def equals(that: Any): Boolean = that match {
-    case that: TestSelector => this.testName == that.testName
-    case _ => false
+    case that: TestSelector => this.testName() == that.testName()
+    case _                  => false
   }
 
-  override def hashCode(): Int = testName.hashCode()
-  override def toString(): String = s"TestSelector($testName)"
+  override def hashCode(): Int = testName().hashCode()
+  override def toString(): String = s"TestSelector(${testName()})"
 }
 
 /** Information in addition to a test class name that identifies a nested suite
@@ -86,19 +86,20 @@ final class NestedSuiteSelector(_suiteId: String) extends Selector with Serializ
   def suiteId(): String = _suiteId
 
   override def equals(that: Any): Boolean = that match {
-    case that: NestedSuiteSelector => this.suiteId == that.suiteId
-    case _ => false
+    case that: NestedSuiteSelector => this.suiteId() == that.suiteId()
+    case _                         => false
   }
 
-  override def hashCode(): Int = suiteId.hashCode()
-  override def toString(): String = s"NestedSuiteSelector($suiteId)"
+  override def hashCode(): Int = suiteId().hashCode()
+  override def toString(): String = s"NestedSuiteSelector(${suiteId()})"
 }
 
 /** Information in addition to a test class name that identifies a test in a
  *  nested suite about which an event was fired.
  */
 final class NestedTestSelector(_suiteId: String,
-    _testName: String) extends Selector with Serializable {
+    _testName: String)
+    extends Selector with Serializable {
 
   if (_suiteId == null)
     throw new NullPointerException("suiteId was null");
@@ -121,18 +122,19 @@ final class NestedTestSelector(_suiteId: String,
 
   override def equals(that: Any): Boolean = that match {
     case that: NestedTestSelector =>
-      this.suiteId == that.suiteId && this.testName == that.testName
+      this.suiteId() == that.suiteId() && this.testName() == that.testName()
     case _ => false
   }
 
   override def hashCode(): Int = {
     var retVal = 17
-    retVal = 31 * retVal + suiteId.hashCode()
-    retVal = 31 * retVal + testName.hashCode()
+    retVal = 31 * retVal + suiteId().hashCode()
+    retVal = 31 * retVal + testName().hashCode()
     retVal
   }
 
-  override def toString(): String = s"NestedTestSelector($suiteId, $testName)"
+  override def toString(): String =
+    s"NestedTestSelector(${suiteId()}, ${testName()})"
 }
 
 /** Information that identifies zero to many tests directly contained in a test
@@ -143,7 +145,8 @@ final class NestedTestSelector(_suiteId: String,
  *  <code>testWildcard</code> string as a substring will be selected.
  */
 final class TestWildcardSelector(
-    _testWildcard: String) extends Selector with Serializable {
+    _testWildcard: String)
+    extends Selector with Serializable {
 
   if (_testWildcard == null)
     throw new NullPointerException("testWildcard was null");
@@ -160,11 +163,11 @@ final class TestWildcardSelector(
 
   override def equals(that: Any): Boolean = that match {
     case that: TestWildcardSelector =>
-      this.testWildcard == that.testWildcard
+      this.testWildcard() == that.testWildcard()
     case _ => false
   }
 
-  override def hashCode(): Int = testWildcard.hashCode()
+  override def hashCode(): Int = testWildcard().hashCode()
 
-  override def toString(): String = s"TestWildcardSelector($testWildcard)"
+  override def toString(): String = s"TestWildcardSelector(${testWildcard()})"
 }

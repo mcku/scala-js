@@ -23,25 +23,21 @@ import org.scalajs.testsuite.utils.Platform._
 
 class RangesTest {
 
-  @Test def Iterable_range_should_not_emit_dce_warnings_issue_650(): Unit = {
+  @Test def iterableRangeLinks_Issue650(): Unit = {
     Iterable.range(1, 10)
   }
 
-  @Test def Iterable_range_and_simple_range_should_be_equal(): Unit = {
+  @Test def iterableRangeAndSimpleRangeAreEqual(): Unit = {
     // Mostly to exercise more methods of ranges for dce warnings
     assertEquals((0 until 10).toList, Iterable.range(0, 10).toList)
   }
 
-  @Test def NumericRange_overflow_issue_2407(): Unit = {
-    assumeFalse("Assumed not on JVM for 2.11.{0-7}",
-        executingInJVM && (0 to 7).map("2.11." + _).contains(scalaVersion))
+  @Test def numericRangeOverflow_Issue2407(): Unit = {
     val nr = NumericRange(Int.MinValue, Int.MaxValue, 1 << 23)
     assertEquals(Int.MinValue, nr.sum)
   }
 
-  @Test def Range_foreach_issue_2409(): Unit = {
-    assumeFalse("Assumed not on JVM for 2.11.{0-7}",
-        executingInJVM && (0 to 7).map("2.11." + _).contains(scalaVersion))
+  @Test def rangeForeach_Issue2409(): Unit = {
     val r = Int.MinValue to Int.MaxValue by (1 << 23)
     var i = 0
     r.foreach(_ => i += 1)
@@ -50,42 +46,19 @@ class RangesTest {
     assertEquals(Int.MinValue, r.sum)
   }
 
-  @Test def Range_toString_issue_2412(): Unit = {
-    if (scalaVersion.startsWith("2.11.")) {
-      assertEquals("Range(1, 3, 5, 7, 9)", (1 to 10 by 2).toString)
-      assertEquals("Range()", (1 until 1 by 2).toString)
-      assertTrue(
-          (BigDecimal(0.0) to BigDecimal(1.0)).toString.startsWith("scala.collection.immutable.Range$Partial"))
-      assertEquals("Range(0, 1)", (0 to 1).toString)
-    } else {
-      assertEquals("inexact Range 1 to 10 by 2", (1 to 10 by 2).toString)
-      assertEquals("empty Range 1 until 1 by 2", (1 until 1 by 2).toString)
-      assertEquals("Range requires step", (BigDecimal(0.0) to BigDecimal(1.0)).toString)
-      assertEquals("Range 0 to 1", (0 to 1).toString)
-    }
+  @Test def rangeToString_Issue2412(): Unit = {
+    assertEquals("inexact Range 1 to 10 by 2", (1 to 10 by 2).toString)
+    assertEquals("empty Range 1 until 1 by 2", (1 until 1 by 2).toString)
+    assertEquals("Range requires step", (BigDecimal(0.0) to BigDecimal(1.0)).toString)
+    assertEquals("Range 0 to 1", (0 to 1).toString)
   }
 
-  @Test def NumericRange_toString_issue_2412(): Unit = {
-    if (scalaVersion.startsWith("2.11.")) {
-      assertEquals("NumericRange(0, 2, 4, 6, 8, 10)",
-          NumericRange.inclusive(0, 10, 2).toString())
-      assertEquals("NumericRange(0, 2, 4, 6, 8)",
-          NumericRange(0, 10, 2).toString)
-    } else {
-      assertEquals("NumericRange 0 to 10 by 2",
-          NumericRange.inclusive(0, 10, 2).toString())
-      assertEquals("NumericRange 0 until 10 by 2",
-          NumericRange(0, 10, 2).toString)
-    }
+  @Test def numericRangeToString_Issue2412(): Unit = {
+    assertEquals("NumericRange 0 to 10 by 2", NumericRange.inclusive(0, 10, 2).toString())
+    assertEquals("NumericRange 0 until 10 by 2", NumericRange(0, 10, 2).toString)
   }
 
-  @Test def NumericRange_with_arbitrary_integral(): Unit = {
-    // This is broken in Scala JVM up to (including) 2.11.8, 2.12.1 (SI-10086).
-    assumeFalse("Assumed not on JVM for 2.11.{0-8}",
-        executingInJVM && (0 to 8).map("2.11." + _).contains(scalaVersion))
-    assumeFalse("Assumed not on JVM for 2.12.{0-1}",
-        executingInJVM && (0 to 1).map("2.12." + _).contains(scalaVersion))
-
+  @Test def numericRangeWithArbitraryIntegral(): Unit = {
     // Our custom integral type.
     case class A(v: Int)
 

@@ -2,46 +2,75 @@
 
 if [ $# -eq 1 -a "$1" = "-x" ]; then
     CMD="sbt"
+    EXECUTING='1'
 else
     echo "Showing commands that would be executed. Use -x to run."
     CMD="echo sbt"
+    EXECUTING=''
 fi
 
-COMPILER_VERSIONS="2.11.0 2.11.1 2.11.2 2.11.4 2.11.5 2.11.6 2.11.7 2.11.8 2.11.11 2.11.12 2.12.1 2.12.2 2.12.3 2.12.4 2.12.5 2.12.6 2.12.7 2.12.8 2.13.0"
-BIN_VERSIONS="2.11.12 2.12.8 2.13.0"
-JVM_BIN_VERSIONS="2.11.12 2.12.8"
-SBT_VERSION="2.12.8"
+java -version
+if ! java -version 2>&1 | grep 'version \"17\.'; then
+  echo "Publishing requires exactly JDK 17."
+  exit 1
+fi
 
-COMPILER="compiler jUnitPlugin"
-LIBS="library irJS loggingJS linkerJS testInterface testBridge jUnitRuntime"
-JVM_LIBS="ir logging linker jsEnvs jsEnvsTestKit nodeJSEnv testAdapter"
+if [ $EXECUTING ]; then
+    if [ -z "$SONATYPE_USERNAME$SONATYPE_PASSWORD" ]; then
+        echo "Please set the SONATYPE_USERNAME and SONATYPE_PASSWORD variables."
+        exit 1
+    fi
+fi
 
-# Publish compiler
-for v in $COMPILER_VERSIONS; do
-    ARGS="++$v"
-    for p in $COMPILER; do
-        ARGS="$ARGS $p/publishSigned"
+SUFFIXES="2_12 2_13"
+SUFFIXES_WITH_3="2_12 2_13 3"
+
+JAVA_LIBS="javalibintf javalib"
+FULL_SCALA_LIBS="compiler jUnitPlugin scalalib"
+SCALA_2_LIBS="library testInterface testBridge jUnitRuntime irJS linkerInterfaceJS linkerJS"
+SCALA_2_3_LIBS="ir linkerInterface linker testAdapter"
+
+# Publish Java libraries
+ARGS=""
+for p in $JAVA_LIBS; do
+    ARGS="$ARGS $p/publishSigned"
+done
+$CMD $ARGS
+
+# Publish artifacts built with the full Scala version
+for s in $SUFFIXES; do
+    ARGS=""
+    for p in $FULL_SCALA_LIBS; do
+        ARGS="$ARGS +$p$s/publishSigned"
     done
     $CMD $ARGS
 done
 
-# Publish libraries
-for v in $BIN_VERSIONS; do
-    ARGS="++$v"
-    for p in $LIBS; do
-        ARGS="$ARGS $p/publishSigned"
+# Publish Scala 2 libraries
+for s in $SUFFIXES; do
+    ARGS=""
+    for p in $SCALA_2_LIBS; do
+        ARGS="$ARGS $p$s/publishSigned"
     done
     $CMD $ARGS
 done
 
-# Publish JVM libraries
-for v in $JVM_BIN_VERSIONS; do
-    ARGS="++$v"
-    for p in $JVM_LIBS; do
-        ARGS="$ARGS $p/publishSigned"
+# Publish Scala 2 and 3 libraries
+for s in $SUFFIXES_WITH_3; do
+    ARGS=""
+    for p in $SCALA_2_3_LIBS; do
+        ARGS="$ARGS $p$s/publishSigned"
     done
     $CMD $ARGS
 done
 
 # Publish sbt-plugin
-$CMD "++$SBT_VERSION" sbtPlugin/publishSigned"
+$CMD sbtPlugin2_12/publishSigned sbtPlugin3/publishSigned
+
+if [ $EXECUTING ]; then
+    echo "All done."
+    echo "If you're publishing a non-snapshot release, now you need to execute:"
+    echo "  sbt sonaUpload"
+    echo "then go to https://central.sonatype.com/publishing,"
+    echo "double-check the contents, and click 'Publish'."
+fi

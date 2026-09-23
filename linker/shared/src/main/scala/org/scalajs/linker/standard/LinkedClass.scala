@@ -12,13 +12,9 @@
 
 package org.scalajs.linker.standard
 
-import scala.collection.mutable
-
-import org.scalajs.ir
-import ir.Trees._
-import ir.Position
-import ir.ClassKind
-import ir.Definitions
+import org.scalajs.ir.Trees._
+import org.scalajs.ir.{ClassKind, Position, Version}
+import org.scalajs.ir.Names.{ClassName, FieldName, MethodName}
 
 /** A ClassDef after linking.
  *
@@ -33,100 +29,106 @@ import ir.Definitions
  *  P+1. The converse is not true. This guarantees that versions can be used
  *  reliably to determine at phase P+1 whether a linked class coming from phase
  *  P must be reprocessed.
+ *
+ *  @param ancestors
+ *    List of all the ancestor classes and interfaces of this class. It always
+ *    contains this class name and `java.lang.Object`. This class name is
+ *    always the first element of the list.
  */
 final class LinkedClass(
     // Stuff from Tree
-    val name: Ident,
+    val name: ClassIdent,
     val kind: ClassKind,
     val jsClassCaptures: Option[List[ParamDef]],
-    val superClass: Option[Ident],
-    val interfaces: List[Ident],
+    val superClass: Option[ClassIdent],
+    val interfaces: List[ClassIdent],
     val jsSuperClass: Option[Tree],
     val jsNativeLoadSpec: Option[JSNativeLoadSpec],
-    val fields: List[FieldDef],
-    val methods: List[Versioned[MethodDef]],
-    val exportedMembers: List[Versioned[MemberDef]],
-    val topLevelExports: List[Versioned[TopLevelExportDef]],
+    val fields: List[AnyFieldDef],
+    val methods: List[MethodDef],
+    val jsConstructorDef: Option[JSConstructorDef],
+    val exportedMembers: List[JSMethodPropDef],
+    val topLevelImportDefs: List[TopLevelImportDef],
     val optimizerHints: OptimizerHints,
     val pos: Position,
 
     // Actual Linking info
-    val ancestors: List[String],
+    val ancestors: List[ClassName],
     val hasInstances: Boolean,
+    val hasDirectInstances: Boolean,
     val hasInstanceTests: Boolean,
     val hasRuntimeTypeInfo: Boolean,
-    val version: Option[String]) {
+    val fieldsRead: Set[FieldName],
+    val staticFieldsRead: Set[FieldName],
 
-  def encodedName: String = name.name
+    val staticDependencies: Set[ClassName],
+    val externalDependencies: Set[String],
+    val dynamicDependencies: Set[ClassName],
 
-  val hasEntryPoint: Boolean = {
-    topLevelExports.nonEmpty ||
-    methods.exists(_.value.flags.namespace == MemberNamespace.StaticConstructor)
+    // Desugaring requirements
+    val desugaringRequirements: LinkedClass.DesugaringRequirements,
+
+    val version: Version) {
+
+  require(ancestors.headOption.contains(name.name),
+      s"ancestors for ${name.name.nameString} must start with itself: $ancestors")
+
+  def className: ClassName = name.name
+
+  val hasStaticInitializer: Boolean = {
+    methods.exists { methodDef =>
+      methodDef.flags.namespace == MemberNamespace.StaticConstructor &&
+      methodDef.methodName.isStaticInitializer
+    }
   }
 
-  def fullName: String = Definitions.decodeClassName(encodedName)
-
-  private[linker] def refined(
-      kind: ClassKind,
-      fields: List[FieldDef],
-      methods: List[Versioned[MethodDef]],
-      hasInstances: Boolean,
-      hasInstanceTests: Boolean,
-      hasRuntimeTypeInfo: Boolean
-  ): LinkedClass = {
-    copy(
-        kind = kind,
-        fields = fields,
-        methods = methods,
-        hasInstances = hasInstances,
-        hasInstanceTests = hasInstanceTests,
-        hasRuntimeTypeInfo = hasRuntimeTypeInfo
-    )
+  def hasAnyDefinitions: Boolean = {
+    fields.nonEmpty ||
+    methods.nonEmpty ||
+    exportedMembers.nonEmpty ||
+    hasInstanceTests ||
+    hasRuntimeTypeInfo
   }
 
-  private[linker] def optimized(
-      methods: List[Versioned[MethodDef]]
-  ): LinkedClass = {
-    copy(methods = methods)
+  def fullName: String = className.nameString
+}
+
+object LinkedClass {
+
+  /** Desugaring requirements of a `LinkedClass`.
+   *
+   *  These requirements are a set of members that need desugaring.
+   */
+  final class DesugaringRequirements private (
+      methods: Vector[Set[MethodName]], // indexed by MemberNamespace ordinal
+      val exportedMembers: Boolean
+  ) {
+    private def this() = {
+      this(
+        methods = Vector.fill(MemberNamespace.Count)(Set.empty),
+        exportedMembers = false
+      )
+    }
+
+    /** Are these requirements empty, i.e., does the corresponding require no desugaring at all? */
+    def isEmpty: Boolean =
+      this eq DesugaringRequirements.Empty // by construction, only that specific instance is empty
+
+    /** Do the requirements contain the given method, i.e., does that method need desugaring? */
+    def containsMethod(namespace: MemberNamespace, methodName: MethodName): Boolean =
+      methods(namespace.ordinal).contains(methodName)
+
+    def addMethod(namespace: MemberNamespace, methodName: MethodName): DesugaringRequirements = {
+      val newMethods =
+        methods.updated(namespace.ordinal, methods(namespace.ordinal) + methodName)
+      new DesugaringRequirements(newMethods, exportedMembers)
+    }
+
+    def addAnyExportedMember(): DesugaringRequirements =
+      new DesugaringRequirements(methods, exportedMembers = true)
   }
 
-  private def copy(
-      name: Ident = this.name,
-      kind: ClassKind = this.kind,
-      jsClassCaptures: Option[List[ParamDef]] = this.jsClassCaptures,
-      superClass: Option[Ident] = this.superClass,
-      interfaces: List[Ident] = this.interfaces,
-      jsSuperClass: Option[Tree] = this.jsSuperClass,
-      jsNativeLoadSpec: Option[JSNativeLoadSpec] = this.jsNativeLoadSpec,
-      fields: List[FieldDef] = this.fields,
-      methods: List[Versioned[MethodDef]] = this.methods,
-      exportedMembers: List[Versioned[MemberDef]] = this.exportedMembers,
-      topLevelExports: List[Versioned[TopLevelExportDef]] = this.topLevelExports,
-      optimizerHints: OptimizerHints = this.optimizerHints,
-      pos: Position = this.pos,
-      ancestors: List[String] = this.ancestors,
-      hasInstances: Boolean = this.hasInstances,
-      hasInstanceTests: Boolean = this.hasInstanceTests,
-      hasRuntimeTypeInfo: Boolean = this.hasRuntimeTypeInfo,
-      version: Option[String] = this.version): LinkedClass = {
-    new LinkedClass(
-        name,
-        kind,
-        jsClassCaptures,
-        superClass,
-        interfaces,
-        jsSuperClass,
-        jsNativeLoadSpec,
-        fields,
-        methods,
-        exportedMembers,
-        topLevelExports,
-        optimizerHints,
-        pos,
-        ancestors,
-        hasInstances,
-        hasInstanceTests,
-        hasRuntimeTypeInfo,
-        version)
+  object DesugaringRequirements {
+    val Empty: DesugaringRequirements = new DesugaringRequirements()
   }
 }

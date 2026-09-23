@@ -10,12 +10,10 @@
  * additional information regarding copyright ownership.
  */
 
-// scalastyle:off line.size.limit
 /*
  * Ported by Alistair Johnson from
  * https://github.com/gwtproject/gwt/blob/master/user/test/com/google/gwt/emultest/java/math/BigIntegerMultiplyTest.java
  */
-// scalastyle:on line.size.limit
 
 package org.scalajs.testsuite.javalib.math
 
@@ -24,7 +22,7 @@ import java.math.BigInteger
 import org.junit.Test
 import org.junit.Assert._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
 
 class BigIntegerMultiplyTest {
 
@@ -33,7 +31,8 @@ class BigIntegerMultiplyTest {
     val bBytes = Array[Byte](10, 20, 30, 40, 50, 60, 70, 10, 20, 30)
     val aSign = -1
     val bSign = -1
-    val rBytes = Array[Byte](10, 40, 100, -55, 96, 51, 76, 40, -45, 85, 105, 4, 28, -86, -117, -52, 100, 120, 90)
+    val rBytes = Array[Byte](
+        10, 40, 100, -55, 96, 51, 76, 40, -45, 85, 105, 4, 28, -86, -117, -52, 100, 120, 90)
     val aNumber = new BigInteger(aSign, aBytes)
     val bNumber = new BigInteger(bSign, bBytes)
     val result = aNumber.multiply(bNumber)
@@ -236,7 +235,7 @@ class BigIntegerMultiplyTest {
     val aSign = 1
     val exp = -5
     val aNumber = new BigInteger(aSign, aBytes)
-    expectThrows(classOf[ArithmeticException], aNumber.pow(exp))
+    assertThrows(classOf[ArithmeticException], aNumber.pow(exp))
   }
 
   @Test def testPowNegativeNumToEvenExp(): Unit = {
@@ -322,7 +321,7 @@ class BigIntegerMultiplyTest {
     assertEquals(1, result.signum())
   }
 
-  @Test def testPow31_issue_2045(): Unit = {
+  @Test def testPow31_Issue2045(): Unit = {
     assertEquals(BigInt("2147483648"), BigInt(2).pow(31))
     assertEquals(BigInt("1326443518324400147398656"), BigInt(6).pow(31))
     assertEquals(BigInt("10000000000000000000000000000000"), BigInt(10).pow(31))

@@ -12,8 +12,7 @@
 
 package scala.runtime
 
-/** Not for public consumption.  Usage by the runtime only.
- */
+/** Not for public consumption.  Usage by the runtime only. */
 
 object Statics {
   def mix(hash: Int, data: Int): Int = {
@@ -30,9 +29,8 @@ object Statics {
     hash ^ k
   }
 
-  def finalizeHash(hash: Int, length: Int): Int = {
+  def finalizeHash(hash: Int, length: Int): Int =
     avalanche(hash ^ length)
-  }
 
   /** Force all bits of the hash to avalanche. Used for finalizing the hash. */
   def avalanche(h0: Int): Int = {
@@ -53,16 +51,6 @@ object Statics {
   }
 
   def doubleHash(dv: Double): Int = {
-    /* This implementation is based on what 2.12.0-M5+ does on the JVM.
-     * The 2.11 implementation on the JVM was not consistent with that of
-     * BoxesRunTime, and most importantly was not consistent with the hash of
-     * Long values.
-     *
-     * In Scala.js, we always use the version consistent with BoxesRunTime.
-     * Note that, for values that happen to be valid floats but not valid
-     * longs, this implementation is *not* consistent with the JVM (just like
-     * that of BoxesRunTime).
-     */
     val iv = dv.toInt
     if (iv == dv) {
       iv
@@ -76,9 +64,8 @@ object Statics {
     }
   }
 
-  def floatHash(fv: Float): Int = {
+  def floatHash(fv: Float): Int =
     doubleHash(fv.toDouble)
-  }
 
   def anyHash(x: Any): Int = {
     x match {

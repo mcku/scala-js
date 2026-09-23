@@ -10,12 +10,10 @@
  * additional information regarding copyright ownership.
  */
 
-// scalastyle:off line.size.limit
 /*
  * Ported by Alistair Johnson from
  * https://github.com/gwtproject/gwt/blob/master/user/test/com/google/gwt/emultest/java/math/BigIntegerConstructorsTest.java
  */
-// scalastyle:on line.size.limit
 
 package org.scalajs.testsuite.javalib.math
 
@@ -27,13 +25,13 @@ import org.junit.Assert._
 import org.junit.Assume._
 
 import org.scalajs.testsuite.utils.Platform
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
 
 class BigIntegerConstructorsTest {
 
   @Test def testConstructorBytesException(): Unit = {
     val aBytes = Array[Byte]()
-    expectThrows(classOf[NumberFormatException], new BigInteger(aBytes))
+    assertThrows(classOf[NumberFormatException], new BigInteger(aBytes))
   }
 
   @Test def testConstructorBytesNegative1(): Unit = {
@@ -170,13 +168,13 @@ class BigIntegerConstructorsTest {
   @Test def testConstructorSignBytesException1(): Unit = {
     val aBytes = Array[Byte](123, 45, -3, -76)
     val aSign = 3
-    expectThrows(classOf[NumberFormatException], new BigInteger(aSign, aBytes))
+    assertThrows(classOf[NumberFormatException], new BigInteger(aSign, aBytes))
   }
 
   @Test def testConstructorSignBytesException2(): Unit = {
     val aBytes = Array[Byte](123, 45, -3, -76)
     val aSign = 0
-    expectThrows(classOf[NumberFormatException], new BigInteger(aSign, aBytes))
+    assertThrows(classOf[NumberFormatException], new BigInteger(aSign, aBytes))
   }
 
   @Test def testConstructorSignBytesNegative1(): Unit = {
@@ -441,7 +439,7 @@ class BigIntegerConstructorsTest {
 
   @Test def testConstructorStringException(): Unit = {
     def test(s: String, radix: Int): Unit =
-      expectThrows(classOf[NumberFormatException], new BigInteger(s, radix))
+      assertThrows(classOf[NumberFormatException], new BigInteger(s, radix))
 
     test("9234853876401", 45)
     test("   9234853876401", 10)
@@ -493,9 +491,7 @@ class BigIntegerConstructorsTest {
     assertEquals(0, aNumber.signum())
   }
 
-  @Test def testConstructorStringRadix10Issue2228(): Unit = {
-    assumeFalse("Assumed not executing on JDK6", Platform.executingInJVMOnJDK6)
-
+  @Test def testConstructorStringRadix10_Issue2228(): Unit = {
     val value = "+100000000"
     val radix = 10
     val rBytes = Array[Byte](5, -11, -31, 0)

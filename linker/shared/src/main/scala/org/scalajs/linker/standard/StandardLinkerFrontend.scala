@@ -12,13 +12,14 @@
 
 package org.scalajs.linker.standard
 
-import org.scalajs.linker._
+import org.scalajs.linker.interface.StandardConfig
 import org.scalajs.linker.frontend.LinkerFrontendImpl
 
 object StandardLinkerFrontend {
-  def apply(config: StandardLinker.Config): LinkerFrontend = {
+  def apply(config: StandardConfig): LinkerFrontend = {
     val frontendConfig = LinkerFrontendImpl.Config()
-      .withCommonConfig(config.commonPhaseConfig)
+      .withCommonConfig(CommonPhaseConfig.fromStandardConfig(config))
+      .withModuleSplitStyle(config.moduleSplitStyle)
       .withCheckIR(config.checkIR)
       .withOptimizer(config.optimizer)
 

@@ -13,6 +13,7 @@
 package org.scalajs.testsuite.jsinterop
 
 import scala.scalajs.js
+import scala.scalajs.js.|
 import scala.scalajs.js.annotation._
 
 import org.junit.Assert._
@@ -23,7 +24,7 @@ class JSSymbolTest {
   import JSSymbolTest._
   import SJSDefinedWithSyms._
 
-  @Test def native_with_defs_that_are_properties(): Unit = {
+  @Test def nativeWithDefsThatAreProperties(): Unit = {
     val obj = mkObject(sym1 -> 1)
 
     assertEquals(1, obj.asInstanceOf[PropDefClass].internalDef)
@@ -31,7 +32,7 @@ class JSSymbolTest {
     assertEquals(1, selectSymbol(obj, sym1))
   }
 
-  @Test def sjsdefined_with_defs_that_are_properties(): Unit = {
+  @Test def sjsdefinedWithDefsThatAreProperties(): Unit = {
     val obj = new SJSDefinedPropDef
     assertEquals(456, obj.internalDef)
 
@@ -41,7 +42,7 @@ class JSSymbolTest {
     assertEquals(456, selectSymbol(obj, sym1))
   }
 
-  @Test def native_with_vals(): Unit = {
+  @Test def nativeWithVals(): Unit = {
     val obj = mkObject(sym1 -> "hi")
 
     assertEquals("hi", obj.asInstanceOf[PropValClass].internalVal)
@@ -49,7 +50,7 @@ class JSSymbolTest {
     assertEquals("hi", selectSymbol(obj, sym1))
   }
 
-  @Test def sjsdefined_with_vals(): Unit = {
+  @Test def sjsdefinedWithVals(): Unit = {
     val obj = new SJSDefinedPropVal
     assertEquals("hello", obj.internalVal)
 
@@ -59,7 +60,7 @@ class JSSymbolTest {
     assertEquals("hello", selectSymbol(obj, sym1))
   }
 
-  @Test def native_with_vars(): Unit = {
+  @Test def nativeWithVars(): Unit = {
     val obj0 = mkObject(sym1 -> 0.1).asInstanceOf[PropVarClass]
     assertEquals(0.1, obj0.internalVar, 0.0)
     obj0.internalVar = 0.2
@@ -76,7 +77,7 @@ class JSSymbolTest {
     assertEquals(8.2, selectSymbol(obj2, sym1))
   }
 
-  @Test def sjsdefined_with_vars(): Unit = {
+  @Test def sjsdefinedWithVars(): Unit = {
     val obj0 = new SJSDefinedPropVar
     assertEquals(1511.1989, obj0.internalVar, 0.0)
     obj0.internalVar = 0.2
@@ -93,7 +94,7 @@ class JSSymbolTest {
     assertEquals(8.2, selectSymbol(obj2, sym1))
   }
 
-  @Test def sjsdefined_with_inner_object(): Unit = {
+  @Test def sjsdefinedWithInnerObject(): Unit = {
     val obj0 = new SJSDefinedInnerObject
     assertEquals("object", js.typeOf(obj0.innerObject.asInstanceOf[js.Any]))
     assertEquals("SJSDefinedInnerObject.innerObject", obj0.innerObject.toString())
@@ -108,10 +109,10 @@ class JSSymbolTest {
         selectSymbol(obj1, sym1).toString())
   }
 
-  @Test def native_with_methods(): Unit = {
+  @Test def nativeWithMethods(): Unit = {
     val obj = mkObject(
-        sym1 -> ((x: Int) => x + 2),
-        sym2 -> ((x: String) => "Hello " + x)
+      sym1 -> ((x: Int) => x + 2),
+      sym2 -> ((x: String) => "Hello " + x)
     )
 
     assertEquals(4, obj.asInstanceOf[MethodClass].foo(2))
@@ -124,7 +125,7 @@ class JSSymbolTest {
     assertEquals("Hello Moon", callSymbol(obj, sym2)("Moon"))
   }
 
-  @Test def sjsdefined_with_methods(): Unit = {
+  @Test def sjsdefinedWithMethods(): Unit = {
     val obj = new SJSDefinedMethod
     assertEquals(4, obj.foo(2))
     assertEquals("Hello World", obj.bar("World"))
@@ -137,10 +138,10 @@ class JSSymbolTest {
     assertEquals("Hello Moon", callSymbol(obj, sym2)("Moon"))
   }
 
-  @Test def native_with_overloaded_methods(): Unit = {
+  @Test def nativeWithOverloadedMethods(): Unit = {
     val obj = mkObject(
-        sym1 -> ((x: Int) => x + 3),
-        sym2 -> ((x: String) => "Hello " + x)
+      sym1 -> ((x: Int) => x + 3),
+      sym2 -> ((x: String) => "Hello " + x)
     )
 
     assertEquals(5, obj.asInstanceOf[OverloadedMethodClass].foo(2))
@@ -153,7 +154,7 @@ class JSSymbolTest {
     assertEquals("Hello Moon", callSymbol(obj, sym2)("Moon"))
   }
 
-  @Test def sjsdefined_with_overloaded_methods(): Unit = {
+  @Test def sjsdefinedWithOverloadedMethods(): Unit = {
     val obj = new SJSDefinedOverloadedMethod
     assertEquals(5, obj.foo(2))
     assertEquals("Hello World", obj.foo("World"))
@@ -166,14 +167,14 @@ class JSSymbolTest {
     assertEquals("Hello Moon", callSymbol(obj, sym2)("Moon"))
   }
 
-  @Test def native_with_overloaded_runtime_dispatch_methods(): Unit = {
+  @Test def nativeWithOverloadedRuntimeDispatchMethods(): Unit = {
     val obj = mkObject(
-        sym1 -> { (x: Any) =>
-          x match {
-            case x: Int    => x + 3
-            case x: String => "Hello " + x
-          }
+      sym1 -> { (x: Any) =>
+        x match {
+          case x: Int    => x + 3
+          case x: String => "Hello " + x
         }
+      }
     )
 
     assertEquals(5,
@@ -190,7 +191,7 @@ class JSSymbolTest {
     assertEquals("Hello Moon", callSymbol(obj, sym1)("Moon"))
   }
 
-  @Test def sjsdefined_with_overloaded_runtime_dispatch_methods(): Unit = {
+  @Test def sjsdefinedWithOverloadedRuntimeDispatchMethods(): Unit = {
     val obj = new SJSDefinedOverloadedRuntimeDispatchMethod
     assertEquals(5, obj.foo(2))
     assertEquals("Hello World", obj.foo("World"))
@@ -203,9 +204,9 @@ class JSSymbolTest {
     assertEquals("Hello Moon", callSymbol(obj, sym1)("Moon"))
   }
 
-  @Test def native_with_symbols_in_sjsdefined_object(): Unit = {
+  @Test def nativeWithSymbolsInSjsdefinedObject(): Unit = {
     val obj = mkObject(
-        sym3 -> ((x: Int) => x + 2)
+      sym3 -> ((x: Int) => x + 2)
     )
 
     assertEquals(65,
@@ -216,7 +217,7 @@ class JSSymbolTest {
     assertEquals(65, callSymbol(obj, sym3)(63))
   }
 
-  @Test def sjsdefined_with_symbols_in_sjsdefined_object(): Unit = {
+  @Test def sjsdefinedWithSymbolsInSjsdefinedObject(): Unit = {
     val obj = new SJSDefinedWithSymsInSJSDefinedObject
     assertEquals(65, obj.symInSJSDefinedObject(63))
 
@@ -226,9 +227,9 @@ class JSSymbolTest {
     assertEquals(65, callSymbol(obj, sym3)(63))
   }
 
-  @Test def native_iterable(): Unit = {
+  @Test def nativeIterable(): Unit = {
     val obj = mkObject(
-        js.Symbol.iterator -> (() => singletonIterator(653))
+      js.Symbol.iterator -> (() => singletonIterator(653))
     )
 
     assertArrayEquals(Array(653),
@@ -241,7 +242,7 @@ class JSSymbolTest {
     assertArrayEquals(Array(653), content.result())
   }
 
-  @Test def sjsdefined_iterable(): Unit = {
+  @Test def sjsdefinedIterable(): Unit = {
     val obj = new SJSDefinedIterable
 
     assertArrayEquals(Array(532), iterableToArray(obj).toArray)
@@ -249,6 +250,17 @@ class JSSymbolTest {
     val content = Array.newBuilder[Int]
     iterateIterable(obj)(content += _)
     assertArrayEquals(Array(532), content.result())
+  }
+
+  @Test def sjsdefinedAsyncIterable(): Unit = {
+    PromiseMock.withMockedPromise { processQueue =>
+      val obj = new SJSDefinedAsyncIterable
+
+      val content = Array.newBuilder[Int]
+      iterateAsyncIterable(obj)(content += _)
+      processQueue()
+      assertArrayEquals(Array(278), content.result())
+    }
   }
 
   @Test def inOperatorWithSymbols(): Unit = {
@@ -304,19 +316,33 @@ object JSSymbolTest {
     def callSymbol(sym: js.Symbol)(args: js.Any*): Any = js.native
   }
 
-  def singletonIterator(singleton: Any): js.Dynamic = {
-    var first = true
+  def singletonIterator(singleton: Any): js.Dynamic =
+    js.Dynamic.literal(next = singletonIteratorLogic(singleton))
+
+  def singletonAsyncIterator(singleton: Any): js.Dynamic = {
+    val logic = singletonIteratorLogic(singleton)
     js.Dynamic.literal(
-        next = { () =>
-          if (first) {
-            first = false
-            js.Dynamic.literal(value = singleton.asInstanceOf[js.Any],
-                done = false)
-          } else {
-            js.Dynamic.literal(value = (), done = true)
-          }
-        }
+      next = { () =>
+        new js.Promise[js.Dynamic]({
+          (resolve: js.Function1[js.Dynamic | js.Thenable[js.Dynamic], _],
+              reject: js.Function1[Any, _]) =>
+            resolve(logic())
+        })
+      }
     )
+  }
+
+  def singletonIteratorLogic(singleton: Any): () => js.Dynamic = {
+    var first = true
+
+    { () =>
+      if (first) {
+        first = false
+        js.Dynamic.literal(value = singleton.asInstanceOf[js.Any], done = false)
+      } else {
+        js.Dynamic.literal(value = (), done = true)
+      }
+    }
   }
 
   def iterableToArray[A](iterable: JSIterable[A]): js.Array[A] =
@@ -324,6 +350,7 @@ object JSSymbolTest {
 
   def iterateIterable[A](iterable: JSIterable[A])(f: A => Any): Unit = {
     val iterator = iterable.iterator()
+
     def loop(): Unit = {
       import js.DynamicImplicits.truthValue
 
@@ -333,6 +360,26 @@ object JSSymbolTest {
         loop()
       }
     }
+
+    loop()
+  }
+
+  def iterateAsyncIterable[A](
+      iterable: JSAsyncIterable[A])(f: A => Any): Unit = {
+    val iterator = iterable.asyncIterator()
+
+    def loop(): Unit = {
+      import js.DynamicImplicits.truthValue
+
+      val pEntry = iterator.next().asInstanceOf[js.Promise[js.Dynamic]]
+      pEntry.`then`[Unit] { (entry: js.Dynamic) =>
+        if (!entry.done) {
+          f(entry.value.asInstanceOf[A])
+          loop()
+        }
+      }
+    }
+
     loop()
   }
 
@@ -490,8 +537,7 @@ object JSSymbolTest {
     def symInSJSDefinedObject(x: Int): Int = js.native
   }
 
-  class SJSDefinedWithSymsInSJSDefinedObject
-      extends TraitWithSymsInSJSDefinedObject {
+  class SJSDefinedWithSymsInSJSDefinedObject extends TraitWithSymsInSJSDefinedObject {
     @JSName(sym3)
     def symInSJSDefinedObject(x: Int): Int = x + 2
   }
@@ -511,5 +557,15 @@ object JSSymbolTest {
   class SJSDefinedIterable extends JSIterable[Int] {
     @JSName(js.Symbol.iterator)
     def iterator(): js.Dynamic = singletonIterator(532)
+  }
+
+  trait JSAsyncIterable[+A] extends js.Object {
+    @JSName(js.Symbol.asyncIterator)
+    def asyncIterator(): js.Dynamic
+  }
+
+  class SJSDefinedAsyncIterable extends JSAsyncIterable[Int] {
+    @JSName(js.Symbol.asyncIterator)
+    def asyncIterator(): js.Dynamic = singletonAsyncIterator(278)
   }
 }

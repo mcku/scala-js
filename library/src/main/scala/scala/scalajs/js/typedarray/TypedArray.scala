@@ -45,19 +45,28 @@ trait TypedArray[T, Repr] extends ArrayBufferView with js.Iterable[T] {
   def set(index: Int, value: T): Unit = js.native
 
   /** Set the values of typedArray in this TypedArray */
-  def set(typedArray: TypedArray[_, _]): Unit = js.native
+  def set(typedArray: Repr): Unit = js.native
 
   /** Set the values of typedArray in this TypedArray at given offset */
-  def set(typedArray: TypedArray[_, _], offset: Int): Unit = js.native
+  def set(typedArray: Repr, offset: Int): Unit = js.native
 
   /** Set the values from array in this TypedArray */
-  def set(array: js.Iterable[_]): Unit = js.native
+  def set(array: js.Array[_ <: T]): Unit = js.native
 
   /** Set the values from array in this TypedArray at given offset */
-  def set(array: js.Iterable[_], offset: Int): Unit = js.native
+  def set(array: js.Array[_ <: T], offset: Int): Unit = js.native
 
   /** Create a new TypedArray view of this TypedArray at given location */
   def subarray(begin: Int, end: Int = ???): Repr = js.native
+
+  /** Fills a subrange of this TypedArray with a given value. */
+  def fill(value: T, start: Int, end: Int): Unit = js.native
+
+  /** Fills a subrange of this TypedArray with a given value, until then end of the array. */
+  def fill(value: T, start: Int): Unit = js.native
+
+  /** Fills this entire TypedArray with a given value. */
+  def fill(value: T): Unit = js.native
 
 }
 

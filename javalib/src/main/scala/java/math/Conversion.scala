@@ -25,6 +25,8 @@ package java.math
 
 import scala.annotation.tailrec
 
+import java.util.ScalaOps._
+
 /** Provides {@link BigInteger} base conversions.
  *
  *  Static library that provides {@link BigInteger} base conversion from/to any
@@ -37,7 +39,7 @@ private[math] object Conversion {
    *  Holds the maximal exponent for each radix, so that
    *  radix<sup>digitFitInInt[radix]</sup> fit in an {@code int} (32 bits).
    */
-  final val DigitFitInInt = Array[Int](
+  final val DigitFitInInt = Array(
       -1, -1, 31, 19, 15, 13, 11, 11, 10, 9, 9, 8, 8, 8, 8, 7, 7, 7, 7, 7, 7, 7,
       6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5)
 
@@ -47,7 +49,7 @@ private[math] object Conversion {
    *  numbers from 2 to 36) that fit into unsigned int (32 bits). bigRadices[0] =
    *  2 ^ 31, bigRadices[8] = 10 ^ 9, etc.
    */
-  final val BigRadices = Array[Int](
+  final val BigRadices = Array(
       -2147483648, 1162261467, 1073741824, 1220703125, 362797056, 1977326743,
       1073741824, 387420489, 1000000000, 214358881, 429981696, 815730721,
       1475789056, 170859375, 268435456, 410338673, 612220032, 893871739,
@@ -60,18 +62,16 @@ private[math] object Conversion {
     val sign = bi.sign
     val numberLength = bi.numberLength
     val digits = bi.digits
-    val radixOutOfBounds =
-      radix < Character.MIN_RADIX || radix > Character.MAX_RADIX
 
     if (sign == 0) {
       "0"
     } else if (numberLength == 1) {
       val highDigit = digits(numberLength - 1)
-      var v = highDigit & 0xFFFFFFFFL
+      var v = highDigit & 0xffffffffL
       if (sign < 0)
         v = -v
       java.lang.Long.toString(v, radix)
-    } else if (radix == 10 || radixOutOfBounds) {
+    } else if (radix == 10 || Character.isRadixInvalid(radix)) {
       bi.toString
     } else {
       var bitsForRadixDigit: Double = 0.0
@@ -102,7 +102,7 @@ private[math] object Conversion {
             currentChar -= 1
             result = Character.forDigit(resDigit % radix, radix).toString + result
             resDigit /= radix
-            if(resDigit != 0 && currentChar != 0)
+            if (resDigit != 0 && currentChar != 0)
               innerLoop()
           }
           innerLoop()
@@ -130,18 +130,23 @@ private[math] object Conversion {
           while (j < 8 && currentChar > 0) {
             resDigit = digits(i) >> (j << 2) & 0xf
             currentChar -= 1
-            result = resDigit.toHexString + result
+            result = Integer.toHexString(resDigit) + result
             j += 1
           }
         }
       }
+
       // strip leading zero's
-      result = result.dropWhile(_ == '0')
+      var dropLen = 0
+      while (result.charAt(dropLen) == '0')
+        dropLen += 1
+      if (dropLen != 0)
+        result = result.substring(dropLen)
+
       if (sign == -1) "-" + result
       else result
     }
   }
-
 
   /** The string representation scaled by zero.
    *
@@ -174,7 +179,7 @@ private[math] object Conversion {
         var rem: Int = 0
         var i: Int = tempLen - 1
         while (i >= 0) {
-          val temp1 = (rem.toLong << 32) + (temp(i) & 0xFFFFFFFFL)
+          val temp1 = (rem.toLong << 32) + (temp(i) & 0xffffffffL)
           val quot = java.lang.Long.divideUnsigned(temp1, 1000000000L).toInt
           temp(i) = quot
           rem = (temp1 - quot * 1000000000L).toInt
@@ -216,12 +221,13 @@ private[math] object Conversion {
         case 4 => "0.0000"
         case 5 => "0.00000"
         case 6 => "0.000000"
+
         case _ =>
           val scaleVal =
             if (scale == Int.MinValue) "2147483648"
             else java.lang.Integer.toString(-scale)
 
-          val result  = if (scale < 0) "0E+" else "0E"
+          val result = if (scale < 0) "0E+" else "0E"
           result + scaleVal
       }
     } else {
@@ -244,10 +250,10 @@ private[math] object Conversion {
         result = (prev - v * 10).toInt.toString + result
       } while (v != 0)
 
-      val exponent = resLengthInChars - currentChar - scale - 1
+      val exponent: Long = resLengthInChars - currentChar - scale.toLong - 1
 
-      if (scale > 0 && exponent >= -6) {
-        val index = exponent + 1
+      if (scale > 0 && exponent >= -6L) {
+        val index = exponent.toInt + 1
         if (index > 0) {
           // special case 1
           result = result.substring(0, index) + "." + result.substring(index)
@@ -258,54 +264,21 @@ private[math] object Conversion {
           }
           result = "0." + result
         }
-      } else if (scale !=0) {
-        var result1 =  exponent.toString
-        if (exponent > 0)
-          result1 = "+" + result1
-        result1 = "E" + result1
+      } else if (scale != 0) {
+        val exponentStr =
+          if (exponent > 0) "E+" + exponent
+          else "E" + exponent
 
-        result =
+        result = {
           if (resLengthInChars - currentChar > 1)
-            result.substring(0, 1) + "." + result.substring(1) + result1
+            result.substring(0, 1) + "." + result.substring(1) + exponentStr
           else
-            result + result1
+            result + exponentStr
+        }
       }
 
       if (negNumber) "-" + result
       else result
-    }
-  }
-
-  def bigInteger2Double(bi: BigInteger): Double = {
-    if (bi.numberLength < 2 || ((bi.numberLength == 2) && (bi.digits(1) > 0))) {
-      bi.longValue()
-    } else if (bi.numberLength > 32) {
-      if (bi.sign > 0) Double.PositiveInfinity
-      else Double.NegativeInfinity
-    } else {
-      val bitLen = bi.abs().bitLength()
-      var exponent: Long = bitLen - 1
-      val delta = bitLen - 54
-      val lVal = bi.abs().shiftRight(delta).longValue()
-      var mantissa = lVal & 0x1FFFFFFFFFFFFFL
-
-      if (exponent == 1023 && mantissa == 0X1FFFFFFFFFFFFFL) {
-        if (bi.sign > 0) Double.PositiveInfinity
-        else Double.NegativeInfinity
-      } else if (exponent == 1023 && mantissa == 0x1FFFFFFFFFFFFEL) {
-        if (bi.sign > 0) Double.MaxValue
-        else -Double.MaxValue
-      } else {
-        val droppedBits = BitLevel.nonZeroDroppedBits(delta, bi.digits)
-        if (((mantissa & 1) == 1) && (((mantissa & 2) == 2) || droppedBits))
-          mantissa += 2
-
-        mantissa >>= 1
-        val resSign = if (bi.sign < 0) 0x8000000000000000L else 0
-        exponent = ((1023 + exponent) << 52) & 0x7FF0000000000000L
-        val result = resSign | exponent | mantissa
-        java.lang.Double.longBitsToDouble(result)
-      }
     }
   }
 }

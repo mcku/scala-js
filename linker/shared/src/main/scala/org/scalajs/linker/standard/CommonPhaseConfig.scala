@@ -12,12 +12,14 @@
 
 package org.scalajs.linker.standard
 
-import org.scalajs.linker._
+import org.scalajs.linker.interface._
 
 /** Common configuration given to all phases of the linker. */
 final class CommonPhaseConfig private (
     /** Core specification. */
     val coreSpec: CoreSpec,
+    /** Apply Scala.js-specific minification of the produced .js files. */
+    val minify: Boolean,
     /** Whether things that can be parallelized should be parallelized.
      *  On the JavaScript platform, this setting is typically ignored.
      */
@@ -37,30 +39,21 @@ final class CommonPhaseConfig private (
   private def this() = {
     this(
         coreSpec = CoreSpec.Defaults,
+        minify = false,
         parallel = true,
         batchMode = false)
-  }
-
-  private[linker] def withCoreSpec(coreSpec: CoreSpec): CommonPhaseConfig =
-    copy(coreSpec = coreSpec)
-
-  private[linker] def withParallel(parallel: Boolean): CommonPhaseConfig =
-    copy(parallel = parallel)
-
-  private[linker] def withBatchMode(batchMode: Boolean): CommonPhaseConfig =
-    copy(batchMode = batchMode)
-
-  private def copy(
-      coreSpec: CoreSpec = coreSpec,
-      parallel: Boolean = parallel,
-      batchMode: Boolean = batchMode): CommonPhaseConfig = {
-    new CommonPhaseConfig(
-        coreSpec = coreSpec,
-        parallel = parallel,
-        batchMode = batchMode)
   }
 }
 
 private[linker] object CommonPhaseConfig {
   private[linker] def apply(): CommonPhaseConfig = new CommonPhaseConfig()
+
+  private[linker] def fromStandardConfig(config: StandardConfig): CommonPhaseConfig = {
+    new CommonPhaseConfig(
+      CoreSpec.fromStandardConfig(config),
+      config.minify,
+      config.parallel,
+      config.batchMode
+    )
+  }
 }

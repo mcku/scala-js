@@ -18,7 +18,7 @@ import org.junit.Assert._
 import org.junit.Assume._
 import org.junit.Test
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
 import org.scalajs.testsuite.utils.Platform.scalaVersion
 
 import scala.reflect.{ClassTag, classTag}
@@ -76,9 +76,8 @@ object ArrayOpsTest {
 class ArrayOpsTest {
   import ArrayOpsTest._
 
-  @Test def size(): Unit = {
+  @Test def size(): Unit =
     assertEquals(4, js.Array(1, 2, 5, 65).size)
-  }
 
   @Test def isEmpty(): Unit = {
     assertTrue(js.Array[Int]().isEmpty)
@@ -114,7 +113,6 @@ class ArrayOpsTest {
 
   @Test def sizeCompare(): Unit = {
     assumeFalse("sizeCompare was added in 2.13",
-        scalaVersion.startsWith("2.11.") ||
         scalaVersion.startsWith("2.12."))
 
     import FallbackImplicits._
@@ -135,7 +133,6 @@ class ArrayOpsTest {
 
   @Test def sizeIs(): Unit = {
     assumeFalse("sizeIs was added in 2.13",
-        scalaVersion.startsWith("2.11.") ||
         scalaVersion.startsWith("2.12."))
 
     import FallbackImplicits._
@@ -149,7 +146,6 @@ class ArrayOpsTest {
 
   @Test def lengthIs(): Unit = {
     assumeFalse("lengthIs was added in 2.13",
-        scalaVersion.startsWith("2.11.") ||
         scalaVersion.startsWith("2.12."))
 
     import FallbackImplicits._
@@ -296,13 +292,13 @@ class ArrayOpsTest {
   @Test def partition(): Unit = {
     val array = js.Array(1, 5, 7, 2, 54, 2, 78, 0, 3)
     assertJSArrayPairEquals((js.Array(), array), array.partition(_ < 0))
-    assertJSArrayPairEquals((js.Array(1, 5, 7, 2, 2, 0, 3), js.Array(54, 78)), array.partition(_ < 10))
+    assertJSArrayPairEquals(
+        (js.Array(1, 5, 7, 2, 2, 0, 3), js.Array(54, 78)), array.partition(_ < 10))
     assertJSArrayPairEquals((array, js.Array()), array.partition(_ < 100))
   }
 
   @Test def partitionMap(): Unit = {
     assumeFalse("partitionMap was added in 2.13",
-        scalaVersion.startsWith("2.11.") ||
         scalaVersion.startsWith("2.12."))
 
     import FallbackImplicits._
@@ -444,7 +440,8 @@ class ArrayOpsTest {
 
   @Test def scanRight(): Unit = {
     val array = js.Array(6, 2, 56, -1)
-    assertJSArrayEqualsNotSame(array, js.Array(161, -155, 157, -101, 100), array.scanRight(100)(_ - _))
+    assertJSArrayEqualsNotSame(
+        array, js.Array(161, -155, 157, -101, 100), array.scanRight(100)(_ - _))
   }
 
   @Test def foldRight(): Unit = {
@@ -664,10 +661,7 @@ class ArrayOpsTest {
   @Test def startsWith(): Unit = {
     val array = js.Array(1, 5, 7, 2, 54, 2, 78, 0, 3)
 
-    val supportsNegativeStart = {
-      !scalaVersion.startsWith("2.11.") &&
-      !scalaVersion.startsWith("2.12.")
-    }
+    val supportsNegativeStart = !scalaVersion.startsWith("2.12.")
 
     // js.Array
 
@@ -915,7 +909,6 @@ class ArrayOpsTest {
     array.trimStart(4)
 
     assumeFalse("the safe behavior was introduced in 2.13",
-        scalaVersion.startsWith("2.11.") ||
         scalaVersion.startsWith("2.12."))
     assertJSArrayEquals(js.Array(42, 53, 5, 54, 23, 44, 78), array)
     array.trimStart(-3)
@@ -929,7 +922,6 @@ class ArrayOpsTest {
     array.trimEnd(4)
 
     assumeFalse("the safe behavior was introduced in 2.13",
-        scalaVersion.startsWith("2.11.") ||
         scalaVersion.startsWith("2.12."))
     assertJSArrayEquals(js.Array(33, 11, 2, 3, 42, 53, 5), array)
     array.trimEnd(-3)
@@ -952,8 +944,8 @@ class ArrayOpsTest {
         js.Array[Int]().reduceRight(_ + _))
   }
 
-  @Test def toList_issue_843(): Unit = {
-    val array = js.Array(1,2,1,3,1,10,9)
+  @Test def toList_Issue843(): Unit = {
+    val array = js.Array(1, 2, 1, 3, 1, 10, 9)
     val list = array.toList
     assertArrayEquals(array.toArray, list.toArray)
   }

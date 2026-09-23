@@ -17,8 +17,10 @@ import scala.scalajs.js.typedarray._
 object CharBuffer {
   private final val HashSeed = -182887236 // "java.nio.CharBuffer".##
 
-  def allocate(capacity: Int): CharBuffer =
+  def allocate(capacity: Int): CharBuffer = {
+    BoundsChecks.checkCapacity(capacity)
     wrap(new Array[Char](capacity))
+  }
 
   def wrap(array: Array[Char], offset: Int, length: Int): CharBuffer =
     HeapCharBuffer.wrap(array, 0, array.length, offset, length, false)
@@ -27,22 +29,22 @@ object CharBuffer {
     wrap(array, 0, array.length)
 
   def wrap(csq: CharSequence, start: Int, end: Int): CharBuffer =
-    StringCharBuffer.wrap(csq, 0, csq.length, start, end - start)
+    StringCharBuffer.wrap(csq, 0, csq.length(), start, end - start)
 
   def wrap(csq: CharSequence): CharBuffer =
-    wrap(csq, 0, csq.length)
+    wrap(csq, 0, csq.length())
 
   // Extended API
 
-  def wrap(array: Uint16Array): CharBuffer =
-    TypedArrayCharBuffer.wrap(array)
+  def wrapUint16Array(array: Uint16Array): CharBuffer =
+    TypedArrayCharBuffer.wrapUint16Array(array)
 }
 
 abstract class CharBuffer private[nio] (
     _capacity: Int, private[nio] val _array: Array[Char],
     private[nio] val _arrayOffset: Int)
-    extends Buffer(_capacity) with Comparable[CharBuffer]
-                              with CharSequence with Appendable with Readable {
+    extends Buffer(_capacity) with Comparable[CharBuffer] with CharSequence with Appendable
+    with Readable {
 
   private[nio] type ElementType = Char
   private[nio] type BufferType = CharBuffer
@@ -52,7 +54,7 @@ abstract class CharBuffer private[nio] (
 
   def read(target: CharBuffer): Int = {
     // Attention: this method must not change this buffer's position
-    val n = remaining
+    val n = remaining()
     if (n == 0) -1
     else if (_array != null) { // even if read-only
       target.put(_array, _arrayOffset, n)
@@ -162,13 +164,13 @@ abstract class CharBuffer private[nio] (
 
   @noinline
   def compareTo(that: CharBuffer): Int =
-    GenBuffer(this).generic_compareTo(that)(_.compareTo(_))
+    GenBuffer(this).generic_compareTo(that)(Character.compare(_, _))
 
   override def toString(): String = {
     if (_array != null) { // even if read-only
-      new String(_array, position() + _arrayOffset, remaining)
+      new String(_array, position() + _arrayOffset, remaining())
     } else {
-      val chars = new Array[Char](remaining)
+      val chars = new Array[Char](remaining())
       val savedPos = position()
       get(chars)
       position(savedPos)
@@ -176,7 +178,7 @@ abstract class CharBuffer private[nio] (
     }
   }
 
-  final def length(): Int = remaining
+  final def length(): Int = remaining()
 
   final def charAt(index: Int): Char = get(position() + index)
 
@@ -201,11 +203,13 @@ abstract class CharBuffer private[nio] (
 
   @inline
   private[nio] def load(startIndex: Int,
-      dst: Array[Char], offset: Int, length: Int): Unit =
+      dst: Array[Char], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   private[nio] def store(startIndex: Int,
-      src: Array[Char], offset: Int, length: Int): Unit =
+      src: Array[Char], offset: Int, length: Int): Unit = {
     GenBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }

@@ -15,38 +15,20 @@ package org.scalajs.testsuite.javalib.util
 import org.junit.Test
 import org.junit.Assert._
 
-import org.scalajs.testsuite.utils.AssertThrows._
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.CollectionsTestBase
 
+import java.{lang => jl}
 import java.{util => ju}
+import java.util.function.UnaryOperator
 
 import scala.reflect.ClassTag
 
-trait ListTest extends CollectionTest {
+trait ListTest extends CollectionTest with CollectionsTestBase {
 
   def factory: ListFactory
 
-  def testListApi(): Unit = {
-    testCollectionApi()
-    shouldStoreStrings_List()
-    shouldStoreIntegers_List()
-    shouldStoreDoubles_List()
-    shouldStoreCustomObjects_List()
-    shouldRemoveStoredElements_List()
-    shouldRemoveStoredElementsOnDoubleCornerCases_List()
-    shouldBeClearedWithOneOperation_List()
-    shouldCheckContainedPresence_List()
-    shouldCheckContainedPresenceForDoubleCornerCases_List()
-    shouldGiveAProperSetOperation()
-    shouldGiveProperIteratorOverElements_List()
-    shouldGiveProperListIteratorOverElements()
-    shouldAddElementsAtAGivenIndex()
-    shouldGiveTheFirstIndexOfAnElement()
-    shouldGiveTheFirstOrLastIndexOfAnElementForDoubleCornerCases()
-    shouldGiveASublistBackedUpByTheOriginalList()
-    shouldIterateAndModifyElementsWithAListIteratorIfAllowed()
-  }
-
-  @Test def shouldStoreStrings_List(): Unit = {
+  @Test def addStringGetIndex(): Unit = {
     val lst = factory.empty[String]
 
     assertEquals(0, lst.size())
@@ -58,11 +40,11 @@ trait ListTest extends CollectionTest {
     assertEquals("one", lst.get(0))
     assertEquals("two", lst.get(1))
 
-    expectThrows(classOf[IndexOutOfBoundsException], lst.get(-1))
-    expectThrows(classOf[IndexOutOfBoundsException], lst.get(lst.size))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.get(-1))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.get(lst.size))
   }
 
-  @Test def shouldStoreIntegers_List(): Unit = {
+  @Test def addIntGetIndex(): Unit = {
     val lst = factory.empty[Int]
 
     lst.add(1)
@@ -73,11 +55,11 @@ trait ListTest extends CollectionTest {
     assertEquals(1, lst.get(0))
     assertEquals(2, lst.get(1))
 
-    expectThrows(classOf[IndexOutOfBoundsException], lst.get(-1))
-    expectThrows(classOf[IndexOutOfBoundsException], lst.get(lst.size))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.get(-1))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.get(lst.size))
   }
 
-  @Test def shouldStoreDoubles_List(): Unit = {
+  @Test def addDoubleGetIndex(): Unit = {
     val lst = factory.empty[Double]
 
     lst.add(1.234)
@@ -97,11 +79,11 @@ trait ListTest extends CollectionTest {
     assertTrue(lst.get(3).equals(+0.0))
     assertTrue(lst.get(4).equals(-0.0))
 
-    expectThrows(classOf[IndexOutOfBoundsException], lst.get(-1))
-    expectThrows(classOf[IndexOutOfBoundsException], lst.get(lst.size))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.get(-1))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.get(lst.size))
   }
 
-  @Test def shouldStoreCustomObjects_List(): Unit = {
+  @Test def addCustomObjectsGetIndex(): Unit = {
     case class TestObj(num: Int)
 
     val lst = factory.empty[TestObj]
@@ -110,11 +92,24 @@ trait ListTest extends CollectionTest {
     assertEquals(1, lst.size())
     assertEquals(TestObj(100), lst.get(0))
 
-    expectThrows(classOf[IndexOutOfBoundsException], lst.get(-1))
-    expectThrows(classOf[IndexOutOfBoundsException], lst.get(lst.size))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.get(-1))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.get(lst.size))
   }
 
-  @Test def shouldRemoveStoredElements_List(): Unit = {
+  @Test def addAllIndexBounds(): Unit = {
+    val al = factory.fromElements[String]("one", "two", "three")
+
+    val coll = factory.fromElements[String]("foo")
+    assertThrows(classOf[IndexOutOfBoundsException], al.addAll(-1, coll))
+    assertThrows(classOf[IndexOutOfBoundsException], al.addAll(al.size + 1, coll))
+
+    assertThrows(classOf[IndexOutOfBoundsException],
+        al.addAll(-1, TrivialImmutableCollection("foo")))
+    assertThrows(classOf[IndexOutOfBoundsException],
+        al.addAll(al.size + 1, TrivialImmutableCollection("foo")))
+  }
+
+  @Test def removeStringRemoveIndex(): Unit = {
     val lst = factory.empty[String]
 
     lst.add("one")
@@ -129,11 +124,11 @@ trait ListTest extends CollectionTest {
     assertEquals(1, lst.size())
     assertEquals("three", lst.get(0))
 
-    expectThrows(classOf[IndexOutOfBoundsException], lst.remove(-1))
-    expectThrows(classOf[IndexOutOfBoundsException], lst.remove(lst.size))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.remove(-1))
+    assertThrows(classOf[IndexOutOfBoundsException], lst.remove(lst.size))
   }
 
-  @Test def shouldRemoveStoredElementsOnDoubleCornerCases_List(): Unit = {
+  @Test def removeDoubleOnCornerCases(): Unit = {
     val al = factory.empty[Double]
 
     al.add(1.234)
@@ -161,7 +156,7 @@ trait ListTest extends CollectionTest {
     assertTrue(al.isEmpty)
   }
 
-  @Test def shouldBeClearedWithOneOperation_List(): Unit = {
+  @Test def clearList(): Unit = {
     val al = factory.empty[String]
 
     al.add("one")
@@ -171,7 +166,7 @@ trait ListTest extends CollectionTest {
     assertEquals(0, al.size)
   }
 
-  @Test def shouldCheckContainedPresence_List(): Unit = {
+  @Test def containsStringList(): Unit = {
     val al = factory.empty[String]
 
     al.add("one")
@@ -180,7 +175,7 @@ trait ListTest extends CollectionTest {
     assertFalse(al.contains(null))
   }
 
-  @Test def shouldCheckContainedPresenceForDoubleCornerCases_List(): Unit = {
+  @Test def containedDoubleOnCornerCases(): Unit = {
     val al = factory.empty[Double]
 
     al.add(-0.0)
@@ -194,7 +189,7 @@ trait ListTest extends CollectionTest {
     assertTrue(al.contains(+0.0))
   }
 
-  @Test def shouldGiveAProperSetOperation(): Unit = {
+  @Test def setString(): Unit = {
     val al = factory.empty[String]
     al.add("one")
     al.add("two")
@@ -205,17 +200,17 @@ trait ListTest extends CollectionTest {
     assertEquals("four", al.get(1))
     assertEquals("three", al.get(2))
 
-    expectThrows(classOf[IndexOutOfBoundsException], al.set(-1, ""))
-    expectThrows(classOf[IndexOutOfBoundsException], al.set(al.size, ""))
+    assertThrows(classOf[IndexOutOfBoundsException], al.set(-1, ""))
+    assertThrows(classOf[IndexOutOfBoundsException], al.set(al.size, ""))
   }
 
-  @Test def shouldGiveProperIteratorOverElements_List(): Unit = {
+  @Test def iterator(): Unit = {
     val al = factory.empty[String]
     al.add("one")
     al.add("two")
     al.add("three")
 
-    val elements = al.iterator
+    val elements = al.iterator()
     assertTrue(elements.hasNext)
     assertEquals("one", elements.next())
     assertTrue(elements.hasNext)
@@ -225,13 +220,48 @@ trait ListTest extends CollectionTest {
     assertFalse(elements.hasNext)
   }
 
-  @Test def shouldGiveProperListIteratorOverElements(): Unit = {
+  @Test def toArrayObjectForList(): Unit = {
+    val coll = factory.fromElements("one", "two", "three", "four", "five")
+
+    val result = coll.toArray()
+    assertSame(classOf[Array[AnyRef]], result.getClass())
+    assertArrayEquals(Array[AnyRef]("one", "two", "three", "four", "five"), result)
+  }
+
+  @Test def toArraySpecificForList(): Unit = {
+    val coll = factory.fromElements("one", "two", "three", "four", "five")
+
+    val arrayString3 = new Array[String](3)
+    val result1 = coll.toArray(arrayString3)
+    assertNotSame(arrayString3, result1)
+    assertSame(classOf[Array[String]], result1.getClass())
+    assertArrayEquals(Array[AnyRef]("one", "two", "three", "four", "five"),
+        result1.asInstanceOf[Array[AnyRef]])
+
+    val arrayString5 = new Array[String](5)
+    val result2 = coll.toArray(arrayString5)
+    assertSame(arrayString5, result2)
+    assertSame(classOf[Array[String]], result2.getClass())
+    assertArrayEquals(Array[AnyRef]("one", "two", "three", "four", "five"),
+        result2.asInstanceOf[Array[AnyRef]])
+
+    val arrayString7 = new Array[String](7)
+    arrayString7(5) = "foo"
+    arrayString7(6) = "bar"
+    val result3 = coll.toArray(arrayString7)
+    assertSame(arrayString7, result3)
+    assertSame(classOf[Array[String]], result3.getClass())
+    assertArrayEquals(Array[AnyRef]("one", "two", "three", "four", "five", null, "bar"),
+        result3.asInstanceOf[Array[AnyRef]])
+  }
+
+  @Test def listIterator(): Unit = {
     val lst = factory.empty[String]
     lst.add("one")
     lst.add("two")
     lst.add("three")
 
-    val elements = lst.listIterator
+    val elements = lst.listIterator()
     assertFalse(elements.hasPrevious)
     assertTrue(elements.hasNext)
     assertEquals("one", elements.next())
@@ -248,7 +278,13 @@ trait ListTest extends CollectionTest {
     assertEquals("one", elements.previous())
   }
 
-  @Test def shouldAddElementsAtAGivenIndex(): Unit = {
+  @Test def listIteratorPreviousThrowsNoSuchElementException(): Unit = {
+    val lst = factory.empty[String]
+    val iter = lst.listIterator()
+    assertThrows(classOf[NoSuchElementException], iter.previous())
+  }
+
+  @Test def addIndex(): Unit = {
     val al = factory.empty[String]
     al.add(0, "one") // ["one"]
     al.add(0, "two") // ["two", "one"]
@@ -258,11 +294,11 @@ trait ListTest extends CollectionTest {
     assertEquals("three", al.get(1))
     assertEquals("one", al.get(2))
 
-    expectThrows(classOf[IndexOutOfBoundsException], al.add(-1, ""))
-    expectThrows(classOf[IndexOutOfBoundsException], al.add(al.size + 1, ""))
+    assertThrows(classOf[IndexOutOfBoundsException], al.add(-1, ""))
+    assertThrows(classOf[IndexOutOfBoundsException], al.add(al.size + 1, ""))
   }
 
-  @Test def shouldGiveTheFirstIndexOfAnElement(): Unit = {
+  @Test def indexOf(): Unit = {
     val al = factory.empty[String]
     al.add("one")
     al.add("two")
@@ -277,7 +313,7 @@ trait ListTest extends CollectionTest {
     assertEquals(-1, al.indexOf("four"))
   }
 
-  @Test def shouldGiveTheLastIndexOfAnElement(): Unit = {
+  @Test def lastIndexOf(): Unit = {
     val al = factory.empty[String]
     al.add("one")
     al.add("two")
@@ -292,7 +328,7 @@ trait ListTest extends CollectionTest {
     assertEquals(-1, al.lastIndexOf("four"))
   }
 
-  @Test def shouldGiveTheFirstOrLastIndexOfAnElementForDoubleCornerCases(): Unit = {
+  @Test def indexOfLastIndexOfDoubleCornerCases(): Unit = {
     val al = factory.empty[Double]
 
     al.add(-0.0)
@@ -311,9 +347,9 @@ trait ListTest extends CollectionTest {
     assertEquals(5, al.lastIndexOf(Double.NaN))
   }
 
-  @Test def shouldGiveASublistBackedUpByTheOriginalList(): Unit = {
+  @Test def subListBackedByList(): Unit = {
     def testListIterator(list: ju.List[String], expected: Seq[String]): Unit = {
-      val iter = list.listIterator
+      val iter = list.listIterator()
       for (elem <- expected) {
         assertTrue(iter.hasNext)
         assertEquals(elem, iter.next())
@@ -398,7 +434,7 @@ trait ListTest extends CollectionTest {
     }
   }
 
-  @Test def shouldIterateAndModifyElementsWithAListIteratorIfAllowed(): Unit = {
+  @Test def iteratorSetRemoveIfAllowed(): Unit = {
     if (factory.allowsMutationThroughIterator) {
       val s = Seq("one", "two", "three")
       val ll = factory.empty[String]
@@ -457,17 +493,115 @@ trait ListTest extends CollectionTest {
       assertTrue(ll.isEmpty())
     }
   }
-}
 
-object ListFactory {
-  def allFactories: Iterator[ListFactory] =
-    Iterator(new ArrayListFactory, new LinkedListFactory, new AbstractListFactory)
+  @Test def replaceAll(): Unit = {
+    val list = factory.fromElements(2, 45, 8, -2, 4)
+    list.replaceAll(new UnaryOperator[Int] {
+      def apply(t: Int): Int = t * 3
+    })
+
+    assertEquals(5, list.size())
+    assertEquals(6, list.get(0))
+    assertEquals(135, list.get(1))
+    assertEquals(24, list.get(2))
+    assertEquals(-6, list.get(3))
+    assertEquals(12, list.get(4))
+  }
+
+  @Test def sortWithNaturalOrdering(): Unit = {
+    testSortWithNaturalOrdering[CustomComparable](new CustomComparable(_),
+        absoluteOrder = false)
+    testSortWithNaturalOrdering[jl.Integer](jl.Integer.valueOf)
+    testSortWithNaturalOrdering[jl.Long](_.toLong)
+    testSortWithNaturalOrdering[jl.Double](_.toDouble)
+  }
+
+  @Test def sortWithComparator(): Unit = {
+    testSortWithComparator[CustomComparable](new CustomComparable(_),
+        (x, y) => x.compareTo(y), absoluteOrder = false)
+    testSortWithComparator[jl.Integer](_.toInt, (x, y) => x.compareTo(y))
+    testSortWithComparator[jl.Long](_.toLong, (x, y) => x.compareTo(y))
+    testSortWithComparator[jl.Double](_.toDouble, (x, y) => x.compareTo(y))
+  }
+
+  private def testSortWithNaturalOrdering[T <: AnyRef with Comparable[T]: ClassTag](
+      toElem: Int => T, absoluteOrder: Boolean = true): Unit = {
+
+    val list = factory.empty[T]
+
+    def testIfSorted(rangeValues: Boolean): Unit = {
+      for (i <- range.init)
+        assertTrue(list.get(i).compareTo(list.get(i + 1)) <= 0)
+      if (absoluteOrder && rangeValues) {
+        for (i <- range)
+          assertEquals(0, list.get(i).compareTo(toElem(i)))
+      }
+    }
+
+    list.addAll(rangeOfElems(toElem))
+    list.sort(null)
+    testIfSorted(true)
+
+    list.clear()
+    list.addAll(TrivialImmutableCollection(range.reverse.map(toElem): _*))
+    list.sort(null)
+    testIfSorted(true)
+
+    for (seed <- List(0, 1, 42, -5432, 2341242)) {
+      val rnd = new scala.util.Random(seed)
+      list.clear()
+      list.addAll(
+          TrivialImmutableCollection(range.map(_ => toElem(rnd.nextInt())): _*))
+      list.sort(null)
+      testIfSorted(false)
+    }
+  }
+
+  private def testSortWithComparator[T: ClassTag](toElem: Int => T,
+      cmpFun: (T, T) => Int, absoluteOrder: Boolean = true): Unit = {
+
+    val list = factory.empty[T]
+
+    def testIfSorted(rangeValues: Boolean): Unit = {
+      for (i <- range.init)
+        assertTrue(cmpFun(list.get(i), list.get(i + 1)) <= 0)
+      if (absoluteOrder && rangeValues) {
+        for (i <- range)
+          assertEquals(0, cmpFun(list.get(i), toElem(i)))
+      }
+    }
+
+    val cmp = new ju.Comparator[T] {
+      override def compare(o1: T, o2: T): Int = cmpFun(o1, o2)
+    }
+
+    list.addAll(rangeOfElems(toElem))
+    list.sort(cmp)
+    testIfSorted(true)
+
+    list.clear()
+    list.addAll(TrivialImmutableCollection(range.reverse.map(toElem): _*))
+    list.sort(cmp)
+    testIfSorted(true)
+
+    for (seed <- List(0, 1, 42, -5432, 2341242)) {
+      val rnd = new scala.util.Random(seed)
+      list.clear()
+      list.addAll(
+          TrivialImmutableCollection(range.map(_ => toElem(rnd.nextInt())): _*))
+      list.sort(cmp)
+      testIfSorted(false)
+    }
+  }
 }
 
 trait ListFactory extends CollectionFactory {
   def empty[E: ClassTag]: ju.List[E]
 
-  /** Sortable using java.util.Collections.sort
-   */
-  def sortableUsingCollections: Boolean = true
+  // Refines the result type of CollectionFactory.fromElements
+  override def fromElements[E: ClassTag](elems: E*): ju.List[E] = {
+    val coll = empty[E]
+    coll.addAll(TrivialImmutableCollection(elems: _*))
+    coll
+  }
 }

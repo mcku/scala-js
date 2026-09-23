@@ -13,27 +13,38 @@
 package org.scalajs.testsuite.javalib.lang
 
 import scala.scalajs.js
-import scala.scalajs.LinkingInfo.assumingES6
 
 import org.junit.Test
 import org.junit.Assert._
 import org.junit.Assume._
 
+import org.scalajs.testsuite.utils.Platform._
+
 class ThrowableJSTest {
 
   @Test def throwablesAreJSErrors(): Unit = {
+    assumeTrue("Not supported on WebAssembly without custom descriptors",
+        hasJSExportsAndJSPrototypes)
+
     val t: Any = new Throwable("foo")
     assertTrue(t.isInstanceOf[js.Error])
   }
 
   @Test def throwablesAreTrueErrors(): Unit = {
-    assumeTrue("Requires ECMAScript 2015", assumingES6)
+    // This does not work even with custom descriptors
+    assumeFalse("Not supported on WebAssembly", executingInWebAssembly)
+    assumeTrue("Requires ECMAScript 2015 semantics", useECMAScript2015Semantics)
 
-    val t: Any = new Throwable("foo")
-    val str = js.constructorOf[js.Object].prototype
-      .selectDynamic("toString")
-      .call(t.asInstanceOf[js.Any])
-    assertEquals("[object Error]", str)
+    def coreToString(x: Any): String = {
+      js.constructorOf[js.Object].prototype
+        .selectDynamic("toString")
+        .call(x.asInstanceOf[js.Any])
+        .asInstanceOf[String]
+    }
+
+    assertEquals("[object Error]", coreToString(new Throwable("foo")))
+    assertEquals("[object Error]",
+        coreToString(new IllegalArgumentException("foo")))
   }
 
 }

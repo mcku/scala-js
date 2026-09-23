@@ -12,8 +12,6 @@
 
 package org.scalajs.testsuite.jsinterop
 
-import scala.language.implicitConversions
-
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.|
@@ -27,12 +25,9 @@ import org.junit.Assert._
 import org.junit.Assume._
 import org.junit.Test
 
+import org.scalajs.junit.async._
+
 class AsyncTest {
-  import AsyncTest._
-
-  implicit def eraseArray[T](a: Array[T]): Array[AnyRef] =
-    a.map(_.asInstanceOf[AnyRef])
-
   def asyncTest(implicit ec: ExecutionContext): ArrayBuffer[String] = {
     val steps = new ArrayBuffer[String]
 
@@ -64,25 +59,29 @@ class AsyncTest {
 
     val res = asyncTest
 
-    assertArrayEquals(Array(
-      "prep-future",
-      "prep-map",
-      "prep-foreach",
-      "done"), res.toArray)
+    assertArrayEquals(
+        Array[AnyRef](
+            "prep-future",
+            "prep-map",
+            "prep-foreach",
+            "done"),
+        res.toArray[AnyRef])
 
     processQueue()
 
-    assertArrayEquals(Array(
-      "prep-future",
-      "prep-map",
-      "prep-foreach",
-      "done",
-      "future",
-      "map",
-      "foreach"), res.toArray)
+    assertArrayEquals(
+        Array[AnyRef](
+            "prep-future",
+            "prep-map",
+            "prep-foreach",
+            "done",
+            "future",
+            "map",
+            "foreach"),
+        res.toArray[AnyRef])
   }
 
-  @Test def scala_scalajs_concurrent_JSExecutionContext_queue(): Unit = {
+  @Test def scalaScalajsConcurrentJSExecutionContextQueue(): Unit = {
     assumeTrue("Assumed js.Dynamic.global.Promise is undefined",
         js.typeOf(js.Dynamic.global.Promise) == "undefined")
     TimeoutMock.withMockedTimeout { tick =>
@@ -92,7 +91,7 @@ class AsyncTest {
     }
   }
 
-  @Test def scala_scala_concurrent_ExecutionContext_global(): Unit = {
+  @Test def scalaScalaConcurrentExecutionContextGlobal(): Unit = {
     assumeTrue("Assumed js.Dynamic.global.Promise is undefined",
         js.typeOf(js.Dynamic.global.Promise) == "undefined")
     TimeoutMock.withMockedTimeout { tick =>
@@ -104,7 +103,7 @@ class AsyncTest {
     }
   }
 
-  @Test def scala_scalajs_concurrent_QueueExecutionContext(): Unit = {
+  @Test def scalaScalajsConcurrentQueueExecutionContext(): Unit = {
     TimeoutMock.withMockedTimeout { tick =>
       PromiseMock.withMockedPromiseIfExists { optProcessQueue =>
         implicit val executor = QueueExecutionContext()
@@ -116,7 +115,7 @@ class AsyncTest {
     }
   }
 
-  @Test def scala_scalajs_concurrent_QueueExecutionContext_timeouts(): Unit = {
+  @Test def scalaScalajsConcurrentQueueExecutionContextTimeouts(): Unit = {
     TimeoutMock.withMockedTimeout { tick =>
       implicit val executor = QueueExecutionContext.timeouts()
       queueExecOrderTests { () =>
@@ -125,7 +124,7 @@ class AsyncTest {
     }
   }
 
-  @Test def scala_scalajs_concurrent_QueueExecutionContext_promises(): Unit = {
+  @Test def scalaScalajsConcurrentQueueExecutionContextPromises(): Unit = {
     PromiseMock.withMockedPromise { processQueue =>
       implicit val executor = QueueExecutionContext.promises()
       queueExecOrderTests { () =>
@@ -134,25 +133,25 @@ class AsyncTest {
     }
   }
 
-  @Test def scala_concurrent_future_should_support_map(): Unit = {
-      implicit val ec = RunNowExecutionContext
-      val f = Future(3).map(x => x*2)
-      assertEquals(6, f.value.get.get)
-    }
+  @Test def scalaConcurrentFutureSupportsMap(): AsyncResult = await {
+    import ExecutionContext.Implicits.global
+    val f = Future(3).map(x => x * 2)
+    f.map(v => assertEquals(6, v))
+  }
 
-  @Test def scala_concurrent_future_should_support_flatMap(): Unit = {
-    implicit val ec = RunNowExecutionContext
+  @Test def scalaConcurrentFutureSupportsFlatMap(): AsyncResult = await {
+    import ExecutionContext.Implicits.global
     val f = Future(Future(3)).flatMap(x => x)
-    assertEquals(3, f.value.get.get)
+    f.map(v => assertEquals(3, v))
   }
 
-  @Test def scala_concurrent_future_should_support_sequence(): Unit = {
-    implicit val ec = RunNowExecutionContext
+  @Test def scalaConcurrentFutureSupportsSequence(): AsyncResult = await {
+    import ExecutionContext.Implicits.global
     val f = Future.sequence(Seq(Future(3), Future(5)))
-    assertEquals(Seq(3, 5), f.value.get.get)
+    f.map(v => assertEquals(Seq(3, 5), v))
   }
 
-  @Test def JSPromiseToFuture_basic_case(): Unit = {
+  @Test def jsPromiseToFutureBasicCase(): Unit = {
     PromiseMock.withMockedPromise { processQueue =>
       implicit val ec = QueueExecutionContext.promises()
 
@@ -177,11 +176,11 @@ class AsyncTest {
     }
   }
 
-  @Test def scala_concurrent_FutureToJSPromise_basic_case(): Unit = {
+  @Test def scalaConcurrentFutureToJSPromiseBasicCase(): Unit = {
     PromiseMock.withMockedPromise { processQueue =>
       implicit val ec = QueueExecutionContext.promises()
 
-      val f = Future { 42 }
+      val f = Future(42)
       val p = f.toJSPromise
       val pAssertType: js.Promise[Int] = p
 
@@ -199,7 +198,7 @@ class AsyncTest {
     }
   }
 
-  @Test def scala_concurrent_FutureToJSPromise_thenable_case(): Unit = {
+  @Test def scalaConcurrentFutureToJSPromiseThenableCase(): Unit = {
     PromiseMock.withMockedPromise { processQueue =>
       implicit val ec = QueueExecutionContext.promises()
 
@@ -208,7 +207,7 @@ class AsyncTest {
           resolve(42)
       })
 
-      val f = Future { initialPromise }
+      val f = Future(initialPromise)
       val p = f.toJSPromise
       val pAssertType: js.Promise[Int] = p
 
@@ -224,29 +223,5 @@ class AsyncTest {
 
       assertTrue(callbackDone)
     }
-  }
-}
-
-object AsyncTest {
-  /** A super hacky `ExecutionContext` that is synchronous.
-   *
-   *  This should not be used in normal code. It should not even be used in
-   *  testing code. We need it here to test some basic `Future` methods,
-   *  because we are stuck with JUnit, which obviously does not support
-   *  asynchronous test suites.
-   */
-  private object RunNowExecutionContext
-      extends scala.concurrent.ExecutionContextExecutor {
-
-    def execute(runnable: Runnable): Unit = {
-      try {
-        runnable.run()
-      } catch {
-        case t: Throwable => reportFailure(t)
-      }
-    }
-
-    def reportFailure(t: Throwable): Unit =
-      t.printStackTrace()
   }
 }

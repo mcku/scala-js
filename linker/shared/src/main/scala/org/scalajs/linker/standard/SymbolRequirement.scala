@@ -12,6 +12,11 @@
 
 package org.scalajs.linker.standard
 
+import org.scalajs.ir.Names._
+
+import org.scalajs.linker.interface.ModuleInitializer
+import org.scalajs.linker.interface.unstable.ModuleInitializerImpl
+
 sealed trait SymbolRequirement {
   final def ++(that: SymbolRequirement): SymbolRequirement =
     SymbolRequirement.multipleInternal(List(this, that))
@@ -24,55 +29,63 @@ object SymbolRequirement {
     new Factory(originatingComponent)
 
   final class Factory private[SymbolRequirement] (origin: String) {
-    def accessModule(moduleName: String): SymbolRequirement =
+    def accessModule(moduleName: ClassName): SymbolRequirement =
       AccessModule(origin, moduleName)
 
-    def callOnModule(moduleName: String, methodName: String): SymbolRequirement =
+    def callOnModule(moduleName: ClassName,
+        methodName: MethodName): SymbolRequirement = {
       multiple(accessModule(moduleName), callMethod(moduleName, methodName))
+    }
 
-    def callOnModule(moduleName: String,
-        methodName: List[String]): SymbolRequirement = {
+    def callOnModule(moduleName: ClassName,
+        methodName: List[MethodName]): SymbolRequirement = {
       val methodCalls = methodName.map(callMethod(moduleName, _))
       multipleInternal(accessModule(moduleName) :: methodCalls)
     }
 
-    def instantiateClass(className: String,
-        constructor: String): SymbolRequirement = {
+    def instantiateClass(className: ClassName,
+        constructor: MethodName): SymbolRequirement = {
       InstantiateClass(origin, className, constructor)
     }
 
-    def instantiateClass(className: String,
-        constructors: List[String]): SymbolRequirement = {
+    def instantiateClass(className: ClassName,
+        constructors: List[MethodName]): SymbolRequirement = {
       multipleInternal(constructors.map(instantiateClass(className, _)))
     }
 
-    def instanceTests(className: String): SymbolRequirement =
+    def instanceTests(className: ClassName): SymbolRequirement =
       InstanceTests(origin, className)
 
-    def classData(className: String): SymbolRequirement =
+    def classData(className: ClassName): SymbolRequirement =
       ClassData(origin, className)
 
-    def callMethod(className: String, methodName: String): SymbolRequirement =
+    def callMethod(className: ClassName,
+        methodName: MethodName): SymbolRequirement = {
       CallMethod(origin, className, methodName, statically = false)
+    }
 
-    def callMethods(className: String,
-        methodNames: List[String]): SymbolRequirement = {
+    def callMethods(className: ClassName,
+        methodNames: List[MethodName]): SymbolRequirement = {
       multipleInternal(methodNames.map(callMethod(className, _)))
     }
 
-    def callMethodStatically(className: String, methodName: String): SymbolRequirement =
+    def callMethodStatically(className: ClassName,
+        methodName: MethodName): SymbolRequirement = {
       CallMethod(origin, className, methodName, statically = true)
-
-    def callStaticMethod(className: String, methodName: String): SymbolRequirement =
-      CallStaticMethod(origin, className, methodName)
-
-    def optional(requirement: SymbolRequirement): SymbolRequirement = {
-      requirement match {
-        case NoRequirement      => NoRequirement
-        case optional: Optional => optional
-        case _                  => requirement
-      }
     }
+
+    def callStaticMethod(className: ClassName,
+        methodName: MethodName): SymbolRequirement = {
+      CallStaticMethod(origin, className, methodName)
+    }
+
+    def callStaticMethods(className: ClassName,
+        methodNames: List[MethodName]): SymbolRequirement = {
+      multipleInternal(methodNames.map(callStaticMethod(className, _)))
+    }
+
+    @deprecated("broken (not actually optional), do not use", "1.13.2")
+    def optional(requirement: SymbolRequirement): SymbolRequirement = requirement
 
     def multiple(requirements: SymbolRequirement*): SymbolRequirement =
       multipleInternal(requirements.toList)
@@ -95,17 +108,24 @@ object SymbolRequirement {
   }
 
   private[linker] object Nodes {
-    case class AccessModule(origin: String, moduleName: String) extends SymbolRequirement
-    case class InstantiateClass(origin: String, className: String,
-        constructor: String) extends SymbolRequirement
-    case class InstanceTests(origin: String, className: String) extends SymbolRequirement
-    case class ClassData(origin: String, className: String) extends SymbolRequirement
-    case class CallMethod(origin: String, className: String, methodName: String,
-        statically: Boolean) extends SymbolRequirement
-    case class CallStaticMethod(origin: String, className: String,
-        methodName: String) extends SymbolRequirement
-    case class Optional(requirement: SymbolRequirement) extends SymbolRequirement
-    case class Multiple(requirements: List[SymbolRequirement]) extends SymbolRequirement
+    final case class AccessModule(origin: String, moduleName: ClassName) extends SymbolRequirement
+
+    final case class InstantiateClass(origin: String, className: ClassName,
+        constructor: MethodName)
+        extends SymbolRequirement
+
+    final case class InstanceTests(origin: String, className: ClassName) extends SymbolRequirement
+    final case class ClassData(origin: String, className: ClassName) extends SymbolRequirement
+
+    final case class CallMethod(origin: String, className: ClassName,
+        methodName: MethodName, statically: Boolean)
+        extends SymbolRequirement
+
+    final case class CallStaticMethod(origin: String, className: ClassName,
+        methodName: MethodName)
+        extends SymbolRequirement
+
+    final case class Multiple(requirements: List[SymbolRequirement]) extends SymbolRequirement
     case object NoRequirement extends SymbolRequirement
   }
 }

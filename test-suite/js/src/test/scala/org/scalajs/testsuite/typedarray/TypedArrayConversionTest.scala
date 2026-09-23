@@ -12,8 +12,12 @@
 
 package org.scalajs.testsuite.typedarray
 
-import org.junit.Assert._
 import org.junit.Test
+import org.junit.Assert._
+import org.junit.Assume._
+
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.Platform._
 import org.scalajs.testsuite.utils.Requires
 
 import scala.scalajs.js
@@ -23,13 +27,12 @@ object TypedArrayConversionTest extends Requires.TypedArray
 
 class TypedArrayConversionTest {
 
-  def data(factor: Double): js.Array[Double] =
-    js.Array(-1, 1, 2, 3, 4, 5, 6, 7, 8).map((_: Int) * factor)
+  val data = js.Array[Int](-1, 1, 2, 3, 4, 5, 6, 7, 8)
 
   def sum(factor: Double): Double = (8 * 9 / 2 - 1) * factor
 
-  @Test def convert_an_Int8Array_to_a_scala_Array_Byte(): Unit = {
-    val x = new Int8Array(data(1))
+  @Test def convertInt8ArrayToScalaArrayByte(): Unit = {
+    val x = new Int8Array(data.map(_.toByte))
     val y = x.toArray
 
     assertTrue(y.getClass == classOf[scala.Array[Byte]])
@@ -40,8 +43,8 @@ class TypedArrayConversionTest {
     assertEquals(sum(1), y.sum, 0.0)
   }
 
-  @Test def convert_an_Int16Array_to_a_scala_Array_Short(): Unit = {
-    val x = new Int16Array(data(100))
+  @Test def convertInt16ArrayToScalaArrayShort(): Unit = {
+    val x = new Int16Array(data.map(x => (100 * x).toShort))
     val y = x.toArray
 
     assertTrue(y.getClass == classOf[scala.Array[Short]])
@@ -52,9 +55,9 @@ class TypedArrayConversionTest {
     assertEquals(sum(100), y.sum, 0.0)
   }
 
-  @Test def convert_an_Uint16Array_to_a_scala_Array_Char(): Unit = {
-    val data = js.Array((1 to 6).map(_ * 10000): _*)
-    val sum = (6*7/2*10000).toChar
+  @Test def convertUint16ArrayToScalaArrayChar(): Unit = {
+    val data = js.Array(1, 2, 3, 4, 5, 6).map(x => 10000 * x)
+    val sum = (6 * 7 / 2 * 10000).toChar
 
     val x = new Uint16Array(data)
     val y = x.toArray
@@ -67,8 +70,8 @@ class TypedArrayConversionTest {
     assertEquals(sum, y.sum)
   }
 
-  @Test def convert_an_Int32Array_to_a_scala_Array_Int(): Unit = {
-    val x = new Int32Array(data(10000))
+  @Test def convertInt32ArrayToScalaArrayInt(): Unit = {
+    val x = new Int32Array(data.map(x => 10000 * x))
     val y = x.toArray
 
     assertTrue(y.getClass == classOf[scala.Array[Int]])
@@ -79,20 +82,20 @@ class TypedArrayConversionTest {
     assertEquals(sum(10000), y.sum, 0.0)
   }
 
-  @Test def convert_a_Float32Array_to_a_scala_Array_Float(): Unit = {
-    val x = new Float32Array(data(0.2))
+  @Test def convertFloat32ArrayToScalaArrayFloat(): Unit = {
+    val x = new Float32Array(data.map(x => 0.2f * x.toFloat))
     val y = x.toArray
 
     assertTrue(y.getClass == classOf[scala.Array[Float]])
-    assertEquals(sum(0.2), y.sum, 1E-6)
+    assertEquals(sum(0.2), y.sum, 1e-6)
 
     // Ensure its a copy
     x(0) = 0
-    assertEquals(sum(0.2), y.sum, 1E-6)
+    assertEquals(sum(0.2), y.sum, 1e-6)
   }
 
-  @Test def convert_a_Float64Array_to_a_scala_Array_Double(): Unit = {
-    val x = new Float64Array(data(0.2))
+  @Test def convertFloat64ArrayToScalaArrayDouble(): Unit = {
+    val x = new Float64Array(data.map(x => 0.2 * x.toDouble))
     val y = x.toArray
 
     assertTrue(y.getClass == classOf[scala.Array[Double]])
@@ -103,7 +106,7 @@ class TypedArrayConversionTest {
     assertEquals(sum(0.2), y.sum, 0.0)
   }
 
-  @Test def convert_a_scala_Array_Byte__to_an_Int8Array(): Unit = {
+  @Test def convertScalaArrayByteToInt8Array(): Unit = {
     val x = (Byte.MinValue to Byte.MaxValue).map(_.toByte).toArray
     val y = x.toTypedArray
 
@@ -118,9 +121,9 @@ class TypedArrayConversionTest {
     assertEquals(Byte.MinValue, y(0))
   }
 
-  @Test def convert_a_scala_Array_Short__to_an_Int16Array(): Unit = {
+  @Test def convertScalaArrayShortToInt16Array(): Unit = {
     val x = ((Short.MinValue to (Short.MinValue + 1000)) ++
-            ((Short.MaxValue - 1000) to Short.MaxValue)).map(_.toShort).toArray
+      ((Short.MaxValue - 1000) to Short.MaxValue)).map(_.toShort).toArray
     val y = x.toTypedArray
 
     assertTrue(y.isInstanceOf[Int16Array])
@@ -134,7 +137,7 @@ class TypedArrayConversionTest {
     assertEquals(Short.MinValue, y(0))
   }
 
-  @Test def convert_a_scala_Array_Char__to_an_Uint16Array(): Unit = {
+  @Test def convertScalaArrayCharToUint16Array(): Unit = {
     val x = ((Char.MaxValue - 1000) to Char.MaxValue).map(_.toChar).toArray
     val y = x.toTypedArray
 
@@ -149,9 +152,9 @@ class TypedArrayConversionTest {
     assertEquals(Char.MaxValue - 1000, y(0))
   }
 
-  @Test def convert_a_scala_Array_Int__to_an_Int32Array(): Unit = {
+  @Test def convertScalaArrayIntToInt32Array(): Unit = {
     val x = ((Int.MinValue to (Int.MinValue + 1000)) ++
-            ((Int.MaxValue - 1000) to Int.MaxValue)).toArray
+      ((Int.MaxValue - 1000) to Int.MaxValue)).toArray
     val y = x.toTypedArray
 
     assertTrue(y.isInstanceOf[Int32Array])
@@ -165,7 +168,7 @@ class TypedArrayConversionTest {
     assertEquals(Int.MinValue, y(0))
   }
 
-  @Test def convert_a_scala_Array_Float__to_a_Float32Array(): Unit = {
+  @Test def convertScalaArrayFloatToFloat32Array(): Unit = {
     val x = Array[Float](1.0f, 2.0f, -2.3f, 5.3f)
     val y = x.toTypedArray
 
@@ -180,7 +183,7 @@ class TypedArrayConversionTest {
     assertEquals(1.0f, y(0), 0.0)
   }
 
-  @Test def convert_a_scala_Array_Double__to_a_Float64Array(): Unit = {
+  @Test def convertScalaArrayDoubleToFloat64Array(): Unit = {
     val x = Array[Double](1.0, 2.0, -2.3, 5.3)
     val y = x.toTypedArray
 
@@ -193,5 +196,21 @@ class TypedArrayConversionTest {
     // Ensure its a copy
     x(0) = 0
     assertEquals(1.0, y(0), 0.0)
+  }
+
+  @Test def convertScalaArrayToTypedArrayNulls(): Unit = {
+    assumeTrue("Assuming compliant nullPointers", hasCompliantNullPointers)
+
+    @noinline def assertNPE[U](body: => U): Unit =
+      assertThrows(classOf[NullPointerException], body)
+
+    @noinline def nullOf[T >: Null]: T = null
+
+    assertNPE(nullOf[Array[Byte]].toTypedArray)
+    assertNPE(nullOf[Array[Short]].toTypedArray)
+    assertNPE(nullOf[Array[Char]].toTypedArray)
+    assertNPE(nullOf[Array[Int]].toTypedArray)
+    assertNPE(nullOf[Array[Float]].toTypedArray)
+    assertNPE(nullOf[Array[Double]].toTypedArray)
   }
 }

@@ -12,12 +12,12 @@
 
 package java.util
 
-import scala.annotation.tailrec
+import java.lang.Cloneable
 
 import ScalaOps._
 
-class LinkedList[E]() extends AbstractSequentialList[E]
-    with List[E] with Deque[E] with Cloneable with Serializable {
+class LinkedList[E]()
+    extends AbstractSequentialList[E] with List[E] with Deque[E] with Cloneable with Serializable {
 
   def this(c: Collection[_ <: E]) = {
     this()
@@ -109,7 +109,7 @@ class LinkedList[E]() extends AbstractSequentialList[E]
   }
 
   override def contains(o: Any): Boolean =
-    this.scalaOps.exists(_ === o)
+    this.scalaOps.exists(Objects.equals(_, o))
 
   override def size(): Int =
     _size.toInt
@@ -120,10 +120,10 @@ class LinkedList[E]() extends AbstractSequentialList[E]
   }
 
   override def remove(o: Any): Boolean =
-    _removeOccurrence(listIterator, o)
+    _removeOccurrence(listIterator(), o)
 
   override def addAll(c: Collection[_ <: E]): Boolean = {
-    val iter = c.iterator
+    val iter = c.iterator()
     val changed = iter.hasNext()
     while (iter.hasNext())
       addLast(iter.next())
@@ -139,16 +139,16 @@ class LinkedList[E]() extends AbstractSequentialList[E]
 
   private def getNodeAt(index: Int): Node[E] = {
     if (index == 0) head
-    else if (index == size - 1) last
+    else if (index == size() - 1) last
     else {
       var current: Node[E] = null
-      if (index <= size/2) {
+      if (index <= size() / 2) {
         current = head
         for (_ <- 0 until index)
           current = current.next
       } else {
         current = last
-        for (_ <- index until (size - 1))
+        for (_ <- index until (size() - 1))
           current = current.prev
       }
       current
@@ -241,7 +241,7 @@ class LinkedList[E]() extends AbstractSequentialList[E]
     else removeFirst()
 
   def pollLast(): E =
-    if (isEmpty) null.asInstanceOf[E]
+    if (isEmpty()) null.asInstanceOf[E]
     else removeLast()
 
   def push(e: E): Unit =
@@ -253,7 +253,7 @@ class LinkedList[E]() extends AbstractSequentialList[E]
   private def _removeOccurrence(iter: Iterator[E], o: Any): Boolean = {
     var changed = false
     while (iter.hasNext() && !changed) {
-      if (iter.next() === o) {
+      if (Objects.equals(iter.next(), o)) {
         iter.remove()
         changed = true
       }
@@ -276,18 +276,20 @@ class LinkedList[E]() extends AbstractSequentialList[E]
       private var i: Double = index
 
       private var currentNode: Node[E] =
-        if (index == size) null else
-        getNodeAt(index)
+        if (index == size()) null
+        else getNodeAt(index)
 
-      private var lastNode: Node[E] =
-        if (currentNode ne null) null else
-        LinkedList.this.last
+      private var lastNode: Node[E] = {
+        if (currentNode ne null) null
+        else
+          LinkedList.this.last
+      }
 
       def hasNext(): Boolean =
-        i < size
+        i < size()
 
       def next(): E = {
-        if (i >= size)
+        if (i >= size())
           throw new NoSuchElementException()
 
         last = i
@@ -303,7 +305,7 @@ class LinkedList[E]() extends AbstractSequentialList[E]
         i > 0
 
       def previous(): E = {
-        if (!hasPrevious)
+        if (!hasPrevious())
           throw new NoSuchElementException()
 
         i -= 1
@@ -323,7 +325,7 @@ class LinkedList[E]() extends AbstractSequentialList[E]
 
       def previousIndex(): Int = (i - 1).toInt
 
-      def remove(): Unit = {
+      override def remove(): Unit = {
         checkThatHasLast()
 
         if (currentNode eq null) {
@@ -384,7 +386,7 @@ class LinkedList[E]() extends AbstractSequentialList[E]
         ret.value
       }
 
-      def remove(): Unit = {
+      override def remove(): Unit = {
         if (!removeEnabled)
           throw new IllegalStateException()
 

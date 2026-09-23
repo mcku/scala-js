@@ -80,21 +80,26 @@ private[nio] final class HeapLongBuffer private (
 
   @inline
   override private[nio] def load(startIndex: Int,
-      dst: Array[Long], offset: Int, length: Int): Unit =
+      dst: Array[Long], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_load(startIndex, dst, offset, length)
+  }
 
   @inline
   override private[nio] def store(startIndex: Int,
-      src: Array[Long], offset: Int, length: Int): Unit =
+      src: Array[Long], offset: Int, length: Int): Unit = {
     GenHeapBuffer(this).generic_store(startIndex, src, offset, length)
+  }
 }
 
 private[nio] object HeapLongBuffer {
   private[nio] implicit object NewHeapLongBuffer
       extends GenHeapBuffer.NewHeapBuffer[LongBuffer, Long] {
+    @inline
     def apply(capacity: Int, array: Array[Long], arrayOffset: Int,
         initialPosition: Int, initialLimit: Int,
-        readOnly: Boolean): LongBuffer = {
+        readOnly: Boolean, direct: Boolean): LongBuffer = {
+      if (direct)
+        throw new AssertionError("Cannot create a direct HeapLongBuffer")
       new HeapLongBuffer(capacity, array, arrayOffset,
           initialPosition, initialLimit, readOnly)
     }

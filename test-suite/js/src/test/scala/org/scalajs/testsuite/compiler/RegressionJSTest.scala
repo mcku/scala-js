@@ -17,11 +17,17 @@ import scala.scalajs.js.annotation._
 
 import org.junit.Test
 import org.junit.Assert._
+import org.junit.Assume._
+
+import org.scalajs.testsuite.utils.AssertThrows.assertThrows
+import org.scalajs.testsuite.utils.Platform._
+
+import org.scalajs.testsuite.utils.JSAssert._
 
 class RegressionJSTest {
   import RegressionJSTest._
 
-  @Test def should_not_swallow_Unit_expressions_when_converting_to_js_Any_issue_83(): Unit = {
+  @Test def preserveUnitExpressionsWhenConvertingToJSAny_Issue83(): Unit = {
     var effectHappened = false
     def doEffect(): Unit = effectHappened = true
     def f(): js.Any = doEffect()
@@ -29,7 +35,7 @@ class RegressionJSTest {
     assertTrue(effectHappened)
   }
 
-  @Test def should_resolve_overloads_on_scala_Function_apply_when_converting_to_js_Function_issue_125(): Unit = {
+  @Test def resolveOverloadsOnScalaFunctionApplyWhenConvertingToJSFunction_Issue125(): Unit = {
     class Fct extends Function1[Int, Any] {
       def apply(n: Int): Int = n
     }
@@ -39,7 +45,7 @@ class RegressionJSTest {
     val thisFunction: js.ThisFunction = scalaFunction
   }
 
-  @Test def should_not_put_bad_flags_on_caseaccessor_export_forwarders_issue_1191(): Unit = {
+  @Test def badFlagsOnCaseaccessorExportForwarders_Issue1191(): Unit = {
     // This test used to choke patmat
 
     @JSExportAll
@@ -51,14 +57,14 @@ class RegressionJSTest {
     assertEquals(2, b)
   }
 
-  @Test def should_transform_js_dynamic_x_receiver_issue_2804(): Unit = {
+  @Test def transformJSDynamicXReceiver_Issue2804(): Unit = {
     class Foo extends js.Object
 
     assertTrue(js.isUndefined(js.constructorOf[Foo].x))
     assertTrue(js.isUndefined(js.constructorOf[Foo].y))
   }
 
-  @Test def super_mixin_call_in_2_12_issue_3013_ScalaOuter_JSInner(): Unit = {
+  @Test def superMixinCallIn212ScalaOuterJSInner_Issue3013(): Unit = {
     import Bug3013_ScalaOuter_JSInner._
 
     val b = new B
@@ -68,7 +74,7 @@ class RegressionJSTest {
     assertEquals("B", c.t3())
   }
 
-  @Test def emit_anon_JS_function_class_data_with_2_11_Xexperimental_issue_3222(): Unit = {
+  @Test def emitAnonJSFunctionClassDataWith211Xexperimental_Issue3222(): Unit = {
     val initSourceMapper: Option[js.Function1[Int, Int]] = None
     val sourceMapper: js.Function1[Int, Int] = {
       initSourceMapper.getOrElse {
@@ -78,6 +84,76 @@ class RegressionJSTest {
     assertEquals(4, sourceMapper(4))
   }
 
+  @Test def lambdaReturningObjectLiteral_Issue3926(): Unit = {
+    @noinline
+    def f(): () => js.Dynamic =
+      () => js.Dynamic.literal(foo = 5)
+
+    val obj1 = f()()
+    assertEquals("object", js.typeOf(obj1))
+    assertEquals(5, obj1.foo)
+
+    @noinline
+    def g(): js.Function0[js.Dynamic] =
+      () => js.Dynamic.literal(bar = 6)
+
+    val obj2 = g()()
+    assertEquals("object", js.typeOf(obj2))
+    assertEquals(6, obj2.bar)
+  }
+
+  @Test def preserveSideEffectsOfJSOpsWithBigInts_Issue4621(): Unit = {
+    assumeTrue("requires BigInts support", jsBigInts)
+
+    @noinline def bi(x: Int): js.BigInt = js.BigInt(x)
+
+    // These must be stored as `val`s first in order to trigger the original problem
+    val bi5: Any = bi(5)
+    val bi0: Any = bi(0)
+    val bi1: Any = bi(1)
+
+    assertThrows(classOf[js.JavaScriptException], {
+      bi5.asInstanceOf[js.Dynamic] / bi0.asInstanceOf[js.Dynamic]
+      fail("unreachable") // required for the above line to be in statement position
+    })
+    assertThrows(classOf[js.JavaScriptException], {
+      +bi5.asInstanceOf[js.Dynamic]
+      fail("unreachable")
+    })
+  }
+
+  @Test def preserveSideEffectsOfJSOpsWithCustomValueOf_Issue4621(): Unit = {
+    // This must be a `val` in order to trigger the original problem
+    val obj: Any = new js.Object {
+      override def valueOf(): Double =
+        throw new UnsupportedOperationException()
+    }
+
+    assertThrows(classOf[UnsupportedOperationException], {
+      obj.asInstanceOf[js.Dynamic] + 5.asInstanceOf[js.Dynamic]
+      fail("unreachable")
+    })
+    assertThrows(classOf[UnsupportedOperationException], {
+      -obj.asInstanceOf[js.Dynamic]
+      fail("unreachable")
+    })
+  }
+
+  @Test def captureLoopValInLambda(): Unit = {
+    // Test of a regression that appeared during fixing of #2675.
+    val functions = js.Array[js.Function0[Int]]()
+
+    var i = 0
+    while (i != 5) {
+      val j = i
+      functions.push(() => j)
+      i += 1
+    }
+
+    val result = functions.map(_())
+
+    assertJSArrayEquals(js.Array(0, 1, 2, 3, 4), result)
+  }
 }
 
 object RegressionJSTest {

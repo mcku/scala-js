@@ -441,7 +441,7 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
    *    the ordering `ord`.
    */
   def sorted[B >: A](implicit ord: Ordering[B]): js.Array[A] =
-    new js.WrappedArray(xs).sorted(ord.asInstanceOf[Ordering[A]]).array
+    new js.WrappedArray(xs).sorted(ord.asInstanceOf[Ordering[A]])
 
   /** Sorts this array according to a comparison function.
    *
@@ -701,7 +701,6 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
    *  {{{
    *  js.Array(4, 3, 2, 1).scanRight(0)(_ + _) == js.Array(10, 6, 3, 1, 0)
    *  }}}
-   *
    */
   def scanRight[B](z: B)(op: (A, B) => B): js.Array[B] = {
     val len = xs.length
@@ -878,7 +877,7 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
    *  is defined, and applies the partial function to it.
    */
   def collectFirst[B](f: PartialFunction[A, B]): Option[B] = {
-    // scalastyle:return off
+    // scalastyle:off return
     var i = 0
     var matched = true
     def d(x: A): B = {
@@ -894,7 +893,7 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
       i += 1
     }
     None
-    // scalastyle:return on
+    // scalastyle:on return
   }
 
   /** Returns an array formed from this array and another iterable collection
@@ -1350,7 +1349,6 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
   def copyToArray[B >: A](xs: scala.Array[B], start: Int): Int =
     copyToArray(xs, start, Int.MaxValue)
 
-
   /** Copy elements of this array to a Scala array.
    *
    *  Fills the given array `xs` starting at index `start` with at most `len`
@@ -1418,7 +1416,7 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
    *    `offset`, otherwise `false`.
    */
   def startsWith[B >: A](that: js.Array[B], offset: Int): Boolean = {
-    // scalastyle:return off
+    // scalastyle:off return
     val safeOffset = offset.max(0)
     val thatl = that.length
     if (thatl > xs.length - safeOffset) {
@@ -1432,7 +1430,7 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
       }
       true
     }
-    // scalastyle:return on
+    // scalastyle:on return
   }
 
   /** Tests whether this array ends with the given array.
@@ -1495,7 +1493,7 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
    *    will.
    */
   def diff[B >: A](that: Seq[B]): js.Array[A] =
-    new js.WrappedArray(xs).diff(that).array
+    new js.WrappedArray(xs).diff(that)
 
   /** Computes the multiset intersection between this array and another
    *  sequence.
@@ -1509,7 +1507,7 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
    *    any following occurrences will be omitted.
    */
   def intersect[B >: A](that: Seq[B]): js.Array[A] =
-    new js.WrappedArray(xs).intersect(that).array
+    new js.WrappedArray(xs).intersect(that)
 
   /** Groups elements in fixed size blocks by passing a "sliding window" over
    *  them (as opposed to partitioning them, as is done in grouped).
@@ -1526,15 +1524,15 @@ final class ArrayOps[A](private val xs: js.Array[A]) extends AnyVal {
    *    than `size` elements remaining to be grouped.
    */
   def sliding(size: Int, step: Int = 1): scala.collection.Iterator[js.Array[A]] =
-    new js.WrappedArray(xs).sliding(size, step).map(_.array)
+    new js.WrappedArray(xs).sliding(size, step).map(js.WrappedArray.toJSArray _)
 
   /** Iterates over combinations. */
   def combinations(n: Int): scala.collection.Iterator[js.Array[A]] =
-    new js.WrappedArray(xs).combinations(n).map(_.array)
+    new js.WrappedArray(xs).combinations(n).map(js.WrappedArray.toJSArray _)
 
   /** Iterates over distinct permutations. */
   def permutations: scala.collection.Iterator[js.Array[A]] =
-    new js.WrappedArray(xs).permutations.map(_.array)
+    new js.WrappedArray(xs).permutations.map(js.WrappedArray.toJSArray _)
 
   // we have another overload here, so we need to duplicate this method
   /** Tests whether this array contains the given sequence at a given index.
@@ -2014,8 +2012,7 @@ object ArrayOps {
       new WithFilter[A](a => p(a) && q(a), xs)
   }
 
-  private class ArrayIterator[A](private[this] val xs: js.Array[A])
-      extends AbstractIterator[A] {
+  private class ArrayIterator[A](private[this] val xs: js.Array[A]) extends AbstractIterator[A] {
 
     private[this] var pos = 0
 
@@ -2036,8 +2033,7 @@ object ArrayOps {
     }
   }
 
-  private class ReverseIterator[A](private[this] val xs: js.Array[A])
-      extends AbstractIterator[A] {
+  private class ReverseIterator[A](private[this] val xs: js.Array[A]) extends AbstractIterator[A] {
 
     private[this] var pos = xs.length - 1
 
